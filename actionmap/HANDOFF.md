@@ -86,6 +86,8 @@ modelling. Phase 1 (rails) is built; voice is next. Owner: Nowed.
 | D-073 | 2026-11-04 | Community-builder default list kept **for now** (Q29 A). | Interview pipeline. |
 | D-074 | 2026-11-04 | **Referencing system adopted**: space/item@version#line; R-YYMMDD-n on every Claude reply (Q30 A). | Replies stored in Studio. |
 | D-075 | 2026-11-04 | First Exchange Kit configuration: **event supply chain** (Claude's call, Q31). | Studio A-exchange-event-chain; open Q32 crew engagement, Q33 simulated event type. |
+| D-076 | 2026-11-04 | **Suppliers/agencies engage crew; Clanstack is their tool** (Q32 A); other models much later. | exchange-core enforces supplier right-to-work checks. |
+| D-077 | 2026-11-04 | Simulated event: **a catered builder meetup** (Claude's call, Q33). | engine/crates/exchange-core (11 scenarios). Open: Q34 cut, Q35 deposit, Q36 provider. |
 
 ## State log (append-only)
 
