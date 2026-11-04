@@ -81,6 +81,11 @@ modelling. Phase 1 (rails) is built; voice is next. Owner: Nowed.
 | D-068 | 2026-11-04 | (Private, in Studio's private area) income-floor rules. | Income board. |
 | D-069 | 2026-11-04 | **Builder interviews → content → multi-capital**; Studio suggests who to contact next. | Interview pipeline (Studio Q24). |
 | D-070 | 2026-11-04 | **Cut shown only to the selling side**; buyers see one all-in price. | Fee deducted from seller proceeds. |
+| D-071 | 2026-11-04 | (Proposed) **Exchange Kit**: modular booking + money handling across person/group topologies, gated per jurisdiction pack. | Studio A-exchange-kit; first config pending Q31. |
+| D-072 | 2026-11-04 | Interests register covers **ventures Clanstack features or promotes** (Q28 B). | Charter clause. |
+| D-073 | 2026-11-04 | Community-builder default list kept **for now** (Q29 A). | Interview pipeline. |
+| D-074 | 2026-11-04 | **Referencing system adopted**: space/item@version#line; R-YYMMDD-n on every Claude reply (Q30 A). | Replies stored in Studio. |
+| D-075 | 2026-11-04 | First Exchange Kit configuration: **event supply chain** (Claude's call, Q31). | Studio A-exchange-event-chain; open Q32 crew engagement, Q33 simulated event type. |
 
 ## State log (append-only)
 
@@ -135,6 +140,10 @@ modelling. Phase 1 (rails) is built; voice is next. Owner: Nowed.
 - **2026-11-04 — Studio v0.2.** Private area (per-person store, 🔒, out of the AI pack by default), Lead type,
   scenario s19; 19/19 passed before release (D-061). Income board + 6 leads + readiness check written to
   Nowed's private area; D-063…D-070, terms T57–T64, stories S32–S34, questions Q23–Q26 in Studio.
+
+- **2026-11-04 — repo + reply archive.** Local git repo /home/claude/repo (commit c15fec6: actionmap/, engine/, studio/,
+  CI workflow). Push to github.com/Morami49/clanstack-studio blocked until GitHub is linked to Claude.
+  Claude replies now carry R-YYMMDD-n codes and are stored in Studio (first: R-261104-6). Open: Q27–Q31.
 
 ## File map
 - `schema/event.schema.json` — the contract.
