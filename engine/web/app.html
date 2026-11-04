@@ -1,0 +1,363 @@
+<title>Version Tree Lab</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600&display=swap" rel="stylesheet">
+<style>
+/* Layout: an instrument panel. Device bar on top, the tree as the main surface, inspector + merge desk beside it. */
+:root{
+  --bg:#f3f4f2; --panel:#fbfbfa; --ink:#1b1f1e; --mute:#636b69; --line:#d8dcd9;
+  --accent:#1f5f74; --merge:#8a4fb5; --ok:#2f7a4c; --bad:#b03a2e;
+  --b0:#1f5f74; --b1:#b46a1c; --b2:#8a4fb5; --b3:#2f7a4c; --b4:#a33d5a;
+  --display:"IBM Plex Sans Condensed","Arial Narrow",system-ui,sans-serif;
+  --body:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+  --bg:#111514; --panel:#181d1c; --ink:#e7ebe9; --mute:#93a09c; --line:#2a3230;
+  --accent:#62b3cc; --merge:#c39ae6; --ok:#62c08a; --bad:#ec7b6e;
+  --b0:#62b3cc; --b1:#e7a25a; --b2:#c39ae6; --b3:#62c08a; --b4:#e88aa6; color-scheme:dark }}
+:root[data-theme="dark"]{
+  --bg:#111514; --panel:#181d1c; --ink:#e7ebe9; --mute:#93a09c; --line:#2a3230;
+  --accent:#62b3cc; --merge:#c39ae6; --ok:#62c08a; --bad:#ec7b6e;
+  --b0:#62b3cc; --b1:#e7a25a; --b2:#c39ae6; --b3:#62c08a; --b4:#e88aa6; color-scheme:dark }
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font:14px/1.5 var(--body);
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:14px 28px}
+h1,h2{font-family:var(--display);font-weight:600;margin:0;text-wrap:balance}
+h1{font-size:22px;letter-spacing:.01em}
+h2{font-size:12px;text-transform:uppercase;letter-spacing:.09em;color:var(--mute);font-weight:500;margin-bottom:8px}
+.mono{font-family:var(--mono);font-size:12px;font-variant-numeric:tabular-nums}
+.mute{color:var(--mute)}
+button,select,input{font:inherit;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:5px 10px;min-width:0}
+button{cursor:pointer} button:hover:not(:disabled){border-color:var(--ink)} button:disabled{opacity:.45;cursor:not-allowed}
+button.primary{background:var(--accent);border-color:var(--accent);color:var(--panel);font-weight:500}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.top{display:flex;flex-wrap:wrap;gap:12px 20px;align-items:center;margin-bottom:12px}
+.top .sub{max-width:62ch;color:var(--mute);font-size:13px}
+.devices{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-left:auto}
+.dev{display:flex;gap:6px;align-items:center;border:1px solid var(--line);border-radius:999px;padding:3px 4px 3px 10px;background:var(--panel)}
+.dev.on{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+.pill{border:1px solid var(--line);border-radius:999px;padding:1px 8px;font-size:12px}
+.pill.ok{color:var(--ok);border-color:var(--ok)} .pill.bad{color:var(--bad);border-color:var(--bad)}
+.stories{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}
+.story{display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left;max-width:240px}
+.story b{font-family:var(--display);font-weight:600}
+.story span{font-size:12px;color:var(--mute)}
+.grid{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:14px;align-items:start}
+@media (max-width:900px){.grid{grid-template-columns:minmax(0,1fr)}}
+.surface{background:var(--panel);border:1px solid var(--line);border-radius:10px;min-width:0}
+.treewrap{overflow-x:auto;padding:10px 6px 4px}
+svg text{font-family:var(--mono);font-size:11px;fill:var(--ink)}
+svg .lbl{font-family:var(--display);font-size:13px;font-weight:600}
+svg .sm{fill:var(--mute);font-size:10px}
+svg .node{cursor:pointer}
+.legend{display:flex;flex-wrap:wrap;gap:14px;padding:6px 12px 10px;font-size:12px;color:var(--mute)}
+aside{display:flex;flex-direction:column;gap:14px;min-width:0}
+section.card{padding:12px 14px}
+.row{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:6px 0}
+.row input{flex:1}
+.kv{display:grid;grid-template-columns:auto minmax(0,1fr);gap:3px 10px}
+.kv span:nth-child(odd){color:var(--mute)}
+.kv span{overflow-wrap:anywhere}
+.conf{border:1px solid var(--line);border-radius:8px;padding:8px;margin:6px 0}
+.conf .opts{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.conf button.pick{border-color:var(--merge);color:var(--merge)}
+.log{max-height:220px;overflow:auto;display:flex;flex-direction:column;gap:4px}
+.log div{overflow-wrap:anywhere}
+.err{color:var(--bad)}
+.note{font-size:12px;color:var(--mute)}
+#fatal{padding:14px;border:1px solid var(--bad);border-radius:8px;color:var(--bad);margin-bottom:12px}
+@media (prefers-reduced-motion:no-preference){ svg .node circle, svg .node rect{transition:r .15s, stroke-width .15s} }
+</style>
+
+<div id="fatal" hidden></div>
+<div class="top">
+  <div>
+    <h1>Version Tree Lab</h1>
+    <div class="sub">Rust core running in this page as WebAssembly. Facts never branch; intents do. Click any point to inspect it or resume from it. Example data is preloaded.</div>
+  </div>
+  <div class="devices" id="devices"></div>
+</div>
+
+<div class="stories" id="stories"></div>
+
+<div class="grid">
+  <div class="surface">
+    <div class="treewrap" id="treewrap"><svg id="tree" role="img" aria-label="Version tree"></svg></div>
+    <div class="legend">
+      <span>○ branch start</span><span>● setting or note</span><span>◆ merge</span><span>▪ lane opened</span>
+      <span>dashed = fork · purple = merge</span><span id="factcount"></span>
+    </div>
+  </div>
+  <aside>
+    <section class="surface card" id="inspect"></section>
+    <section class="surface card">
+      <h2>Merge desk</h2>
+      <div class="row"><select id="mFrom" aria-label="Merge from"></select><span class="mute">into</span><select id="mInto" aria-label="Merge into"></select></div>
+      <div class="row"><button id="mPrev">Preview</button><button id="mGo" class="primary" disabled>Merge</button></div>
+      <div id="mOut" class="note">Pick two branches and preview. Settings that both sides changed come back as questions, unless that type is set to merge by itself.</div>
+    </section>
+    <section class="surface card">
+      <h2>Identity &amp; devices</h2>
+      <div id="ids" class="mono"></div>
+    </section>
+    <section class="surface card">
+      <h2>Activity</h2>
+      <div id="log" class="log mono"></div>
+    </section>
+  </aside>
+</div>
+
+<script id="wasm" type="application/octet-stream">/*WASM*/</script>
+<script type="module">
+/*GLUE*/
+
+// ------------------------------------------------------------------ setup
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const J = s => JSON.parse(s);
+const DAY = 86400000, T0 = Date.UTC(2026, 9, 26, 9);   // Mon 26 Oct 2026, 09:00 UTC (example week)
+const dayName = ts => new Date(ts).toLocaleString("en-GB", {weekday:"short", hour:"2-digit", minute:"2-digit", timeZone:"UTC"});
+
+function log(msg, bad){ const d = document.createElement("div"); d.className = bad ? "err" : ""; d.textContent = msg; $("#log").prepend(d); }
+function call(res, what){ const r = J(res); if (r.error){ log(`${what}: ${r.error}`, true); return null; } return r; }
+function seed(){ const b = new Uint8Array(32); crypto.getRandomValues(b); return [...b].map(x => x.toString(16).padStart(2,"0")).join(""); }
+
+let N, S;   // N = {laptop, vm} nodes; S = UI state
+async function boot(){
+  try {
+    const b64 = document.getElementById("wasm").textContent.trim();
+    const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+    initSync({module: bytes});
+  } catch (e) {
+    $("#fatal").hidden = false;
+    $("#fatal").textContent = "This browser couldn't start WebAssembly (" + e.message + "). Try a current Chrome, Edge, Firefox or Safari.";
+    return;
+  }
+  N = { laptop: new Node(), vm: new Node() };
+  const K = {};
+  for (const name of ["me","laptop","vm","chatgpt"]) K[name] = seed();
+  S = { dev:"laptop", online:{laptop:true, vm:true}, sel:null, branch:null, keys:{}, plan:null, picks:{}, clock:T0 + 4*DAY };
+  for (const [name, sd] of Object.entries(K)) for (const n of Object.values(N)) S.keys[name] = J(n.key(sd)).public;
+  seedDemo();
+  render();
+}
+
+const node = () => N[S.dev];
+const devKey = () => S.keys[S.dev];
+const now = () => (S.clock += 60000);
+
+// ------------------------------------------------------------------ example week
+function seedDemo(){
+  const n = N.laptop, k = S.keys;
+  call(n.fact(k.me, "identity.genesis", JSON.stringify({label:"nowed"}), "", "", T0), "genesis");
+  call(n.fact(k.me, "grant", JSON.stringify({subject:k.laptop, role:"device", label:"laptop", caps:["fact.write","intent.write","branch","merge"]}), "", "", T0+1), "grant");
+  call(n.fact(k.me, "grant", JSON.stringify({subject:k.vm, role:"device", label:"oracle-vm", caps:["fact.write","intent.write","branch"]}), "", "", T0+2), "grant");
+  call(n.fact(k.me, "grant", JSON.stringify({subject:k.chatgpt, role:"sub_identity", label:"ext:chatgpt", caps:["intent.write","branch"]}), "", "", T0+3), "grant");
+  const main = call(n.branch(k.me, "", "", "main", -1, T0+10), "main").id;
+  S.main = main; S.branch = main;
+  const steps = [
+    [0, "fact", "click", {step:"click|ClickUp|Overdue filter"}],
+    [0, "set", "mode/agent:next-step", "observe"],
+    [1, "fact", "click", {step:"click|EXCEL|Status cell"}],
+    [1, "set", "handoff/excel-save", "agent:next-step @ suggest"],
+    [1, "add", "note/excel-save", "Always saved after the status edit"],
+    [2, "fact", "hotkey", {step:"hotkey|EXCEL|ctrl+s"}],
+    [2, "set", "privacy/notion.exe", "private"],
+    [3, "set", "handoff/excel-save", "agent:next-step @ act"],
+    [3, "fact", "click", {step:"click|ClickUp|Mark complete"}],
+  ];
+  for (const [d, op, key, val] of steps){
+    const ts = T0 + d*DAY + 3600000*(2 + Math.random()*6);
+    if (op === "fact") call(n.fact(k.laptop, key, JSON.stringify(val), "", main, ts), "fact");
+    else call(n.intent(k.laptop, main, op, JSON.stringify({key, value:val}), ts), op);
+  }
+  call(N.vm.import(n.export()), "first sync");
+  log("Loaded an example week: one identity, a laptop, an Oracle VM, ChatGPT as a sub-identity.");
+}
+
+// ------------------------------------------------------------------ stories
+const STORIES = [
+  ["Resume Tuesday", "Branch from Tuesday's settings in a new lane while main carries on.", () => {
+    const t = J(node().tree());
+    const tue = t.intents.filter(i => i.branch === S.main && new Date(i.ts).getUTCDay() === 2 && i.kind === "set").pop();
+    if (!tue) return log("No Tuesday point on main yet.", true);
+    resumeAt(tue.id, "resume-tuesday", "rethink saving");
+  }],
+  ["ChatGPT proposes", "ChatGPT edits on its own branch; you merge it with the desk.", () => {
+    const n = N.laptop, k = S.keys;
+    const b = call(n.branch(k.chatgpt, S.main, "", "chatgpt: save flow", -1, now()), "branch"); if (!b) return;
+    call(n.intent(k.chatgpt, b.id, "set", JSON.stringify({key:"handoff/excel-save", value:"agent:next-step @ suggest"}), now()), "set");
+    call(n.intent(k.chatgpt, b.id, "add", JSON.stringify({key:"note/excel-save", value:"Check the PO number before saving"}), now()), "add");
+    call(n.intent(k.laptop, S.main, "set", JSON.stringify({key:"handoff/excel-save", value:"agent:next-step @ observe"}), now()), "set");
+    log("ChatGPT branched and changed the save hand-off; you changed it on main too. Preview the merge.");
+    S.dev = "laptop"; S.branch = b.id; S.sel = null; render();
+    $("#mFrom").value = b.id; $("#mInto").value = S.main; preview();
+  }],
+  ["VM offline", "Take the VM offline, write on both, then sync in any order.", () => {
+    S.online.vm = false;
+    call(N.laptop.intent(S.keys.laptop, S.main, "add", JSON.stringify({key:"note/train", value:"Written on the laptop, on the train"}), now()), "laptop");
+    call(N.vm.intent(S.keys.vm, S.main, "add", JSON.stringify({key:"note/train", value:"Nightly job on the VM"}), now()), "vm");
+    call(N.vm.fact(S.keys.vm, "observation", JSON.stringify({cron:"nightly"}), "", "", now()), "vm fact");
+    log("The VM is offline. Both devices wrote to main. Switch devices to compare, then bring the VM online and sync.");
+    render();
+  }],
+  ["Rehearse", "Simulated facts stay on a rehearsal branch, never on main.", () => {
+    const b = call(node().branch(devKey(), S.main, "", "rehearse invoice run", -1, now()), "branch"); if (!b) return;
+    for (const step of ["click|ClickUp|Overdue filter","click|EXCEL|Status cell","hotkey|EXCEL|ctrl+s"])
+      call(node().fact(devKey(), "click", JSON.stringify({step, simulated:true}), b.id, b.id, now()), "rehearsal");
+    log("Three simulated facts recorded on the rehearsal branch only.");
+    S.branch = b.id; S.sel = null; render();
+  }],
+];
+
+function resumeAt(intentId, name, lane){
+  const at = J(node().tree()).intents.find(i => i.id === intentId);
+  const parentBranch = at.branch;
+  const b = call(node().branch(devKey(), parentBranch, intentId, name, at.ts, now()), "resume"); if (!b) return;
+  call(node().intent(devKey(), b.id, "lane.open", JSON.stringify({label: lane || name, device: S.dev}), now()), "lane");
+  log(`Resumed from ${dayName(at.ts)} on '${name}' with a new lane. Main is untouched.`);
+  S.branch = b.id; S.sel = null; render();
+}
+
+// ------------------------------------------------------------------ tree drawing
+function layout(t){
+  const rows = {}; t.branches.forEach((b, i) => rows[b.id] = i);
+  const X = l => 120 + l * 44, Y = b => 34 + rows[b] * 58;
+  const pos = {}; for (const i of t.intents) pos[i.id] = {x: X(i.lamport), y: Y(i.branch)};
+  return {rows, pos, X, Y, width: Math.max(...t.intents.map(i => X(i.lamport))) + 220, height: 34 + t.branches.length * 58};
+}
+function render(){
+  renderDevices();
+  const t = J(node().tree()), L = layout(t), svg = $("#tree");
+  const colors = ["--b0","--b1","--b2","--b3","--b4"].map(css);
+  const bc = id => colors[(L.rows[id] ?? 0) % colors.length];
+  let g = "";
+  for (const b of t.branches){
+    const y = L.Y(b.id), first = t.intents.find(i => i.id === b.id);
+    g += `<line x1="${L.pos[b.id].x}" y1="${y}" x2="${L.width - 160}" y2="${y}" stroke="${bc(b.id)}" stroke-opacity=".25" stroke-width="2"/>`;
+    g += `<text class="lbl" x="8" y="${y + 4}" fill="${bc(b.id)}" style="fill:${bc(b.id)}">${esc(b.name.length > 14 ? b.name.slice(0, 13) + "…" : b.name)}</text>`;
+    const lanes = Object.values(b.lanes).map(l => l.label).join(", ");
+    g += `<text class="sm" x="${L.width - 150}" y="${y - 4}">${b.facts} facts${b.horizon ? " · to " + dayName(b.horizon) : ""}</text>`;
+    if (lanes) g += `<text class="sm" x="${L.width - 150}" y="${y + 10}">lanes: ${esc(lanes.slice(0, 24))}</text>`;
+  }
+  for (const i of t.intents) for (const p of i.parents){
+    const a = L.pos[p], b = L.pos[i.id]; if (!a) continue;
+    const cross = a.y !== b.y, isMerge = i.kind === "branch.merge" && cross;
+    const d = cross ? `M${a.x},${a.y} C${a.x + 22},${a.y} ${b.x - 22},${b.y} ${b.x},${b.y}` : `M${a.x},${a.y} L${b.x},${b.y}`;
+    g += `<path d="${d}" fill="none" stroke="${isMerge ? css("--merge") : bc(i.branch)}" stroke-width="${cross ? 1.6 : 2.2}" ${cross && !isMerge ? 'stroke-dasharray="4 3"' : ""}/>`;
+  }
+  const heads = new Set(t.branches.flatMap(b => b.heads));
+  for (const i of t.intents){
+    const {x, y} = L.pos[i.id], c = bc(i.branch), sel = S.sel === i.id;
+    const sw = sel ? 3.5 : 0, ring = css("--ink");
+    let shape;
+    if (i.kind === "branch.create") shape = `<circle cx="${x}" cy="${y}" r="${sel?8:7}" fill="${css("--panel")}" stroke="${c}" stroke-width="2.5"/>`;
+    else if (i.kind === "branch.merge") shape = `<rect x="${x-7}" y="${y-7}" width="14" height="14" transform="rotate(45 ${x} ${y})" fill="${css("--merge")}" stroke="${ring}" stroke-width="${sw}"/>`;
+    else if (i.kind.startsWith("lane")) shape = `<rect x="${x-5}" y="${y-5}" width="10" height="10" fill="${c}" stroke="${ring}" stroke-width="${sw}"/>`;
+    else shape = `<circle cx="${x}" cy="${y}" r="6" fill="${c}" stroke="${ring}" stroke-width="${sw}"/>`;
+    g += `<g class="node" data-id="${i.id}" tabindex="0" role="button" aria-label="${esc(i.summary)}"><title>${esc(i.summary)} · ${esc(i.by)} · ${dayName(i.ts)}</title>${shape}`
+       + (heads.has(i.id) ? `<text class="sm" x="${x - 12}" y="${y - 12}">head</text>` : "") + `</g>`;
+  }
+  svg.setAttribute("width", L.width); svg.setAttribute("height", L.height);
+  svg.setAttribute("viewBox", `0 0 ${L.width} ${L.height}`);
+  svg.innerHTML = g;
+  svg.querySelectorAll(".node").forEach(el => {
+    const pick = () => { S.sel = el.dataset.id; S.branch = t.intents.find(i => i.id === S.sel).branch; render(); };
+    el.onclick = pick; el.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } };
+  });
+  $("#factcount").textContent = `${t.facts} facts on this device`;
+  renderInspect(t); renderMergeSelects(t); renderIds();
+}
+
+function renderDevices(){
+  const v = d => J(N[d].verify());
+  $("#devices").innerHTML = ["laptop","vm"].map(d => {
+    const ok = v(d).ok;
+    return `<div class="dev ${S.dev===d?"on":""}"><span class="dot" style="background:var(${S.online[d]?"--ok":"--bad"})"></span>
+      <button data-dev="${d}" aria-pressed="${S.dev===d}">${d === "vm" ? "Oracle VM" : "Laptop"}</button>
+      <button data-online="${d}">${S.online[d] ? "Go offline" : "Go online"}</button>
+      <span class="pill ${ok?"ok":"bad"}">${ok ? "verified" : "broken"}</span></div>`;
+  }).join("") + `<button id="sync" class="primary" ${S.online.laptop && S.online.vm ? "" : "disabled"}>Sync devices</button>`;
+  document.querySelectorAll("[data-dev]").forEach(b => b.onclick = () => { S.dev = b.dataset.dev; S.sel = null; render(); });
+  document.querySelectorAll("[data-online]").forEach(b => b.onclick = () => { S.online[b.dataset.online] = !S.online[b.dataset.online]; render(); });
+  $("#sync").onclick = () => {
+    const a = J(N.vm.import(N.laptop.export())), b = J(N.laptop.import(N.vm.export()));
+    log(`Synced: ${b.added} new on the laptop, ${a.added} new on the VM.` + ((a.refused.length + b.refused.length) ? ` ${a.refused.length + b.refused.length} refused.` : ""));
+    render();
+  };
+}
+
+function renderInspect(t){
+  const box = $("#inspect");
+  const i = t.intents.find(x => x.id === S.sel);
+  const br = t.branches.find(b => b.id === (S.branch || S.main)) || t.branches[0];
+  const v = J(i ? node().view_at(i.id) : node().view(br.id));
+  const regs = Object.entries(v.registers).map(([k, r]) => `<span>${esc(k)}</span><span>${esc(JSON.stringify(r.value))}</span>`).join("");
+  const sets = Object.entries(v.sets).map(([k, items]) => `<span>${esc(k)}</span><span>${Object.values(items).map(x => esc(x)).join("<br>")}</span>`).join("");
+  box.innerHTML = `<h2>${i ? "Point in time" : "Branch now"}</h2>
+    <div class="mono" style="margin-bottom:6px">${i ? `${esc(i.summary)}<br><span class="mute">${esc(i.by)} · ${dayName(i.ts)} · on ${esc(t.branches.find(b=>b.id===i.branch)?.name)}</span>`
+                                  : `<b>${esc(br.name)}</b> <span class="mute">· ${br.facts} facts · ${Object.keys(br.lanes).length} lane(s)</span>`}</div>
+    <div class="kv mono">${regs || '<span>settings</span><span class="mute">none yet</span>'}${sets}</div>
+    ${i ? `<div class="row" style="margin-top:10px"><input id="rName" value="resume-${dayName(i.ts).split(",")[0].toLowerCase()}" aria-label="New branch name"><button id="rGo" class="primary">Resume here</button></div>
+           <div class="note">Starts a new branch from this exact point, with its own lane. Facts are shown as they were then.</div>`
+        : `<div class="row" style="margin-top:10px"><input id="kKey" placeholder="key, e.g. mode/agent:next-step" aria-label="Key"></div>
+           <div class="row"><input id="kVal" placeholder="value" aria-label="Value"><button id="kSet">Set</button><button id="kAdd">Add note</button></div>
+           <div class="row"><select id="kPolicy" aria-label="Merge rule type"><option>mode</option><option>handoff</option><option>privacy</option><option>note</option></select>
+             <button id="kAuto">Merges by itself</button><button id="kAsk">Ask me</button></div>
+           <div class="note">Writing as <b>${S.dev}</b>. Merge rules are settings too, so they're versioned per branch.</div>`}`;
+  if (i) { $("#rGo").onclick = () => resumeAt(i.id, $("#rName").value.trim() || "resume", $("#rName").value.trim()); return; }
+  const w = (op, key, value) => { if (!key) return log("Give it a key first.", true);
+    if (call(node().intent(devKey(), br.id, op, JSON.stringify({key, value}), now()), op)) { log(`${S.dev}: ${op} ${key} on ${br.name}`); render(); } };
+  $("#kSet").onclick = () => w("set", $("#kKey").value.trim(), $("#kVal").value.trim());
+  $("#kAdd").onclick = () => w("add", $("#kKey").value.trim() || "note/general", $("#kVal").value.trim());
+  $("#kAuto").onclick = () => w("set", "policy/merge/" + $("#kPolicy").value, "auto");
+  $("#kAsk").onclick = () => w("set", "policy/merge/" + $("#kPolicy").value, "ask");
+}
+
+function renderMergeSelects(t){
+  const opts = t.branches.map(b => `<option value="${b.id}">${esc(b.name)}</option>`).join("");
+  const f = $("#mFrom").value, i = $("#mInto").value;
+  $("#mFrom").innerHTML = opts; $("#mInto").innerHTML = opts;
+  $("#mFrom").value = f || (t.branches.at(-1)?.id ?? ""); $("#mInto").value = i || S.main;
+}
+
+function preview(){
+  const from = $("#mFrom").value, into = $("#mInto").value;
+  if (from === into) { $("#mOut").innerHTML = `<span class="err">Pick two different branches.</span>`; return; }
+  S.plan = J(node().merge_preview(from, into)); S.picks = {};
+  const p = S.plan;
+  $("#mOut").innerHTML = `<div class="mono">${p.new_intents} new change(s) from that branch</div>`
+    + (p.auto.length ? `<div class="note" style="margin-top:6px">Applies by itself:</div>` + p.auto.map(a => `<div class="mono">· ${esc(a.key)} → ${esc(JSON.stringify(a.value))} <span class="mute">(${esc(a.why)})</span></div>`).join("") : "")
+    + p.conflicts.map((c, n) => `<div class="conf"><div class="mono"><b>${esc(c.key)}</b> <span class="mute">both changed · rule: ${esc(c.policy)}</span></div>
+        <div class="opts"><button data-c="${n}" data-v="ours">Keep ${esc(JSON.stringify(c.ours))}</button><button data-c="${n}" data-v="theirs">Take ${esc(JSON.stringify(c.theirs))}</button></div></div>`).join("")
+    + (!p.auto.length && !p.conflicts.length ? `<div class="note">Nothing to change in settings; notes and history will join.</div>` : "");
+  document.querySelectorAll("[data-c]").forEach(b => b.onclick = () => {
+    const c = S.plan.conflicts[+b.dataset.c]; S.picks[c.key] = b.dataset.v === "ours" ? c.ours : c.theirs;
+    b.parentElement.querySelectorAll("button").forEach(x => x.classList.toggle("pick", x === b)); gate(); });
+  gate();
+}
+function gate(){ $("#mGo").disabled = !S.plan || S.plan.conflicts.some(c => !(c.key in S.picks)); }
+$("#mPrev").onclick = preview;
+$("#mGo").onclick = () => {
+  const res = Object.entries(S.picks).map(([key, value]) => ({key, value: value ?? null}));
+  const r = call(node().merge(devKey(), S.plan.from, S.plan.into, JSON.stringify(res), now()), "merge");
+  if (r) { log(`Merged on the ${S.dev}. ${res.length} question(s) settled by you.`); S.plan = null; $("#mOut").innerHTML = `<div class="note">Merged.</div>`; S.branch = S.main; render(); }
+  else if (S.dev === "vm") log("The VM's device grant doesn't include merging. Switch to the laptop.", true);
+};
+
+function renderIds(){
+  const ids = J(node().identities()), name = k => Object.entries(S.keys).find(([, v]) => v === k)?.[0] ?? k.slice(0, 8);
+  $("#ids").innerHTML = ids.roots.map(r => `<div><b>${esc(r.label)}</b> <span class="mute">identity · ${r.key.slice(0, 8)}</span></div>`).join("")
+    + ids.grants.map(g => `<div class="row" style="margin:2px 0"><span style="flex:1">↳ ${esc(g.label)} <span class="mute">${esc(g.role)} · ${g.caps.join(", ")}</span>${g.revoked ? ' <span class="err">revoked</span>' : ""}</span>
+        ${!g.revoked && name(g.subject) !== S.dev ? `<button data-revoke="${g.id}">Revoke</button>` : ""}</div>`).join("");
+  document.querySelectorAll("[data-revoke]").forEach(b => b.onclick = () => {
+    if (call(node().fact(S.keys.me, "revoke", JSON.stringify({grant: b.dataset.revoke}), "", "", now()), "revoke")) { log("Revoked. That key can no longer write anything new."); render(); } });
+}
+
+$("#stories").innerHTML = STORIES.map(([t, d], n) => `<button class="story" data-s="${n}"><b>${t}</b><span>${d}</span></button>`).join("");
+document.querySelectorAll("[data-s]").forEach(b => b.onclick = () => STORIES[+b.dataset.s][2]());
+boot();
+</script>

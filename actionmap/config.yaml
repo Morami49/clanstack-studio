@@ -1,0 +1,66 @@
+# ActionMap config (v0.2). Copy this folder to each machine and edit the
+# sections that machine uses. Secrets can also come from environment variables.
+
+hub:
+  origin: hub-laptop        # unique per hub: e.g. hub-laptop, hub-vm
+  host: 127.0.0.1           # keep local; reach other hubs over Tailscale (free) not the open internet
+  port: 8765
+  db: data/actionmap.db
+  token: ""                 # REQUIRED once a second hub, VM or tunnel is involved (env ACTIONMAP_TOKEN)
+
+sync:                       # run `python -m clients.sync` on either hub
+  peers: []                 # e.g. [{url: "http://100.x.y.z:8765", token: "..."}]
+  interval_s: 5
+
+client:                     # used by capture / voice / agents / executor on this machine
+  hub_url: http://127.0.0.1:8765
+  token: ""
+  node_id: win-laptop
+  human_id: nowed
+  session_id: auto
+
+capture:
+  record_typed_text: false  # false = only the length of what you type is kept
+  min_event_gap_ms: 150
+
+privacy:                    # day-one private list (D-020). Seeded once as versioned events; change it in the UI.
+  private_apps: [KeePass.exe, KeePassXC.exe, 1Password.exe, Bitwarden.exe,
+                 OUTLOOK.EXE, olk.exe, thunderbird.exe, HxOutlook.exe,
+                 WhatsApp.exe, Telegram.exe, Signal.exe, Discord.exe, ms-teams.exe, Teams.exe, slack.exe, Messenger.exe]
+  private_title_patterns:
+    - "incognito|inprivate|private browsing|\\bprivate\\b"
+    - "gmail|outlook\\.(com|live)|proton ?mail|yahoo mail"
+    - "whatsapp|messenger|telegram web|signal"
+    - "online banking|\\bbank\\b|barclays|hsbc|natwest|lloyds|santander|monzo|starling|revolut|nationwide|halifax|paypal|chase uk"
+  # Anything not listed: you're asked once; until you answer, window/element names are masked.
+
+executor:
+  enabled: false            # true only when agents' approved actions should really run on THIS machine
+  allowed_actions: [focus_window, click_element, type_text, hotkey]
+  proposal_ttl_s: 30
+
+brain:                      # D-008/D-012: per-task routing across local + cloud models
+  providers:                # model names change: check each provider's current free models
+    groq:      {kind: openai_compat, base_url: "https://api.groq.com/openai/v1", model: "llama-3.3-70b-versatile", key_env: GROQ_API_KEY, local: false}
+    gemini:    {kind: gemini, model: "gemini-2.5-flash", key_env: GEMINI_API_KEY, local: false, vision: true}
+    ollama:    {kind: openai_compat, base_url: "http://127.0.0.1:11434/v1", model: "qwen2.5:3b", local: true}
+    anthropic: {kind: anthropic, model: "", key_env: ANTHROPIC_API_KEY, local: false}   # paid; set model to enable
+    openai:    {kind: openai_compat, base_url: "https://api.openai.com/v1", model: "", key_env: OPENAI_API_KEY, local: false}  # paid
+    echo:      {kind: echo, local: true}                # offline fallback so nothing ever hard-fails
+  routes:                   # tried in order; skipped if no key/model or unreachable
+    chat:      [groq, gemini, anthropic, openai, ollama, echo]
+    vision:    [gemini, ollama, echo]
+    summarize: [gemini, groq, ollama, echo]
+  local_only_routes: [ollama, echo]   # used when a request includes local-only material
+
+profile:                    # D-014/D-019: habits profile, local by default; flip items to 'api' in the UI
+  default_share: local
+  refresh_s: 300
+
+external:                   # D-017/D-018: outside AIs. One secret per AI so every action is keyed to it.
+  mcp_host: 127.0.0.1
+  mcp_port: 8766            # expose ONLY this port through a tunnel (Cloudflare Tunnel / Tailscale Funnel)
+  allowed_hosts: []         # tunnel hostname(s), e.g. ["actionmap.example.com"]
+  ais:                      # path secret -> actor id. Connector URL = https://<host>/<secret>/mcp
+    # change-me-long-random-1: ext:claude
+    # change-me-long-random-2: ext:chatgpt

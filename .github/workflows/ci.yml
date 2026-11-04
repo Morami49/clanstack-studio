@@ -1,0 +1,31 @@
+name: ci
+on: [push, pull_request]
+jobs:
+  engine:
+    runs-on: ubuntu-latest
+    defaults: {run: {working-directory: engine}}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test -p foundation-core
+  actionmap:
+    runs-on: ubuntu-latest
+    defaults: {run: {working-directory: actionmap}}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install -r requirements.txt
+      - run: python -m tests.test_core
+  studio:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install playwright && python -m playwright install --with-deps chromium
+      - run: python studio/tests/scenarios.py studio/index.html
+        env: {STUDIO_TEST_OUT: studio/tests/out}
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with: {name: studio-scenarios, path: studio/tests/out}

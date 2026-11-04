@@ -1,0 +1,660 @@
+<title>Clanstack Studio</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/cytoscape@3.30.2/dist/cytoscape.min.js"></script>
+<style>
+/* Layout: a drafting table. Top rail (branch, time, views) · banners · work surface · inspector on the right (sheet on phones). */
+:root{
+  --bg:#eef0ee; --surface:#f8f9f7; --raise:#ffffff; --ink:#18201f; --mute:#5c6966; --line:#d5dbd8;
+  --accent:#1f5f8b; --accent-ink:#ffffff;
+  --t-decision:#1f5f8b; --t-question:#b5651d; --t-term:#2b7a6b; --t-story:#7b4b94; --t-asset:#4a5553; --t-idea:#3f7d2f; --t-finding:#a8332a; --t-lead:#8a6d00;
+  --ok:#2e7d4f; --warn:#9a5212; --bad:#b03a2e; --band:#fff4e0; --band-ink:#5b3a10;
+  --display:"Bricolage Grotesque", "IBM Plex Sans", system-ui, sans-serif;
+  --body:"IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono:"IBM Plex Mono", ui-monospace, "Cascadia Mono", monospace;
+}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+  --bg:#111615; --surface:#171d1c; --raise:#1d2423; --ink:#e5ebe8; --mute:#93a19d; --line:#2b3533;
+  --accent:#6fb0de; --accent-ink:#0d1517;
+  --t-decision:#6fb0de; --t-question:#e3a15f; --t-term:#5fc2ad; --t-story:#c39ad8; --t-asset:#a5b2af; --t-idea:#8fcf75; --t-finding:#ec7f72; --t-lead:#e2c45a;
+  --ok:#6cc08d; --warn:#e3a15f; --bad:#ec7f72; --band:#2e2416; --band-ink:#f0d2a6; color-scheme:dark }}
+:root[data-theme="dark"]{
+  --bg:#111615; --surface:#171d1c; --raise:#1d2423; --ink:#e5ebe8; --mute:#93a19d; --line:#2b3533;
+  --accent:#6fb0de; --accent-ink:#0d1517;
+  --t-decision:#6fb0de; --t-question:#e3a15f; --t-term:#5fc2ad; --t-story:#c39ad8; --t-asset:#a5b2af; --t-idea:#8fcf75; --t-finding:#ec7f72; --t-lead:#e2c45a;
+  --ok:#6cc08d; --warn:#e3a15f; --bad:#ec7f72; --band:#2e2416; --band-ink:#f0d2a6; color-scheme:dark }
+html,body{height:100%}
+body{background:var(--bg);color:var(--ink);font:14px/1.5 var(--body);margin:0;display:flex;flex-direction:column}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:10;background:var(--surface)}
+button,input,select,textarea{font:inherit;color:var(--ink)}
+button{cursor:pointer;background:var(--raise);border:1px solid var(--line);border-radius:6px;padding:6px 11px}
+button:hover:not(:disabled){border-color:var(--ink)}
+button:disabled,input:disabled,textarea:disabled,select:disabled{opacity:.5;cursor:not-allowed}
+button.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:600}
+button.link{border:0;background:none;padding:0 4px;color:var(--accent);font:500 12px var(--mono)}
+input,select,textarea{background:var(--raise);border:1px solid var(--line);border-radius:6px;padding:6px 9px;min-width:0}
+textarea{width:100%;resize:vertical;box-sizing:border-box}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.mono{font-family:var(--mono);font-size:12px}
+.mute{color:var(--mute)}
+header{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--surface);border-bottom:1px solid var(--line);
+  padding-block:10px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));
+  display:flex;flex-wrap:wrap;gap:10px 16px;align-items:center}
+.brand{display:flex;align-items:baseline;gap:8px}
+.brand h1{font:700 20px/1 var(--display);margin:0;letter-spacing:-.01em}
+.brand .ver{font:500 11px var(--mono);color:var(--mute)}
+nav{display:flex;gap:4px;overflow-x:auto;max-width:100%}
+nav button{border:0;background:transparent;padding:6px 10px;border-radius:999px;white-space:nowrap}
+nav button[aria-current="true"]{background:var(--ink);color:var(--surface)}
+.badge{display:inline-block;min-width:18px;padding:0 5px;margin-left:4px;border-radius:999px;background:var(--warn);color:var(--surface);font:600 11px/18px var(--mono);text-align:center}
+.spacer{flex:1}
+.rail{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.rail label{font-size:12px;color:var(--mute)}
+#asof{width:160px;accent-color:var(--accent)}
+.status{font:500 11px var(--mono);padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--mute)}
+.status.live{color:var(--ok);border-color:var(--ok)}
+.status.past{color:var(--warn);border-color:var(--warn)}
+#banners:empty{display:none}
+.banner{background:var(--band);color:var(--band-ink);border-bottom:1px solid var(--line);display:flex;gap:10px;align-items:center;flex-wrap:wrap;
+  padding-block:8px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));font-size:13px}
+.banner button{padding:3px 10px}
+main{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 380px}
+.view{min-height:0;overflow:auto;padding-block:16px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:16px}
+#v-map{padding:0;position:relative;overflow:hidden}
+#cy{position:absolute;inset:0}
+.mapbar{position:absolute;left:12px;top:12px;z-index:2;display:flex;gap:6px;flex-wrap:wrap;max-width:calc(100% - 24px)}
+.chip{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:var(--raise);border-radius:999px;padding:3px 10px;font-size:12px;cursor:pointer;user-select:none}
+.chip[aria-pressed="false"]{opacity:.45}
+.dot{width:9px;height:9px;border-radius:50%;display:inline-block;flex:none}
+aside{border-left:1px solid var(--line);background:var(--surface);overflow:auto;min-height:0;
+  padding-block:16px;padding-left:16px;padding-right:max(16px,env(safe-area-inset-right,0px))}
+.eyebrow{font:500 11px var(--mono);text-transform:uppercase;letter-spacing:.08em;color:var(--mute)}
+h2{font:700 22px/1.2 var(--display);margin:4px 0 8px;text-wrap:balance}
+h3{font:600 15px/1.3 var(--body);margin:0}
+.body{white-space:pre-wrap;overflow-wrap:anywhere}
+.pill{font:500 11px var(--mono);padding:1px 7px;border-radius:4px;border:1px solid currentColor}
+.stack{display:flex;flex-direction:column;gap:10px}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.card{background:var(--raise);border:1px solid var(--line);border-radius:8px;padding:12px 14px;display:flex;flex-direction:column;gap:8px;min-width:0}
+.card.sel{border-color:var(--accent)}
+.log{display:flex;flex-direction:column;gap:6px;margin:0;padding:0;list-style:none}
+.log li{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;font-size:13px}
+.log li.gone{opacity:.55}
+.log li.gone .what{text-decoration:line-through}
+.log .n{font:500 11px var(--mono);color:var(--mute);padding-top:2px}
+.refs{display:flex;flex-wrap:wrap;gap:6px}
+.refs button{font:500 11px var(--mono);padding:2px 7px}
+.empty{color:var(--mute);font-size:13px}
+.hint{color:var(--bad);font-size:12px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px}
+.codebar{display:flex;flex-direction:column;gap:8px;position:sticky;top:-16px;background:var(--bg);padding-block:4px 10px;z-index:1}
+canvas#pad{width:100%;max-width:640px;aspect-ratio:16/10;border:1px dashed var(--line);border-radius:8px;background:var(--raise);touch-action:none}
+.tree-wrap{overflow-x:auto}
+.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(16px + env(safe-area-inset-bottom,0px));background:var(--ink);color:var(--surface);padding:8px 10px 8px 14px;border-radius:8px;font-size:13px;z-index:20;display:flex;gap:12px;align-items:center;max-width:calc(100% - 32px)}
+.toast button{background:transparent;color:var(--surface);border-color:var(--mute);padding:3px 10px}
+pre.pack{white-space:pre-wrap;background:var(--raise);border:1px solid var(--line);border-radius:8px;padding:12px;font:12px/1.5 var(--mono);max-height:60vh;overflow:auto}
+#listView{display:flex;flex-direction:column;gap:2px;margin:0;padding:0;list-style:none}
+#listView button{width:100%;text-align:left;display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:baseline;border:0;border-bottom:1px solid var(--line);border-radius:0;background:transparent;padding:8px 4px}
+#listView button:hover,#listView button:focus-visible{background:var(--raise)}
+@media (max-width:860px){
+  main{grid-template-columns:1fr}
+  aside{position:fixed;inset:auto 0 0 0;max-height:72vh;border-left:0;border-top:1px solid var(--line);z-index:8;box-shadow:0 -8px 24px rgb(0 0 0 / .18);
+    padding-bottom:calc(16px + env(safe-area-inset-bottom,0px));padding-left:max(16px,env(safe-area-inset-left,0px))}
+  aside.closed{display:none}
+  #asof{width:110px}
+}
+@media (prefers-reduced-motion: reduce){*{transition:none!important;animation:none!important}}
+</style>
+
+<header>
+  <div class="brand"><h1>Clanstack Studio</h1><span class="ver" id="ver">v0.2</span></div>
+  <nav id="tabs" aria-label="Views">
+    <button data-v="map" aria-current="true">Map</button>
+    <button data-v="list">List</button>
+    <button data-v="ask">Ask<span class="badge" id="askBadge" hidden></span></button>
+    <button data-v="capture">Capture</button>
+    <button data-v="tree">Tree</button>
+    <button data-v="pack">Pack</button>
+  </nav>
+  <span class="spacer"></span>
+  <div class="rail">
+    <label for="branch">branch</label>
+    <select id="branch"><option value="main">main</option></select>
+    <label for="asof">as of</label>
+    <input id="asof" type="range" min="0" max="0" value="0" aria-label="View as of an earlier change">
+    <span class="status live" id="when">live</span>
+    <span class="status" id="conn">connecting…</span>
+    <button id="theme" aria-label="Toggle theme" title="Toggle theme">◐</button>
+  </div>
+</header>
+<div id="banners" aria-live="polite"></div>
+
+<main>
+  <section class="view" id="v-map">
+    <div class="mapbar" id="filters"></div>
+    <div id="cy" aria-label="Map of decisions, questions, terms, stories, assets and findings. The List view has the same items for keyboard and screen readers."></div>
+  </section>
+
+  <section class="view" id="v-list" hidden>
+    <div class="stack" style="max-width:900px">
+      <div class="row">
+        <input id="listQ" placeholder="Find by code, title or text" style="flex:1" aria-label="Find items">
+        <select id="listT" aria-label="Type"><option value="">All types</option></select>
+      </div>
+      <ul id="listView"></ul>
+    </div>
+  </section>
+
+  <section class="view" id="v-ask" hidden>
+    <div class="codebar">
+      <textarea id="codes" rows="3" placeholder="Answer in codes, one per line or in a row:&#10;Q1 A · Q3 B no prompts at night · T4 ok&#10;NEW an idea you want captured" aria-label="Answer in codes"></textarea>
+      <div class="row">
+        <label for="codeSource" class="mute">these answers come from</label>
+        <select id="codeSource"><option value="">me</option><option value="chatgpt">ChatGPT</option><option value="gemini">Gemini</option><option value="claude-chat">another Claude chat</option><option value="other">someone or something else</option></select>
+        <span class="spacer"></span>
+        <button class="primary" id="codesGo">Record</button>
+      </div>
+    </div>
+    <p class="mute" style="margin:0 0 12px">Each open item has a code that never changes. Answer one card, or many at once above. <span class="mono">ok</span> agrees, a letter picks an option, anything else is recorded as written.</p>
+    <div class="grid" id="askList"></div>
+  </section>
+
+  <section class="view" id="v-capture" hidden>
+    <div class="stack" style="max-width:720px">
+      <h2>Capture</h2>
+      <p class="mute" style="margin:0">Ideas, links to other chats, notes and sketches. On your phone, use the keyboard's microphone to speak them. Drafts stay on this device until they're saved.</p>
+      <div class="row">
+        <label for="capType" class="mute">as</label>
+        <select id="capType"><option value="idea">idea</option><option value="question">question</option><option value="decision">decision draft</option><option value="asset">asset or link</option><option value="story">story</option><option value="term">term</option><option value="finding">finding (a problem someone hit)</option><option value="lead">lead (work, money or contact to pursue)</option></select>
+        <input id="capTitle" placeholder="Short title" style="flex:1" aria-label="Title">
+      </div>
+      <textarea id="capBody" rows="5" placeholder="What you mean, in any order. Paste a chat link here to have it absorbed." aria-label="Details"></textarea>
+      <label class="row" for="capPrivate"><input type="checkbox" id="capPrivate"> <span>Only me: keep this in my private area (nobody else can read it, not even editors)</span></label>
+      <div class="row"><label for="capRefs" class="mute">links to</label><input id="capRefs" placeholder="D-044, S21, Q3 …" style="flex:1"></div>
+      <div class="stack">
+        <div class="row"><span class="eyebrow">Sketch</span><span class="spacer"></span><button id="padClear">Clear sketch</button></div>
+        <canvas id="pad" aria-label="Sketch pad"></canvas>
+      </div>
+      <div class="row"><button class="primary" id="capGo">Add to Studio</button><span class="mute" id="capNote"></span></div>
+    </div>
+  </section>
+
+  <section class="view" id="v-tree" hidden>
+    <div class="stack">
+      <h2>Version tree</h2>
+      <p class="mute" style="margin:0">Every change is kept; nothing is overwritten. Fork from any point to try another direction in parallel, and merge back when it's settled.</p>
+      <div class="tree-wrap" id="treeSvg"></div>
+      <div class="row">
+        <input id="forkName" placeholder="New branch name" aria-label="New branch name">
+        <button id="forkGo">Fork at the point shown</button>
+        <button id="mergeGo">Merge this branch into main</button>
+      </div>
+      <ol class="log" id="eventLog"></ol>
+    </div>
+  </section>
+
+  <section class="view" id="v-pack" hidden>
+    <div class="stack" style="max-width:860px">
+      <h2>Context pack</h2>
+      <p class="mute" style="margin:0">The current view as text any AI can read. Paste it into ChatGPT, Gemini or another Claude chat; paste their reply into Ask and pick who it came from.</p>
+      <div class="row"><button class="primary" id="copyPack">Copy pack</button><label for="packPriv"><input type="checkbox" id="packPriv"> include my private items</label><span class="mute" id="packNote"></span></div>
+      <pre class="pack" id="pack"></pre>
+    </div>
+  </section>
+
+  <aside id="inspector" class="closed" aria-label="Selected item">
+    <div class="empty" id="inspEmpty">Select anything on the map or in the list to see its history, links and answers.</div>
+    <div id="insp" hidden></div>
+  </aside>
+</main>
+
+<script>
+const TYPES = {decision:"Decision", question:"Question", term:"Term", story:"Story", asset:"Asset", idea:"Idea", finding:"Finding", lead:"Lead"};
+const PLURAL = {story:"Stories"};
+const OPEN = new Set(["proposed","open","default","challenged"]);
+const S = { genesis:null, events:[], shared:[], priv:[], me:null, owner:false, canEdit:null, canWrite:null, names:{}, branch:"main", asof:null,
+            view:"map", sel:null, filters:new Set(Object.keys(TYPES)), db:null, user:null, windowFull:false };
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const store = { get(k){ try { return localStorage.getItem("studio."+k); } catch { return null; } },
+                set(k,v){ try { v ? localStorage.setItem("studio."+k, v) : localStorage.removeItem("studio."+k); } catch {} } };
+
+/* ---------------------------------------------------------------- private area (D-055): each person's own events, readable by nobody else */
+const privPath = () => S.me ? "data/users/" + S.me + "/vault/events" : null;
+function mergeEvents(){ S.events = [...S.shared, ...S.priv].sort((a,b)=>a.ts<b.ts?-1:a.ts>b.ts?1:0); }
+
+/* ---------------------------------------------------------------- permissions: one place decides what this viewer may do */
+const writable = () => !!S.db && !S.asof && S.canWrite !== false;
+const dis = () => writable() ? "" : "disabled";
+const editor = () => S.canEdit !== false;   // unknown → allow; a refused write decides
+
+function toast(text, undoIds){
+  document.querySelectorAll(".toast").forEach(t=>t.remove());
+  const d = document.createElement("div"); d.className = "toast"; d.setAttribute("role","status");
+  d.innerHTML = `<span>${esc(text)}</span>` + (undoIds?.length && writable() ? `<button data-undo>Undo</button>` : "");
+  document.body.append(d);
+  const b = d.querySelector("[data-undo]"); if (b) b.onclick = async () => { d.remove(); S.bulk = true;
+    try { for (const id of [...undoIds].reverse()) await revert(id); } finally { S.bulk = false; refresh(); } toast("Undone. Both steps stay in history."); };
+  setTimeout(() => d.remove(), undoIds?.length ? 10000 : 2800);
+}
+
+/* ---------------------------------------------------------------- folding: genesis + append-only events → one branch, as of one point */
+function branches(){
+  const out = {main:{name:"main", fork:null, merged:null}};
+  for (const e of S.events) if (e.kind==="branch.create") out[e.body.name] = {name:e.body.name, fork:e.body.fork_ts, from:e.body.from||"main", merged:null, by:e.author};
+  for (const e of S.events) if (e.kind==="branch.merge" && out[e.body.name] && !out[e.body.name].merged) out[e.body.name].merged = e.ts;
+  return out;
+}
+function visible(e, br, bs){
+  if (S.asof && e.ts > S.asof) return false;
+  const b = e.branch || "main";
+  if (br === "main"){ if (b === "main") return true; const m = bs[b]?.merged; return !!m && (!S.asof || m <= S.asof); }
+  if (b === br) return true;
+  if (b === "main") return e.ts <= (bs[br]?.fork || "");
+  return false;
+}
+function stableCodes(){
+  // Numbered by creation order across ALL branches and time, so a code never moves to another item.
+  const order = [...(S.genesis?.items || []).map(i => ({id:i.id, type:i.type})),
+                 ...S.events.filter(e => e.kind==="item.create").map(e => ({id:e.body.id, type:e.body.type}))];
+  const code = {}, back = {}, n = {question:0, term:0};
+  for (const i of order){ if (code[i.id]) continue;
+    const c = i.type==="question" ? "Q"+(++n.question) : i.type==="term" ? "T"+(++n.term) : i.id;
+    code[i.id] = c; back[c.toUpperCase()] = i.id; }
+  return {code, back};
+}
+let CODES = {code:{}, back:{}};
+const codeOf = id => CODES.code[id] || null;
+
+function fold(){
+  const items = new Map();
+  for (const it of (S.genesis?.items || [])) items.set(it.id, {...it, refs:[...(it.refs||[])], answers:[], comments:[], history:[{ts:S.genesis.created, kind:"genesis", author:{id:"claude", label:"Claude"}}]});
+  const bs = branches();
+  const evs = S.events.filter(e => visible(e, S.branch, bs));
+  const gone = new Set(evs.filter(e => e.kind==="retract").map(e => e.body.of));
+  const reverted = new Set(evs.filter(e => e.body?.revert_of).map(e => e.body.revert_of));
+  for (const e of evs){
+    const h = {id:e._id, ts:e.ts, kind:e.kind, author:e.author, body:e.body, branch:e.branch, gone:gone.has(e._id), reverted:reverted.has(e._id)};
+    if (e.kind==="item.create"){ items.set(e.body.id, {id:e.body.id, type:e.body.type, title:e.body.title, body:e.body.body||"", status:e.body.status||"open",
+      refs:e.body.refs||[], sketch:e.body.sketch||null, source:e.body.source||null, private:!!e._private, answers:[], comments:[], history:[h], by:e.author}); continue; }
+    const it = items.get(e.item); if (!it) continue;
+    if (e.kind==="retract"){ it.history.push(h); continue; }
+    it.history.push(h);
+    if (h.gone) continue;
+    if (e.kind==="answer") it.answers.push(h);
+    if (e.kind==="comment") it.comments.push(h);
+    if (e.kind==="item.edit"){ if (e.body.title!=null) it.title=e.body.title; if (e.body.body!=null) it.body=e.body.body; }
+    if (e.kind==="status"){ h.prev = it.status; it.status = e.body.status; }
+    if (e.kind==="link") it.refs = [...new Set([...it.refs, ...(e.body.refs||[])])];
+  }
+  return {items, evs, bs};
+}
+let F = {items:new Map(), evs:[], bs:{}};
+function askable(){ return [...F.items.values()].filter(i => (i.type==="question" && !["closed","withdrawn","agreed"].includes(i.status)) ||
+  ((i.type==="term"||i.type==="story"||i.type==="decision") && (i.status==="proposed"||i.status==="challenged"))); }
+
+/* ---------------------------------------------------------------- writing (append-only) */
+async function write(kind, item, body, opts={}){
+  if (!S.db){ toast("Saving isn't available here. Open the Studio signed in."); return null; }
+  if (S.asof){ toast("You're looking at the past. Return to live to make changes."); return null; }
+  if (S.canWrite === false){ toast("This Studio is view only for you."); return null; }
+  // Never write "before" something already seen: a device with a slow clock still lands after what it's responding to.
+  const latest = S.events.length ? Date.parse(S.events[S.events.length-1].ts) : 0;
+  const ts = new Date(Math.max(Date.now(), (isNaN(latest) ? 0 : latest) + 1)).toISOString();
+  const ev = {ts, kind, item:item||null, branch:S.branch, body:body||{},
+              author:{id:S.me||"unknown", role:S.owner?"owner":"member", label:S.owner?"Nowed":"Member"}};
+  const isPrivate = opts.private || (kind==="item.create" && body?.private) || (item && F.items.get(item)?.private);
+  if (isPrivate && !privPath()){ toast("Your private area isn't available in this view. Nothing was saved."); return null; }
+  try { const ref = await S.db.collection(isPrivate ? privPath() : "events").add(ev); return ref?.id || "pending"; }
+  catch(err){
+    if (err.code==="invalid_argument"){ S.canWrite = false; renderBanners(); refreshView(); toast("This Studio is view only for you. Nothing was changed."); }
+    else toast(err.code==="quota_exceeded" ? "The Studio's storage is full. Nothing was saved." : "Couldn't save — check your connection. Your text is kept.");
+    return null;
+  }
+}
+async function revert(eventId){
+  const e = S.events.find(x => x._id === eventId); if (!e) return;
+  if (e.kind==="answer" || e.kind==="comment" || e.kind==="link") return write("retract", e.item, {of:eventId});
+  if (e.kind==="status"){ const h = F.items.get(e.item)?.history.find(x => x.id===eventId);
+    return write("status", e.item, {status:h?.prev || "open", revert_of:eventId}); }
+  if (e.kind==="item.create") return write("status", e.body.id, {status:"withdrawn", revert_of:eventId});
+}
+
+/* ---------------------------------------------------------------- people */
+function who(a){
+  if (!a) return "Someone";
+  if (a.id && a.id === S.me) return "You";
+  if (a.id === "claude") return "Claude";
+  return S.names[a.id] || (a.role==="owner" ? "Nowed" : a.label && a.label!=="Member" ? a.label : "A member");
+}
+async function loadNames(){
+  if (!S.user?.profiles) return;
+  const ids = [...new Set(S.events.map(e => e.author?.id).filter(id => id && id.startsWith("u_") && !(id in S.names)))].slice(0,64);
+  if (!ids.length) return;
+  try { const ps = await S.user.profiles(ids); for (const id of ids) S.names[id] = ps?.[id]?.name || ""; refreshView(); if (S.sel) renderInspector(); } catch {}
+}
+
+/* ---------------------------------------------------------------- banners */
+function renderBanners(){
+  const b = [];
+  if (S.asof) b.push(`<div class="banner"><b>Viewing ${S.asof==="0"?"the genesis record":"as of "+esc(S.asof.slice(0,16).replace("T"," "))}.</b> Nothing can be changed from the past. <button id="toLive">Return to live</button></div>`);
+  if (S.branch !== "main") b.push(`<div class="banner">You're on branch <b class="mono">${esc(S.branch)}</b>. Changes here stay on this branch until it's merged into main. <button id="toMain">Back to main</button></div>`);
+  if (S.canWrite === false) b.push(`<div class="banner"><b>View only.</b> You can read everything and copy the context pack, but not change anything. Ask the owner for Contributor access to answer.</div>`);
+  if (S.windowFull) b.push(`<div class="banner">This Studio shows its latest 1,000 changes live. Older ones are still kept. Ask Claude to make a checkpoint so nothing drops out of the live view.</div>`);
+  $("#banners").innerHTML = b.join("");
+  const l = $("#toLive"); if (l) l.onclick = () => { S.asof = null; refresh(); };
+  const m = $("#toMain"); if (m) m.onclick = () => { S.branch = "main"; refresh(); };
+}
+
+/* ---------------------------------------------------------------- map */
+let cy = null;
+const typeKey = t => t in TYPES ? t : "idea";
+function typeColor(t){ return css("--t-"+typeKey(t)); }
+function buildFilters(){
+  $("#filters").innerHTML = Object.entries(TYPES).map(([k,v]) => `<span class="chip" role="button" tabindex="0" aria-pressed="${S.filters.has(k)}" data-f="${k}"><i class="dot" style="background:var(--t-${k})"></i>${PLURAL[k]||v+"s"} <span class="mono mute">${[...F.items.values()].filter(i=>typeKey(i.type)===k).length}</span></span>`).join("")
+    + `<input id="search" placeholder="Find…" style="padding:3px 10px;border-radius:999px;font-size:12px;width:130px" aria-label="Find on the map">`;
+  $("#filters").querySelectorAll("[data-f]").forEach(c => c.onclick = c.onkeydown = ev => { if (ev.type==="keydown" && ev.key!=="Enter" && ev.key!==" ") return; ev.preventDefault?.();
+    const f=c.dataset.f; S.filters.has(f)?S.filters.delete(f):S.filters.add(f); renderMap(true); buildFilters(); });
+  $("#search").oninput = e => { const q=e.target.value.toLowerCase(); if (!cy) return;
+    cy.nodes().forEach(n => n.style("opacity", !q || (n.data("label")+" "+n.id()).toLowerCase().includes(q) ? 1 : .15)); };
+}
+function renderMap(relayout){
+  if (!window.cytoscape){ $("#cy").innerHTML = '<p class="empty" style="padding:60px 16px">The map couldn\'t load. Use the List view; everything is there.</p>'; return; }
+  const cols = ["lead","decision","question","finding","story","term","asset","idea"];
+  const shown = [...F.items.values()].filter(i => S.filters.has(typeKey(i.type)));
+  const ids = new Set(shown.map(i=>i.id)), els = [], perCol = {};
+  for (const i of shown){
+    const t = typeKey(i.type); const k = perCol[t] = (perCol[t]||0)+1; const c = codeOf(i.id);
+    els.push({group:"nodes", data:{id:i.id, label:`${i.private?"🔒 ":""}${c && c!==i.id ? c+" · " : ""}${i.id}\n${(i.title||"").slice(0,42)}`, type:t, status:i.status, n:i.answers.length+i.comments.length},
+              position:{x: cols.indexOf(t)*240, y: k*56}});
+  }
+  for (const i of shown) for (const r of i.refs||[]) if (ids.has(r)) els.push({group:"edges", data:{id:i.id+">"+r, source:i.id, target:r}});
+  if (!cy){
+    cy = cytoscape({container:$("#cy"), elements:els, layout:{name:"preset"}, wheelSensitivity:.25, minZoom:.15, maxZoom:2.5});
+    cy.on("tap","node", e => select(e.target.id()));
+    cy.fit(undefined, 40);
+  } else {
+    if (!cy.nodes().length) relayout = true;
+    const pos = {}; cy.nodes().forEach(n => pos[n.id()] = n.position());
+    cy.elements().remove(); cy.add(els.map(e => e.group==="nodes" && pos[e.data.id] && !relayout ? {...e, position:pos[e.data.id]} : e));
+    if (relayout) cy.fit(undefined, 40);
+  }
+  cy.style([
+    {selector:"node", style:{"shape":"round-rectangle","width":200,"height":44,"background-color":css("--raise"),"border-width":2,
+      "border-color":n=>typeColor(n.data("type")),"label":"data(label)","text-wrap":"wrap","text-max-width":186,"font-size":10,
+      "font-family":"IBM Plex Sans, system-ui, sans-serif","color":css("--ink"),"text-valign":"center","text-halign":"center"}},
+    {selector:'node[status="proposed"],node[status="open"],node[status="default"],node[status="challenged"]', style:{"border-style":"dashed"}},
+    {selector:'node[status="withdrawn"],node[status="closed"]', style:{"opacity":.4}},
+    {selector:"node[n > 0]", style:{"background-color":n=>typeColor(n.data("type")),"color":css("--surface")}},
+    {selector:"node:selected", style:{"border-width":4,"border-color":css("--accent")}},
+    {selector:"edge", style:{"width":1,"line-color":css("--line"),"curve-style":"bezier","target-arrow-shape":"triangle","target-arrow-color":css("--line"),"arrow-scale":.6}},
+  ]);
+  if (S.sel){ const n = cy.getElementById(S.sel); if (n.length) n.select(); }
+}
+
+/* ---------------------------------------------------------------- list (keyboard, screen reader, phone) */
+function renderList(){
+  const sel = $("#listT"); if (sel.options.length < 2) sel.innerHTML += Object.entries(TYPES).map(([k,v]) => `<option value="${k}">${PLURAL[k]||v+"s"}</option>`).join("");
+  const q = $("#listQ").value.toLowerCase(), t = sel.value;
+  const rows = [...F.items.values()].filter(i => (!t || typeKey(i.type)===t) && (!q || `${codeOf(i.id)} ${i.id} ${i.title} ${i.body}`.toLowerCase().includes(q)));
+  $("#listView").innerHTML = rows.length ? rows.map(i => `<li><button data-open="${esc(i.id)}"><span class="mono" style="color:var(--t-${typeKey(i.type)})">${esc(codeOf(i.id)||i.id)}</span>
+    <span>${i.private?"🔒 ":""}${esc(i.title)}${i.answers.length+i.comments.length?` <span class="mute mono">· ${i.answers.length+i.comments.length} responses</span>`:""}</span><span class="pill mute">${esc(i.status)}</span></button></li>`).join("")
+    : '<li class="empty">Nothing matches. Try fewer words.</li>';
+  $("#listView").querySelectorAll("[data-open]").forEach(b => b.onclick = () => select(b.dataset.open));
+}
+$("#listQ").oninput = renderList; $("#listT").onchange = renderList;
+
+/* ---------------------------------------------------------------- inspector */
+function select(id){
+  S.sel = id; $("#inspector").classList.remove("closed"); renderInspector();
+  if (cy){ cy.nodes().unselect(); const n=cy.getElementById(id); if (n.length) n.select(); }
+}
+function describe(h){
+  const b = h.body || {};
+  const src = b.source ? ` <span class="mute">(from ${esc(b.source)})</span>` : "";
+  return h.kind==="answer" ? `answered <b>${esc(b.code||"")}</b> ${esc(b.text||"")}${src}` : h.kind==="comment" ? esc(b.text)+src :
+    h.kind==="status" ? (b.revert_of ? `reverted status → ${esc(b.status)}` : `set status → ${esc(b.status)}`) : h.kind==="item.edit" ? "edited" :
+    h.kind==="item.create" ? "created"+src : h.kind==="retract" ? "took back an earlier entry" :
+    h.kind==="link" ? `linked ${esc((b.refs||[]).join(", "))}` : h.kind==="genesis" ? "recorded from the chats (genesis)" : esc(h.kind);
+}
+function line(n, h, withUndo){
+  const can = withUndo && writable() && h.id && !h.gone && !h.reverted && h.kind!=="retract" && !h.body?.revert_of &&
+              ["answer","comment","status","link"].includes(h.kind) && (h.author?.id===S.me || editor());
+  return `<li class="${h.gone||h.reverted?"gone":""}"><span class="n">${n}</span><span><span class="mono mute">${esc((h.ts||"").slice(0,16).replace("T"," "))} · ${esc(who(h.author))}${h.branch&&h.branch!=="main"?" · "+esc(h.branch):""}</span>
+    ${can?`<button class="link" data-revert="${esc(h.id)}">${h.kind==="status"?"Revert":"Take back"}</button>`:""}<br><span class="what">${describe(h)}</span>${h.gone?' <span class="mute">(taken back)</span>':h.reverted?' <span class="mute">(reverted)</span>':""}</span></li>`;
+}
+function renderInspector(){
+  const it = F.items.get(S.sel);
+  $("#inspEmpty").hidden = !!it; $("#insp").hidden = !it; if (!it) return;
+  const back = [...F.items.values()].filter(x => (x.refs||[]).includes(it.id)).map(x=>x.id);
+  const code = codeOf(it.id), isQ = it.type==="question";
+  const draft = store.get("reply."+it.id) || "";
+  $("#insp").innerHTML = `
+    <div class="row"><span class="eyebrow" style="color:var(--t-${typeKey(it.type)})">${esc(TYPES[it.type]||it.type)} · ${esc(it.id)}${code&&code!==it.id?" · "+code:""}</span><span class="spacer"></span>
+      <span class="pill" style="color:${OPEN.has(it.status)?"var(--warn)":it.status==="withdrawn"?"var(--mute)":"var(--ok)"}">${esc(it.status)}</span>
+      <button id="closeInsp" aria-label="Close">✕</button></div>
+    ${it.private?`<div class="pill" style="color:var(--accent);align-self:flex-start">🔒 Only you can see this</div>`:""}
+    <h2>${esc(it.title)}</h2>
+    <div class="body">${esc(it.body)}</div>
+    ${it.sketch?`<img src="${it.sketch}" alt="Sketch attached to ${esc(it.id)}" style="border:1px solid var(--line);border-radius:8px">`:""}
+    <div class="stack" style="margin-top:14px">
+      <div class="eyebrow">Links</div>
+      <div class="refs">${[...(it.refs||[])].map(r=>`<button data-go="${esc(r)}">${esc(r)} →</button>`).join("")}${back.map(r=>`<button data-go="${esc(r)}">← ${esc(r)}</button>`).join("") || (it.refs?.length?"":'<span class="empty">None yet.</span>')}</div>
+      <div class="eyebrow">Respond</div>
+      <textarea id="reply" rows="3" ${dis()} placeholder="${isQ?"A, B… or your own words":"Agree, challenge, refine, or ask"}">${esc(draft)}</textarea>
+      <span class="hint" id="replyHint" hidden></span>
+      <div class="row">
+        <button class="primary" id="sendAnswer" ${dis()}>${isQ?"Answer":"Comment"}</button>
+        ${OPEN.has(it.status) && editor() ? `<button id="mkAgreed" ${dis()}>Mark agreed</button>` : ""}
+        <button id="mkChallenge" ${dis()}>Challenge…</button>
+      </div>
+      <div class="eyebrow">History (${it.history.length})</div>
+      <ol class="log">${it.history.map((h,i)=>line(i+1,h,true)).join("")}</ol>
+    </div>`;
+  $("#closeInsp").onclick = () => { $("#inspector").classList.add("closed"); S.sel=null; };
+  $("#insp").querySelectorAll("[data-go]").forEach(b => b.onclick = () => select(b.dataset.go));
+  $("#insp").querySelectorAll("[data-revert]").forEach(b => b.onclick = async () => { if (await revert(b.dataset.revert)) toast("Done. The original stays in history."); });
+  $("#reply").oninput = e => store.set("reply."+it.id, e.target.value);
+  const hint = t => { const h=$("#replyHint"); h.textContent=t; h.hidden=!t; if (t) $("#reply").focus(); };
+  $("#sendAnswer").onclick = async () => { const t=$("#reply").value.trim(); if (!t) return hint(isQ?"Write an answer first.":"Write a comment first.");
+    const id = await write(isQ?"answer":"comment", it.id, {text:t, code:code||it.id});
+    if (id){ store.set("reply."+it.id, ""); $("#reply").value=""; toast("Recorded", [id]); } };
+  const ag = $("#mkAgreed"); if (ag) ag.onclick = async () => { const id = await write("status", it.id, {status:"agreed"}); if (id) toast("Marked agreed", [id]); };
+  $("#mkChallenge").onclick = async () => { const t=$("#reply").value.trim();
+    if (!t) return hint("Say what you're challenging, then press Challenge again. Nothing has been changed.");
+    const a = await write("comment", it.id, {text:"⚑ "+t}); const b = a && await write("status", it.id, {status:"challenged"});
+    if (a){ store.set("reply."+it.id, ""); $("#reply").value=""; toast("Challenge recorded", [a,b].filter(Boolean)); } };
+}
+
+/* ---------------------------------------------------------------- ask */
+const GROUPS = [["Questions", i => i.type==="question"], ["Challenged", i => i.status==="challenged"],
+  ["Proposed decisions", i => i.type==="decision"], ["Proposed stories", i => i.type==="story"], ["Proposed terms", i => i.type==="term"]];
+function differs(i){ const by = {}; for (const a of i.answers){ const k = a.author?.id || "?"; by[k] = (a.body?.text||"").trim().toLowerCase(); }
+  return Object.keys(by).length > 1 && new Set(Object.values(by)).size > 1; }
+function renderAsk(){
+  const all = askable(), used = new Set();
+  const sections = GROUPS.map(([name, f]) => { const l = all.filter(i => !used.has(i.id) && f(i)); l.forEach(i => used.add(i.id)); return [name, l]; }).filter(([,l]) => l.length);
+  $("#askList").innerHTML = sections.length ? sections.map(([name, list]) => `
+    <div class="row" style="grid-column:1/-1;margin-top:8px"><h3>${esc(name)} <span class="mute mono">${list.length}</span></h3><span class="spacer"></span>
+      ${name==="Proposed terms" && editor() ? `<button data-agreeall ${dis()}>Agree all ${list.length} as written</button>` : ""}</div>` + list.map(i => { const c = codeOf(i.id); return `
+    <article class="card${S.sel===i.id?" sel":""}">
+      <div class="row"><span class="mono" style="font-weight:600">${esc(c)}</span><span class="eyebrow" style="color:var(--t-${typeKey(i.type)})">${esc(TYPES[i.type])} · ${esc(i.id)}</span><span class="spacer"></span><span class="pill" style="color:var(--warn)">${esc(i.status)}</span></div>
+      <h3>${esc(i.title)}</h3>
+      <div class="body" style="font-size:13px">${esc(i.body)}</div>
+      ${i.answers.length+i.comments.length?`<ol class="log">${[...i.answers,...i.comments].sort((a,b)=>a.ts<b.ts?-1:1).map((h,k)=>line(c+"."+(k+1),h,false)).join("")}</ol>`:""}
+      ${differs(i) ? `<div class="hint">⚖ People answered differently. Settle it with a final answer, or open it to discuss.</div>` : ""}
+      <div class="row"><input data-a="${esc(i.id)}" ${dis()} placeholder="Answer ${esc(c)}, then Enter" style="flex:1" aria-label="Answer ${esc(c)}"><button data-open="${esc(i.id)}">Open</button></div>
+    </article>`; }).join("")).join("") : '<p class="empty">Nothing waiting. New questions appear here as they come up.</p>';
+  const aa = $("#askList").querySelector("[data-agreeall]");
+  if (aa) aa.onclick = async () => { const ids = []; aa.disabled = true; S.bulk = true;
+    try { for (const i of askable().filter(x => x.type==="term" && x.status==="proposed")){ const r = await write("status", i.id, {status:"agreed", via:"agree-all"}); if (r) ids.push(r); else break; } }
+    finally { S.bulk = false; refresh(); }
+    toast(`${ids.length} terms agreed`, ids); };
+  $("#askList").querySelectorAll("[data-a]").forEach(inp => inp.onkeydown = async e => { if (e.key!=="Enter"||!inp.value.trim()) return;
+    const it = F.items.get(inp.dataset.a); const id = await write(it.type==="question"?"answer":"comment", it.id, {code:codeOf(it.id), text:inp.value.trim()});
+    if (id){ toast("Recorded "+codeOf(it.id), [id]); if (/^(ok|yes|agreed?)$/i.test(inp.value.trim()) && it.type!=="question" && editor()) await write("status", it.id, {status:"agreed"}); } });
+  $("#askList").querySelectorAll("[data-open]").forEach(b => b.onclick = () => select(b.dataset.open));
+}
+function badge(){ const n = askable().filter(i => (i.type==="question" || i.status==="challenged") && !i.answers.length && !i.comments.length).length; const b=$("#askBadge"); b.textContent = n; b.hidden = !n; b.setAttribute("aria-label", n+" waiting for you"); }
+$("#codes").value = store.get("codes") || ""; $("#codes").oninput = e => store.set("codes", e.target.value);
+$("#codesGo").onclick = async () => {
+  const raw = $("#codes").value.trim(); if (!raw) return;
+  const source = $("#codeSource").value || null;
+  const ids = [], miss = [];
+  for (let ln of raw.split(/\n+/)){
+    ln = ln.replace(/^\s*[-*•\d.)]*\s*(?=[A-Za-z])/, "").trim(); if (!ln) continue;
+    const nm = ln.match(/^NEW\b[:\s-]*(.+)$/i);
+    if (nm){ const id = "I-"+Date.now().toString(36).slice(-5)+ids.length;
+      const r = await write("item.create", null, {id, type:"idea", title:nm[1].slice(0,80), body:nm[1], refs:[], status:"open", source}); if (r) ids.push(r); continue; }
+    const parts = ln.split(/[;·]\s*|\s{2,}|,\s*(?=(?:[QT]\d+|D-\d{3}|S\d+b?)\b)/i).filter(Boolean);
+    for (const p of parts){
+      const m = p.trim().match(/^([QT]\d+|D-\d{3}|S\d+b?|[A-Z]{1,2}-[\w-]+)\s*[:.)-]?\s*(.*)$/is);
+      const id = m && (CODES.back[m[1].toUpperCase()] || (F.items.has(m[1]) ? m[1] : null));
+      if (!id){ miss.push(p.trim()); continue; }
+      const text = (m[2]||"").trim() || "ok"; const it = F.items.get(id);
+      const r = await write(it?.type==="question"?"answer":"comment", id, {code:codeOf(id)||id, text, source}); if (r) ids.push(r);
+      if (r && /^(ok|yes|agreed?)$/i.test(text) && it?.type!=="question" && editor()){ const s = await write("status", id, {status:"agreed", source}); if (s) ids.push(s); }
+    }
+  }
+  $("#codes").value = miss.join("\n"); store.set("codes", $("#codes").value);
+  toast(`${ids.length} recorded` + (miss.length?` · ${miss.length} line(s) not matched, left in the box`:""), ids);
+};
+
+/* ---------------------------------------------------------------- capture + sketch */
+const pad = $("#pad"); let strokes = [], drawing = false, dirty = false;
+function sizePad(){ const r = pad.getBoundingClientRect(); if (!r.width) return; pad.width = Math.round(r.width*1.5); pad.height = Math.round(r.width*1.5/1.6); redraw(); }
+function redraw(){ const c=pad.getContext("2d"); c.fillStyle=css("--raise"); c.fillRect(0,0,pad.width,pad.height); c.lineCap=c.lineJoin="round"; c.lineWidth=3; c.strokeStyle=css("--ink");
+  for (const s of strokes){ c.beginPath(); s.forEach((p,i)=> i?c.lineTo(p[0]*pad.width,p[1]*pad.height):c.moveTo(p[0]*pad.width,p[1]*pad.height)); c.stroke(); } }
+function pt(e){ const r=pad.getBoundingClientRect(); return [(e.clientX-r.left)/r.width,(e.clientY-r.top)/r.height]; }
+pad.onpointerdown = e => { drawing=true; dirty=true; pad.setPointerCapture(e.pointerId); strokes.push([pt(e)]); };
+pad.onpointermove = e => { if (!drawing) return; strokes[strokes.length-1].push(pt(e)); redraw(); };
+pad.onpointerup = pad.onpointercancel = () => { drawing=false; store.set("strokes", JSON.stringify(strokes).slice(0,200000)); };
+$("#padClear").onclick = () => { strokes=[]; dirty=false; store.set("strokes",""); redraw(); };
+for (const k of ["capTitle","capBody","capRefs"]){ const el=$("#"+k); el.value = store.get(k) || ""; el.oninput = () => store.set(k, el.value); }
+$("#capPrivate").checked = store.get("capPrivate")==="1"; $("#capPrivate").onchange = e => store.set("capPrivate", e.target.checked ? "1" : "");
+try { strokes = JSON.parse(store.get("strokes") || "[]"); dirty = strokes.length > 0; } catch { strokes = []; }
+$("#capGo").onclick = async () => {
+  const title = $("#capTitle").value.trim(), body = $("#capBody").value.trim();
+  if (!title && !body && !dirty){ $("#capNote").textContent = "Add a title, some text or a sketch first."; return; }
+  const type = $("#capType").value;
+  const prefix = {idea:"I",question:"Q",decision:"DD",asset:"A",story:"SS",term:"T",finding:"F",lead:"L"}[type];
+  const id = prefix+"-"+Date.now().toString(36).slice(-5);
+  const refs = $("#capRefs").value.split(/[\s,;]+/).map(r => CODES.back[r.toUpperCase()] || r).filter(r => F.items.has(r));
+  let sketch = null;
+  if (dirty){ const c = document.createElement("canvas"); c.width=640; c.height=400; c.getContext("2d").drawImage(pad,0,0,640,400); sketch = c.toDataURL("image/png"); }
+  const priv = $("#capPrivate").checked;
+  const ok = await write("item.create", null, {id, type, title:title||body.slice(0,60)||"Sketch", body, refs, sketch, private:priv, status: type==="decision"?"proposed":"open"});
+  if (ok){ for (const k of ["capTitle","capBody","capRefs"]){ $("#"+k).value=""; store.set(k,""); } strokes=[]; dirty=false; store.set("strokes",""); redraw();
+    $("#capNote").textContent = `Added as ${id}.`; toast("Added "+id, [ok]); }
+  else $("#capNote").textContent = "Not saved yet. Your text is still here and on this device.";
+};
+
+/* ---------------------------------------------------------------- tree */
+function renderTree(){
+  const bs = branches(); const names = Object.keys(bs);
+  const evs = [...S.events].sort((a,b)=>a.ts<b.ts?-1:1);
+  const W = Math.max(520, 140 + evs.length*22), lane = n => 26 + names.indexOf(n)*30, H = 30 + names.length*30;
+  const xOf = ts => { const i = evs.findIndex(e=>e.ts>=ts); return 120 + (i<0?evs.length:i)*22; };
+  let svg = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="Branches over time">`;
+  names.forEach(n => { svg += `<text x="8" y="${lane(n)+4}" fill="${css("--mute")}" font-family="IBM Plex Mono, monospace" font-size="11">${esc(n)}</text><line x1="110" x2="${W-10}" y1="${lane(n)}" y2="${lane(n)}" stroke="${css("--line")}"/>`;
+    if (bs[n].fork) svg += `<line x1="${xOf(bs[n].fork)}" y1="${lane(bs[n].from||"main")}" x2="${xOf(bs[n].fork)+11}" y2="${lane(n)}" stroke="${css("--accent")}" stroke-width="2"/>`;
+    if (bs[n].merged) svg += `<line x1="${xOf(bs[n].merged)}" y1="${lane(n)}" x2="${xOf(bs[n].merged)+11}" y2="${lane("main")}" stroke="${css("--ok")}" stroke-width="2"/>`; });
+  evs.forEach((e,i) => { const x=120+i*22, y=lane(names.includes(e.branch)?e.branch:"main"); const t=(F.items.get(e.item)?.type)||e.body?.type||"idea";
+    svg += `<circle cx="${x}" cy="${y}" r="6" fill="${typeColor(t)}" stroke="${css("--surface")}" stroke-width="2"><title>${esc(e.kind)} ${esc(e.item||e.body?.id||e.body?.name||"")} · ${esc(e.ts)}</title></circle>`; });
+  if (S.asof){ const x = xOf(S.asof)+6; svg += `<line x1="${x}" x2="${x}" y1="4" y2="${H-4}" stroke="${css("--warn")}" stroke-dasharray="4 3"/>`; }
+  $("#treeSvg").innerHTML = svg + "</svg>";
+  $("#forkGo").disabled = !S.db || S.canWrite === false;   // forking from the past is the point, so it isn't locked by as-of
+  $("#mergeGo").disabled = !writable() || S.branch==="main" || !editor();
+  $("#mergeGo").title = !editor() ? "Only editors can merge into main (charter)" : "";
+  const list = [...F.evs].reverse().slice(0, 200);
+  $("#eventLog").innerHTML = list.length ? list.map((e,i) => line("E"+(F.evs.length-i), {...e, id:e._id})).join("")
+    : '<li class="empty">No changes since genesis yet. Answer a question or capture an idea and it appears here.</li>';
+}
+$("#forkGo").onclick = async () => {
+  const name = $("#forkName").value.trim().toLowerCase().replace(/[^a-z0-9-]+/g,"-").slice(0,40);
+  if (!name || branches()[name]){ toast(name?"That branch exists.":"Name the branch first."); return; }
+  const fork_ts = S.asof && S.asof!=="0" ? S.asof : S.asof==="0" ? "0" : new Date().toISOString();
+  const from = S.branch, wasAsof = S.asof; S.asof = null;
+  const id = await write("branch.create", null, {name, fork_ts, from});
+  if (id){ $("#forkName").value=""; S.branch=name; refresh(); toast("Now on "+name+(wasAsof?", starting from the point you were viewing":""), [id]); } else S.asof = wasAsof;
+};
+$("#mergeGo").onclick = async () => { if (S.branch==="main") return;
+  const id = await write("branch.merge", null, {name:S.branch, into:"main"}); if (id){ toast(S.branch+" merged into main"); S.branch="main"; refresh(); } };
+
+/* ---------------------------------------------------------------- pack */
+function renderPack(){
+  const withPriv = $("#packPriv").checked;
+  const all=[...F.items.values()].filter(i => withPriv || !i.private), by = t => all.filter(i=>typeKey(i.type)===t), L = [];
+  L.push(`# Clanstack Studio — context pack`, `Branch: ${S.branch} · as of: ${S.asof||"now"} · ${all.length} items · ${F.evs.length} changes since genesis`, "",
+    "You are helping Nowed build Clanstack. Reply with one line per item, starting with its code (Q3, T12, S21, D-044…), then your answer, challenge or proposal. Codes never change, so an old pack still works. For a new idea, start the line with NEW.", "",
+    "## Waiting for answers");
+  askable().filter(i => withPriv || !i.private).forEach(i => L.push(`${codeOf(i.id)} [${i.id}] ${i.title}`, ...i.body.split("\n").map(x=>"    "+x), ...[...i.answers,...i.comments].map(a=>`    → ${who(a.author)}${a.body?.source?" via "+a.body.source:""}: ${a.body?.text||""}`)));
+  L.push("", "## Decisions"); by("decision").forEach(i => L.push(`${i.id} (${i.status}) ${i.body.split("\n")[0]}`));
+  L.push("", "## Stories"); by("story").forEach(i => L.push(`${i.id} (${i.status}) ${i.title}`));
+  L.push("", "## Terms"); by("term").forEach(i => L.push(`${codeOf(i.id)} ${i.title} (${i.status}): ${i.body.split("\n")[0]}`));
+  L.push("", "## Assets"); by("asset").forEach(i => L.push(`${i.id} ${i.title}: ${i.body}`));
+  const rest = all.filter(i=>["idea","finding","lead"].includes(typeKey(i.type)));
+  if (rest.length){ L.push("", "## Ideas, leads and findings"); rest.forEach(i => L.push(`${i.id} (${i.status}) ${i.title}: ${i.body.split("\n")[0]}`)); }
+  $("#pack").textContent = L.join("\n");
+}
+$("#packPriv").onchange = renderPack;
+$("#copyPack").onclick = async () => { try { await navigator.clipboard.writeText($("#pack").textContent); $("#packNote").textContent="Copied."; }
+  catch { const r=document.createRange(); r.selectNodeContents($("#pack")); const s=getSelection(); s.removeAllRanges(); s.addRange(r); $("#packNote").textContent="Selected — copy it with your keyboard."; } };
+
+/* ---------------------------------------------------------------- views + time */
+const VIEWS = ["map","list","ask","capture","tree","pack"];
+function show(v){ if (!VIEWS.includes(v)) v = "map"; S.view=v; document.querySelectorAll("#tabs button").forEach(b=>b.setAttribute("aria-current", b.dataset.v===v));
+  for (const x of VIEWS) $("#v-"+x).hidden = x!==v;
+  if (v==="map" && cy) cy.resize(); if (v==="capture") sizePad(); refreshView(); store.set("view", v); }
+document.querySelectorAll("#tabs button").forEach(b => b.onclick = () => show(b.dataset.v));
+$("#branch").onchange = e => { S.branch = e.target.value; refresh(); };
+$("#asof").oninput = e => { const evs=[...S.events].sort((a,b)=>a.ts<b.ts?-1:1); const v=+e.target.value;
+  S.asof = v>=evs.length ? null : (v===0 ? "0" : evs[v-1].ts); refresh(); };
+$("#theme").onclick = () => { const r=document.documentElement, dark=matchMedia("(prefers-color-scheme: dark)").matches;
+  r.dataset.theme = (r.dataset.theme || (dark?"dark":"light"))==="dark" ? "light" : "dark"; renderMap(false); if (S.view==="tree") renderTree(); if (S.view==="capture") redraw(); };
+function refreshView(){ if (S.view==="map") renderMap(false); if (S.view==="list") renderList(); if (S.view==="ask") renderAsk(); if (S.view==="tree") renderTree(); if (S.view==="pack") renderPack(); }
+function refresh(){
+  if (S.bulk) return;   // a bulk action redraws once at the end
+  CODES = stableCodes(); F = fold();
+  const n = S.events.length, a = $("#asof"); a.max = n; if (!S.asof) a.value = n;
+  $("#when").textContent = S.asof ? (S.asof==="0" ? "genesis" : "as of "+S.asof.slice(5,16).replace("T"," ")) : "live";
+  $("#when").className = "status " + (S.asof ? "past" : "live");
+  $("#ver").textContent = `v0.2 · ${F.items.size} items · ${n} changes`;
+  const bs = branches(), names = Object.keys(bs), sel = $("#branch");
+  sel.innerHTML = names.map(x => `<option value="${esc(x)}">${esc(x)}${bs[x].merged?" (merged)":""}</option>`).join(""); if (!names.includes(S.branch)) S.branch = "main"; sel.value = S.branch;
+  renderBanners(); buildFilters(); badge(); refreshView(); if (S.sel) renderInspector();
+}
+
+/* ---------------------------------------------------------------- boot */
+(async function boot(){
+  show(store.get("view") || (innerWidth < 600 ? "capture" : "map"));
+  refresh();
+  const timer = setTimeout(() => { $("#conn").textContent = "can't reach the store yet"; }, 10000);
+  if (!window.claude?.use){ clearTimeout(timer); $("#conn").textContent = "offline preview"; return; }
+  const [db, user] = await Promise.all([window.claude.use("db"), window.claude.use("user")]);
+  if (!db){ clearTimeout(timer); $("#conn").textContent = "sign in to load"; return; }
+  S.db = db; S.user = user;
+  if (user){
+    try { S.me = await user.id(); } catch {}
+    try { S.owner = !!(await user.isOwner()); } catch {}
+    try { S.canEdit = await user.canEdit(); } catch {}
+    try { S.canWrite = await user.can("data.write"); } catch {}
+    if (S.owner){ S.canEdit = true; S.canWrite = true; }
+  }
+  refresh();
+  db.doc("seed/genesis").onSnapshot(s => { if (s.exists){ S.genesis = s.data(); refresh(); if (!s.metadata.fromCache){ clearTimeout(timer); $("#conn").textContent = "saved · shared"; $("#conn").className="status live"; } }
+      else if (!s.metadata.fromCache){ clearTimeout(timer); $("#conn").textContent = "waiting for genesis"; } },
+    () => { clearTimeout(timer); $("#conn").textContent = "store unavailable"; });
+  // Newest 1,000 changes, so the latest always show; older ones stay stored (checkpoints will fold them in).
+  db.collection("events").orderBy("ts","desc").limit(1000).onSnapshot(q => {
+      S.shared = q.docs.map(d => ({_id:d.id, ...d.data()}));
+      S.windowFull = q.size >= 1000; mergeEvents(); refresh(); loadNames(); },
+    () => { $("#conn").textContent = "changes unavailable"; });
+  if (privPath()) db.collection(privPath()).orderBy("ts","desc").limit(1000).onSnapshot(q => {
+      S.priv = q.docs.map(d => ({_id:d.id, _private:true, ...d.data()})); mergeEvents(); refresh(); }, () => {});
+  else { $("#capPrivate").disabled = true; $("#capPrivate").checked = false; }
+})();
+addEventListener("resize", () => { if (S.view==="capture") sizePad(); });
+</script>

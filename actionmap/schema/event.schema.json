@@ -1,0 +1,134 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "actionmap/event/v1",
+  "title": "ActionMap event (v1)",
+  "description": "The one contract every component speaks. Language-agnostic: a Python, Rust/Axum or JS component only needs to read/write this shape over HTTP/WebSocket. Events are append-only; nothing is ever updated or deleted. State at any point in time = replay of events up to that seq. v0.2: multi-hub. Events are copied between hubs link by link and re-verified on arrival.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "session_id",
+    "node_id",
+    "actor",
+    "kind",
+    "action"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "seq": {
+      "type": "integer",
+      "description": "Assigned by each hub: local arrival order. Not hashed, so it may differ between hubs."
+    },
+    "id": {
+      "type": "string",
+      "description": "Assigned by the spine (uuid4 hex)."
+    },
+    "ts": {
+      "type": "string",
+      "description": "UTC ISO-8601. Client may supply; spine fills if missing."
+    },
+    "session_id": {
+      "type": "string",
+      "description": "A recording/working session. Process maps are built per session or across sessions."
+    },
+    "node_id": {
+      "type": "string",
+      "description": "Machine / VM / cloud worker the event came from (e.g. 'win-desktop', 'oracle-arm-1')."
+    },
+    "surface_id": {
+      "type": "string",
+      "description": "Screen or virtual screen the action happened on (e.g. 'win-desktop:display0', 'vm2:xvfb1'). Lets agents act across virtual screens."
+    },
+    "actor": {
+      "type": "object",
+      "required": [
+        "kind",
+        "id"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "human",
+            "agent",
+            "system",
+            "screen"
+          ]
+        },
+        "id": {
+          "type": "string",
+          "description": "e.g. 'nowed', 'agent:next-step', 'system:spine', 'screen:win-desktop'"
+        }
+      }
+    },
+    "kind": {
+      "enum": [
+        "action",
+        "observation",
+        "utterance",
+        "proposal",
+        "decision",
+        "control",
+        "annotation",
+        "registration",
+        "memory",
+        "routing",
+        "interaction"
+      ],
+      "description": "action = something was done to a surface; observation = the screen changed by itself (e.g. dialog appeared); utterance = speech/text (voice layer); proposal = an agent wants to act; decision = approve/reject of a proposal; control = mode/policy change; annotation = a human label; registration = a node or actor announcing capabilities. v0.2 adds: memory = profile item set/retracted; routing = which model handled a request (no content); interaction = map/screen focus and privacy questions."
+    },
+    "action": {
+      "type": "string",
+      "description": "Verb, e.g. click, type_text, hotkey, focus_window, speak, propose_step, approve, set_mode, delegate, register_node."
+    },
+    "target": {
+      "type": "object",
+      "description": "Where on the surface. Element names come from the OS accessibility tree, not pixels, so maps stay stable across resolutions.",
+      "properties": {
+        "app": {
+          "type": "string"
+        },
+        "window": {
+          "type": "string"
+        },
+        "element": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string",
+          "description": "Accessibility path, best effort."
+        }
+      }
+    },
+    "payload": {
+      "type": "object",
+      "description": "Action-specific data. Typed text is redacted by default (length only) unless capture config allows it."
+    },
+    "causes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Ids of events that caused this one (e.g. an agent action points at its proposal and the approval)."
+    },
+    "prev_hash": {
+      "type": "string",
+      "description": "Assigned by the spine."
+    },
+    "hash": {
+      "type": "string",
+      "description": "sha256(prev_hash + canonical event without seq/hash). Per-origin chain; GET /verify checks every chain."
+    },
+    "origin": {
+      "type": "string",
+      "description": "Assigned by the hub that first recorded the event (e.g. hub-laptop, hub-vm). Each origin has its own hash chain."
+    },
+    "origin_seq": {
+      "type": "integer",
+      "description": "Position in its origin's chain (1..n)."
+    }
+  }
+}
