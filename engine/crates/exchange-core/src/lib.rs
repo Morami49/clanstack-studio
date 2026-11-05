@@ -44,7 +44,23 @@ pub enum Error {
     RightToWorkNotChecked(Id),
     NotRostered(Id),
     Frozen,
+    OutsideLimits(&'static str),
 }
+
+/// Who is selling, for the tiered cut (Q34 C). The rule will become algorithmic later.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SellerClass { Community, Small, Standard }
+
+#[derive(Clone, Debug)]
+pub enum CutPolicy {
+    Flat { bps: i64 },
+    /// community rate, small-seller rate, rate above the volume threshold (basis points; 100 = 1%).
+    Tiered { community_bps: i64, small_bps: i64, large_bps: i64, large_after: Pence },
+}
+
+/// Bounds within which each supplier sets its own deposit and late-cancel window (Q35 C).
+#[derive(Clone, Copy, Debug)]
+pub struct Limits { pub max_deposit_pct: i64, pub max_late_days: i64 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum State { Quoted, Agreed, DepositHeld, Running, Completed, Settled, Cancelled, Disputed }
@@ -59,6 +75,7 @@ pub struct Booking {
     pub deposit: Pence,
     pub event_day: i64,
     pub terms_versions: Vec<String>,
+    pub late_cancel_days: i64,
     pub state: State,
     pub confirmed_by: Vec<Id>,
 }
@@ -73,8 +90,12 @@ pub struct SellerView { pub price: Pence, pub cut: Pence, pub net: Pence }
 pub struct Shift { pub person: Id, pub supplier: Id, pub hours: i64, pub rate: Pence, pub checked_out: bool }
 
 pub struct Chain {
-    pub cut_bps: i64,                         // cut in basis points (100 = 1%)
-    pub late_cancel_days: i64,                // organiser cancelling closer than this forfeits the deposit
+    pub cut: CutPolicy,
+    pub late_cancel_days: i64,                // default window; suppliers may set their own within limits
+    pub limits: Limits,
+    seller_class: BTreeMap<Id, SellerClass>,
+    supplier_terms: BTreeMap<Id, (i64, i64)>, // supplier -> (deposit %, late-cancel days)
+    pub volume: BTreeMap<Id, Pence>,          // settled sales per seller (drives the large tier)
     credentials: BTreeMap<Id, Vec<Credential>>,
     right_to_work: BTreeMap<(Id, Id), bool>,  // (supplier, person) -> checked by that supplier
     pub bookings: Vec<Booking>,
@@ -87,14 +108,46 @@ pub struct Chain {
 
 impl Chain {
     pub fn new(cut_bps: i64, late_cancel_days: i64) -> Self {
-        Self { cut_bps, late_cancel_days, credentials: BTreeMap::new(), right_to_work: BTreeMap::new(),
+        Self::with_policy(CutPolicy::Flat { bps: cut_bps }, late_cancel_days)
+    }
+
+    pub fn with_policy(cut: CutPolicy, late_cancel_days: i64) -> Self {
+        Self { cut, late_cancel_days, limits: Limits { max_deposit_pct: 50, max_late_days: 30 },
+               seller_class: BTreeMap::new(), supplier_terms: BTreeMap::new(), volume: BTreeMap::new(), credentials: BTreeMap::new(), right_to_work: BTreeMap::new(),
                bookings: vec![], escrow: BTreeMap::new(), balances: BTreeMap::new(), platform: 0,
                shifts: vec![], log: vec![] }
     }
 
     fn note(&mut self, s: String) { self.log.push(s); }
     fn credit(&mut self, who: Id, amount: Pence) { *self.balances.entry(who).or_insert(0) += amount; }
-    pub fn cut_of(&self, amount: Pence) -> Pence { amount * self.cut_bps / 10_000 }
+    pub fn set_seller_class(&mut self, seller: Id, class: SellerClass) {
+        self.seller_class.insert(seller, class);
+        self.note(format!("{seller} class {class:?}"));
+    }
+
+    /// The cut for this seller on this amount (seller-side, D-070).
+    pub fn cut_for(&self, seller: Id, amount: Pence) -> Pence {
+        let bps = match &self.cut {
+            CutPolicy::Flat { bps } => *bps,
+            CutPolicy::Tiered { community_bps, small_bps, large_bps, large_after } => {
+                match self.seller_class.get(seller).copied().unwrap_or(SellerClass::Small) {
+                    SellerClass::Community => *community_bps,
+                    _ if self.volume.get(seller).copied().unwrap_or(0) >= *large_after => *large_bps,
+                    _ => *small_bps,
+                }
+            }
+        };
+        amount * bps / 10_000
+    }
+
+    /// A supplier sets its own deposit and late-cancel window, within the limits (Q35 C).
+    pub fn set_supplier_terms(&mut self, supplier: Id, deposit_pct: i64, late_days: i64) -> Result<(), Error> {
+        if !(0..=self.limits.max_deposit_pct).contains(&deposit_pct) { return Err(Error::OutsideLimits("deposit")); }
+        if !(0..=self.limits.max_late_days).contains(&late_days) { return Err(Error::OutsideLimits("late-cancel window")); }
+        self.supplier_terms.insert(supplier, (deposit_pct, late_days));
+        self.note(format!("{supplier} terms: deposit {deposit_pct}%, late window {late_days} days"));
+        Ok(())
+    }
 
     pub fn add_credential(&mut self, party: Id, c: Credential) {
         self.credentials.entry(party).or_default().push(c);
@@ -104,8 +157,9 @@ impl Chain {
     /// Supplier quotes for one need of the organiser's brief.
     pub fn quote(&mut self, organiser: Id, supplier: Id, role: Role, price: Pence, deposit_pct: i64, event_day: i64, terms: &str) -> usize {
         let id = self.bookings.len();
-        self.bookings.push(Booking { id, organiser, supplier, role, price, deposit: price * deposit_pct / 100, event_day,
-            terms_versions: vec![terms.to_string()], state: State::Quoted, confirmed_by: vec![] });
+        let (dep, late) = self.supplier_terms.get(supplier).copied().unwrap_or((deposit_pct, self.late_cancel_days));
+        self.bookings.push(Booking { id, organiser, supplier, role, price, deposit: price * dep / 100, event_day,
+            terms_versions: vec![terms.to_string()], late_cancel_days: late, state: State::Quoted, confirmed_by: vec![] });
         self.note(format!("#{id} quote {supplier}->{organiser} {role:?} {price}p"));
         id
     }
@@ -186,9 +240,10 @@ impl Chain {
         let (price, supplier) = (self.bookings[b].price, self.bookings[b].supplier);
         // The organiser pays the balance (price - deposit) into escrow at completion; the provider releases it all.
         self.escrow.remove(&b);
-        let cut = self.cut_of(price);
+        let cut = self.cut_for(supplier, price);
         self.platform += cut;
         self.credit(supplier, price - cut);
+        *self.volume.entry(supplier).or_insert(0) += price;
         self.bookings[b].state = State::Settled;
         self.note(format!("#{b} settled: {supplier} +{}p, cut {cut}p", price - cut));
         Ok(())
@@ -217,9 +272,9 @@ impl Chain {
         if bk.state == State::Disputed { return Err(Error::Frozen); }
         if by != bk.organiser && by != bk.supplier { return Err(Error::NotAParty(by)); }
         let held = self.escrow.remove(&b).unwrap_or(0);
-        let late = by == bk.organiser && bk.event_day - today < self.late_cancel_days;
+        let late = by == bk.organiser && bk.event_day - today < bk.late_cancel_days;
         if late && held > 0 {
-            let cut = self.cut_of(held);
+            let cut = self.cut_for(bk.supplier, held);
             self.platform += cut;
             self.credit(bk.supplier, held - cut);
             self.note(format!("#{b} late cancel by {by}: deposit to {} minus cut {cut}p", bk.supplier));
@@ -246,7 +301,7 @@ impl Chain {
         let bk = self.bookings[b].clone();
         let held = self.escrow.remove(&b).unwrap_or(0);
         let pay = to_supplier.clamp(0, held);
-        let cut = self.cut_of(pay);
+        let cut = self.cut_for(bk.supplier, pay);
         self.platform += cut;
         self.credit(bk.supplier, pay - cut);
         self.credit(bk.organiser, held - pay);
@@ -257,7 +312,7 @@ impl Chain {
 
     pub fn buyer_view(&self, b: usize) -> BuyerView { BuyerView { total: self.bookings[b].price } }
     pub fn seller_view(&self, b: usize) -> SellerView {
-        let p = self.bookings[b].price; let c = self.cut_of(p);
+        let p = self.bookings[b].price; let c = self.cut_for(self.bookings[b].supplier, p);
         SellerView { price: p, cut: c, net: p - c }
     }
 
@@ -269,5 +324,35 @@ impl Chain {
             let terms = o.terms_versions.last().cloned().unwrap_or_default();
             self.quote(o.organiser, o.supplier, o.role, o.price, pct, new_day, &terms)
         }).collect()
+    }
+}
+
+/// Default treasury allocation for every account's net revenue (Nowed's "average default", R-261105-1):
+/// 60% growth / 30% owner / 10% tax. Constant across stages; configurable per account.
+/// If the real tax estimate exceeds the tax bucket, the gap is taken from owner first, then growth,
+/// so the tax reserve is never short. Nothing is lost to rounding (remainder goes to growth).
+#[derive(Clone, Copy, Debug)]
+pub struct Allocation { pub growth_bps: i64, pub owner_bps: i64, pub tax_bps: i64 }
+
+impl Default for Allocation {
+    fn default() -> Self { Self { growth_bps: 6_000, owner_bps: 3_000, tax_bps: 1_000 } }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct Buckets { pub growth: Pence, pub owner: Pence, pub tax: Pence }
+
+impl Allocation {
+    pub fn split(&self, net: Pence, tax_estimate: Option<Pence>) -> Buckets {
+        assert_eq!(self.growth_bps + self.owner_bps + self.tax_bps, 10_000, "allocation must add up to 100%");
+        let mut owner = net * self.owner_bps / 10_000;
+        let mut tax = net * self.tax_bps / 10_000;
+        let mut growth = net - owner - tax;
+        if let Some(est) = tax_estimate {
+            let mut gap = (est - tax).max(0);
+            let from_owner = gap.min(owner); owner -= from_owner; gap -= from_owner;
+            let from_growth = gap.min(growth); growth -= from_growth;
+            tax += from_owner + from_growth;
+        }
+        Buckets { growth, owner, tax }
     }
 }

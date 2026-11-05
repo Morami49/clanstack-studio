@@ -149,3 +149,45 @@ fn money_is_conserved_and_everything_is_logged() {
     assert_eq!(out, paid_in);
     assert!(c.log.len() >= 7);
 }
+
+#[test]
+fn tiered_cut_by_seller_class_and_volume() {
+    let mut c = Chain::with_policy(CutPolicy::Tiered { community_bps: 300, small_bps: 500, large_bps: 800, large_after: 200_000 }, 14);
+    c.add_credential(CATERER, Credential::FoodBusinessRegistration);
+    c.add_credential(CATERER, Credential::PublicLiabilityInsurance);
+    c.set_seller_class("group:food-coop", SellerClass::Community);
+    assert_eq!(c.cut_for("group:food-coop", 100_000), 3_000);
+    assert_eq!(c.cut_for(CATERER, 100_000), 5_000);           // small until volume passes the threshold
+    for _ in 0..2 {
+        let b = c.quote(ORG, CATERER, Role::Catering, 120_000, 30, 30, "v1");
+        c.agree(b).unwrap(); c.pay_deposit(b).unwrap(); c.start(b).unwrap();
+        c.confirm(b, ORG).unwrap(); c.confirm(b, CATERER).unwrap(); c.settle(b).unwrap();
+    }
+    assert_eq!(c.volume[CATERER], 240_000);
+    assert_eq!(c.cut_for(CATERER, 100_000), 8_000);           // now above £2,000 settled
+    assert_eq!(c.platform, 6_000 + 6_000);                     // both sales were cut at 5% (threshold crossed after)
+}
+
+#[test]
+fn suppliers_set_their_own_deposit_and_window_within_limits() {
+    let mut c = chain();
+    assert_eq!(c.set_supplier_terms(CATERER, 60, 14), Err(Error::OutsideLimits("deposit")));
+    assert_eq!(c.set_supplier_terms(CATERER, 40, 45), Err(Error::OutsideLimits("late-cancel window")));
+    c.set_supplier_terms(CATERER, 40, 21).unwrap();
+    let b = c.quote(ORG, CATERER, Role::Catering, 100_000, 30, 30, "v1");
+    assert_eq!((c.bookings[b].deposit, c.bookings[b].late_cancel_days), (40_000, 21));
+    c.agree(b).unwrap(); c.pay_deposit(b).unwrap();
+    c.cancel(b, ORG, 12).unwrap(); // 18 days before: inside this supplier's 21-day window
+    assert_eq!(c.balances[CATERER], 38_000);
+}
+
+#[test]
+fn treasury_split_60_30_10_with_tax_top_up() {
+    let a = Allocation::default();
+    assert_eq!(a.split(0, None), Buckets { growth: 0, owner: 0, tax: 0 });
+    assert_eq!(a.split(100_000, None), Buckets { growth: 60_000, owner: 30_000, tax: 10_000 });
+    // high-margin month: estimated tax £19,000 on £100,000 → reserve topped up from owner first
+    assert_eq!(a.split(100_000, Some(19_000)), Buckets { growth: 60_000, owner: 21_000, tax: 19_000 });
+    let b = a.split(99_999, None);
+    assert_eq!(b.growth + b.owner + b.tax, 99_999);
+}
