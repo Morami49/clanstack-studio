@@ -27,5 +27,5 @@ jobs:
       - run: python studio/tests/scenarios.py studio/index.html
         env: {STUDIO_TEST_OUT: studio/tests/out}
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with: {name: studio-scenarios, path: studio/tests/out}
