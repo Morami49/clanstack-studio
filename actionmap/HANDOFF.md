@@ -96,6 +96,9 @@ modelling. Phase 1 (rails) is built; voice is next. Owner: Nowed.
 | D-083 | 2026-11-05 | **Stripe Connect, Stripe-handled pricing**, first provider (Q38 A). | Integration after the hub; no platform fees on that option. |
 | D-084 | 2026-11-05 | **8% tier after £50,000 settled in the trailing 12 months** (Q39 A). | default_cut_policy(); sales_12m. |
 | D-085 | 2026-11-05 | **No pre-revenue costs at all** (Q40 A). | Free hosting/subdomains; sole-trader HMRC registration (free) only when trading starts; company + domain deferred to first revenue. |
+| D-086 | 2026-11-05 | **Build order B > A > D > C** (Q41): addresses + money settings, then the Rust hub, then builder interviews, then Stripe test mode. | B shipped as Studio v0.3. |
+| D-087 | 2026-11-05 | **Main moves only after green CI**: Claude pushes to a branch, waits for CI, then fast-forwards main. GitHub can't enforce this on a private free repo (rulesets need Pro or a public repo). | Enforcement choice: Q43. |
+| D-088 | 2026-11-05 | **Money rules are versioned Studio settings** (SET-*), editors only, undoable; the Money calculator uses exchange-core's integer maths. Engine defaults stay the source until the hub syncs settings. | Studio v0.3, scenarios s20–s21. |
 
 ## State log (append-only)
 
@@ -157,6 +160,10 @@ modelling. Phase 1 (rails) is built; voice is next. Owner: Nowed.
 
 - **2026-11-05 — GitHub live.** Repo github.com/Morami49/clanstack-studio receives the local history (actionmap/, engine/,
   studio/, CI). exchange-core v0.3: trailing-12-month tiers, £50k default, giving share; 15 scenarios.
+
+- **2026-11-05 — Studio v0.3 (Q41 B).** Go-to addresses (studio/ID@n, chat/R-…#line, repo/sha:path#L), copy address,
+  numbered-line highlight, 10 SET-* money settings with a Money calculator; 21/21 scenarios; main 51225e7 after green CI.
+  Next: Rust hub (Q42 hosting), then D, then C.
 
 ## File map
 - `schema/event.schema.json` — the contract.
