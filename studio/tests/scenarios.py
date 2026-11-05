@@ -381,10 +381,22 @@ async def s21_money_settings(b):
     return ok, f"small ok={'£1,140.00' in small}, large 8%={'£96.00' in large}, split ok={'growth £32.40' in small}, set→{after}, undo→{undone}, co-founder edit boxes={c_inputs}"
 
 
+async def s22_duplicate_id(b):
+    """An AI (or a stale tab) re-creates an id that exists. The original and its history must survive, and the UI must refuse a duplicate."""
+    dup = ev("item.create", None, {"id": "D-001", "type": "decision", "title": "Imposter", "body": "overwritten", "status": "agreed"},
+             who="claude", label="Claude", ts="2026-11-03T10:00:00.000Z")
+    st = Store([dup]); p = await open_page(b, st, {})
+    title = await p.evaluate("F.items.get('D-001').title")
+    hist = await p.evaluate("F.items.get('D-001').history.length")
+    refused = await p.evaluate("write('item.create', null, {id:'D-001', type:'decision', title:'x', body:'y'})")
+    ok = title != "Imposter" and hist >= 2 and refused is None and not p.errors
+    return ok, f"title kept={title!=chr(73)+'mposter'} ({title[:30]!r}), history={hist}, duplicate write refused={refused is None}"
+
+
 SCENARIOS = [s01_tired_misclick, s02_undo, s03_stable_codes, s04_past_view_lock, s05_branch_awareness, s06_view_only_client,
              s07_names, s08_long_history, s09_ai_relay, s10_keyboard_list, s11_offline_capture, s12_member_rights,
              s13_two_people_at_once, s14_phone, s15_undo_old_status, s16_overwhelm, s17_disagreement, s18_clock_skew, s19_private_area,
-             s20_addresses, s21_money_settings]
+             s20_addresses, s21_money_settings, s22_duplicate_id]
 
 
 async def main():

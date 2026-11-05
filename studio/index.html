@@ -298,6 +298,7 @@ function fold(){
   const reverted = new Set(evs.filter(e => e.body?.revert_of).map(e => e.body.revert_of));
   for (const e of evs){
     const h = {id:e._id, ts:e.ts, kind:e.kind, author:e.author, body:e.body, branch:e.branch, gone:gone.has(e._id), reverted:reverted.has(e._id)};
+    if (e.kind==="item.create" && items.has(e.body.id)){ h.dup = true; items.get(e.body.id).history.push(h); continue; } // F-19: a second create never replaces an item
     if (e.kind==="item.create"){ items.set(e.body.id, {id:e.body.id, type:e.body.type, title:e.body.title, body:e.body.body||"", status:e.body.status||"open",
       refs:e.body.refs||[], sketch:e.body.sketch||null, source:e.body.source||null, private:!!e._private, value:e.body.value, answers:[], comments:[], history:[h], by:e.author}); continue; }
     const it = items.get(e.item); if (!it) continue;
@@ -318,6 +319,7 @@ function askable(){ return [...F.items.values()].filter(i => (i.type==="question
 
 /* ---------------------------------------------------------------- writing (append-only) */
 async function write(kind, item, body, opts={}){
+  if (kind==="item.create" && body?.id && F.items.has(body.id)){ toast(`${body.id} already exists. Open it and edit or comment instead.`); return null; }
   if (!S.db){ toast("Saving isn't available here. Open the Studio signed in."); return null; }
   if (S.asof){ toast("You're looking at the past. Return to live to make changes."); return null; }
   if (S.canWrite === false){ toast("This Studio is view only for you."); return null; }
@@ -439,7 +441,7 @@ function describe(h){
   const b = h.body || {};
   const src = b.source ? ` <span class="mute">(from ${esc(b.source)})</span>` : "";
   return h.kind==="answer" ? `answered <b>${esc(b.code||"")}</b> ${esc(b.text||"")}${src}` : h.kind==="comment" ? esc(b.text)+src :
-    h.kind==="status" ? (b.revert_of ? `reverted status → ${esc(b.status)}` : `set status → ${esc(b.status)}`) : h.kind==="item.edit" ? (b.value!=null ? (b.revert_of?`reverted value → ${esc(b.value)}`:`set value → ${esc(b.value)}`) : "edited") :
+    h.kind==="status" ? (b.revert_of ? `reverted status → ${esc(b.status)}` : `set status → ${esc(b.status)}`) : h.dup ? "tried to create this id again (ignored)" : h.kind==="item.edit" ? (b.value!=null ? (b.revert_of?`reverted value → ${esc(b.value)}`:`set value → ${esc(b.value)}`) : "edited") :
     h.kind==="item.create" ? "created"+src : h.kind==="retract" ? "took back an earlier entry" :
     h.kind==="link" ? `linked ${esc((b.refs||[]).join(", "))}` : h.kind==="genesis" ? "recorded from the chats (genesis)" : esc(h.kind);
 }
