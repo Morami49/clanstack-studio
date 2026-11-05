@@ -92,6 +92,10 @@ modelling. Phase 1 (rails) is built; voice is next. Owner: Nowed.
 | D-079 | 2026-11-05 | **Suppliers set deposit + late window within limits** (0–50%, 0–30 days) (Q35 C). | set_supplier_terms. |
 | D-080 | 2026-11-05 | Providers compared with **no fixed costs until Clanstack earns**; proposal Stripe Connect (Stripe-handled pricing). | Pending Q38. |
 | D-081 | 2026-11-05 | **Default treasury 60/30/10** (growth/owner/tax) for every account, constant across stages, configurable. | Allocation with tax top-up. Open: Q37 giving, Q39 threshold, Q40 pre-revenue costs. |
+| D-082 | 2026-11-05 | **Giving = a tenth of the growth bucket** (6% of net) for community seed grants and compute (Q37 A). | Allocation.giving_of_growth_bps. |
+| D-083 | 2026-11-05 | **Stripe Connect, Stripe-handled pricing**, first provider (Q38 A). | Integration after the hub; no platform fees on that option. |
+| D-084 | 2026-11-05 | **8% tier after £50,000 settled in the trailing 12 months** (Q39 A). | default_cut_policy(); sales_12m. |
+| D-085 | 2026-11-05 | **No pre-revenue costs at all** (Q40 A). | Free hosting/subdomains; sole-trader HMRC registration (free) only when trading starts; company + domain deferred to first revenue. |
 
 ## State log (append-only)
 
@@ -150,6 +154,9 @@ modelling. Phase 1 (rails) is built; voice is next. Owner: Nowed.
 - **2026-11-04 — repo + reply archive.** Local git repo /home/claude/repo (commit c15fec6: actionmap/, engine/, studio/,
   CI workflow). Push to github.com/Morami49/clanstack-studio blocked until GitHub is linked to Claude.
   Claude replies now carry R-YYMMDD-n codes and are stored in Studio (first: R-261104-6). Open: Q27–Q31.
+
+- **2026-11-05 — GitHub live.** Repo github.com/Morami49/clanstack-studio receives the local history (actionmap/, engine/,
+  studio/, CI). exchange-core v0.3: trailing-12-month tiers, £50k default, giving share; 15 scenarios.
 
 ## File map
 - `schema/event.schema.json` — the contract.

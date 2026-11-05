@@ -152,19 +152,21 @@ fn money_is_conserved_and_everything_is_logged() {
 
 #[test]
 fn tiered_cut_by_seller_class_and_volume() {
+    // threshold scaled down for the test; the real default is £50,000 over 12 months (Q39 A)
     let mut c = Chain::with_policy(CutPolicy::Tiered { community_bps: 300, small_bps: 500, large_bps: 800, large_after: 200_000 }, 14);
     c.add_credential(CATERER, Credential::FoodBusinessRegistration);
     c.add_credential(CATERER, Credential::PublicLiabilityInsurance);
     c.set_seller_class("group:food-coop", SellerClass::Community);
-    assert_eq!(c.cut_for("group:food-coop", 100_000), 3_000);
-    assert_eq!(c.cut_for(CATERER, 100_000), 5_000);           // small until volume passes the threshold
+    assert_eq!(c.cut_for("group:food-coop", 100_000, 30), 3_000);
+    assert_eq!(c.cut_for(CATERER, 100_000, 30), 5_000);       // small until 12-month sales pass the threshold
     for _ in 0..2 {
         let b = c.quote(ORG, CATERER, Role::Catering, 120_000, 30, 30, "v1");
         c.agree(b).unwrap(); c.pay_deposit(b).unwrap(); c.start(b).unwrap();
         c.confirm(b, ORG).unwrap(); c.confirm(b, CATERER).unwrap(); c.settle(b).unwrap();
     }
-    assert_eq!(c.volume[CATERER], 240_000);
-    assert_eq!(c.cut_for(CATERER, 100_000), 8_000);           // now above £2,000 settled
+    assert_eq!(c.sales_12m(CATERER, 30), 240_000);
+    assert_eq!(c.cut_for(CATERER, 100_000, 30), 8_000);       // now above £2,000 settled in 12 months
+    assert_eq!(c.cut_for(CATERER, 100_000, 30 + 365), 5_000); // a year later those sales have rolled off
     assert_eq!(c.platform, 6_000 + 6_000);                     // both sales were cut at 5% (threshold crossed after)
 }
 
@@ -184,10 +186,18 @@ fn suppliers_set_their_own_deposit_and_window_within_limits() {
 #[test]
 fn treasury_split_60_30_10_with_tax_top_up() {
     let a = Allocation::default();
-    assert_eq!(a.split(0, None), Buckets { growth: 0, owner: 0, tax: 0 });
-    assert_eq!(a.split(100_000, None), Buckets { growth: 60_000, owner: 30_000, tax: 10_000 });
+    assert_eq!(a.split(0, None), Buckets { growth: 0, giving: 0, owner: 0, tax: 0 });
+    assert_eq!(a.split(100_000, None), Buckets { growth: 54_000, giving: 6_000, owner: 30_000, tax: 10_000 });
     // high-margin month: estimated tax £19,000 on £100,000 → reserve topped up from owner first
-    assert_eq!(a.split(100_000, Some(19_000)), Buckets { growth: 60_000, owner: 21_000, tax: 19_000 });
+    assert_eq!(a.split(100_000, Some(19_000)), Buckets { growth: 54_000, giving: 6_000, owner: 21_000, tax: 19_000 });
     let b = a.split(99_999, None);
-    assert_eq!(b.growth + b.owner + b.tax, 99_999);
+    assert_eq!(b.growth + b.giving + b.owner + b.tax, 99_999);
+}
+
+#[test]
+fn default_tier_threshold_is_50k_over_12_months() {
+    let p = default_cut_policy();
+    match p { CutPolicy::Tiered { community_bps, small_bps, large_bps, large_after } =>
+        assert_eq!((community_bps, small_bps, large_bps, large_after), (300, 500, 800, 5_000_000)),
+      _ => panic!("default must be tiered") }
 }

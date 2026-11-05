@@ -95,7 +95,7 @@ pub struct Chain {
     pub limits: Limits,
     seller_class: BTreeMap<Id, SellerClass>,
     supplier_terms: BTreeMap<Id, (i64, i64)>, // supplier -> (deposit %, late-cancel days)
-    pub volume: BTreeMap<Id, Pence>,          // settled sales per seller (drives the large tier)
+    pub sales: BTreeMap<Id, Vec<(i64, Pence)>>, // (day, amount) settled sales per seller; drives the large tier
     credentials: BTreeMap<Id, Vec<Credential>>,
     right_to_work: BTreeMap<(Id, Id), bool>,  // (supplier, person) -> checked by that supplier
     pub bookings: Vec<Booking>,
@@ -113,7 +113,7 @@ impl Chain {
 
     pub fn with_policy(cut: CutPolicy, late_cancel_days: i64) -> Self {
         Self { cut, late_cancel_days, limits: Limits { max_deposit_pct: 50, max_late_days: 30 },
-               seller_class: BTreeMap::new(), supplier_terms: BTreeMap::new(), volume: BTreeMap::new(), credentials: BTreeMap::new(), right_to_work: BTreeMap::new(),
+               seller_class: BTreeMap::new(), supplier_terms: BTreeMap::new(), sales: BTreeMap::new(), credentials: BTreeMap::new(), right_to_work: BTreeMap::new(),
                bookings: vec![], escrow: BTreeMap::new(), balances: BTreeMap::new(), platform: 0,
                shifts: vec![], log: vec![] }
     }
@@ -125,14 +125,19 @@ impl Chain {
         self.note(format!("{seller} class {class:?}"));
     }
 
-    /// The cut for this seller on this amount (seller-side, D-070).
-    pub fn cut_for(&self, seller: Id, amount: Pence) -> Pence {
+    /// Settled sales over the 365 days up to and including `day` (Q39 A: trailing 12 months).
+    pub fn sales_12m(&self, seller: Id, day: i64) -> Pence {
+        self.sales.get(seller).map(|v| v.iter().filter(|(d, _)| *d <= day && *d > day - 365).map(|(_, a)| a).sum()).unwrap_or(0)
+    }
+
+    /// The cut for this seller on this amount on this day (seller-side, D-070).
+    pub fn cut_for(&self, seller: Id, amount: Pence, day: i64) -> Pence {
         let bps = match &self.cut {
             CutPolicy::Flat { bps } => *bps,
             CutPolicy::Tiered { community_bps, small_bps, large_bps, large_after } => {
                 match self.seller_class.get(seller).copied().unwrap_or(SellerClass::Small) {
                     SellerClass::Community => *community_bps,
-                    _ if self.volume.get(seller).copied().unwrap_or(0) >= *large_after => *large_bps,
+                    _ if self.sales_12m(seller, day) >= *large_after => *large_bps,
                     _ => *small_bps,
                 }
             }
@@ -240,10 +245,11 @@ impl Chain {
         let (price, supplier) = (self.bookings[b].price, self.bookings[b].supplier);
         // The organiser pays the balance (price - deposit) into escrow at completion; the provider releases it all.
         self.escrow.remove(&b);
-        let cut = self.cut_for(supplier, price);
+        let day = self.bookings[b].event_day;
+        let cut = self.cut_for(supplier, price, day);
         self.platform += cut;
         self.credit(supplier, price - cut);
-        *self.volume.entry(supplier).or_insert(0) += price;
+        self.sales.entry(supplier).or_default().push((day, price));
         self.bookings[b].state = State::Settled;
         self.note(format!("#{b} settled: {supplier} +{}p, cut {cut}p", price - cut));
         Ok(())
@@ -274,7 +280,7 @@ impl Chain {
         let held = self.escrow.remove(&b).unwrap_or(0);
         let late = by == bk.organiser && bk.event_day - today < bk.late_cancel_days;
         if late && held > 0 {
-            let cut = self.cut_for(bk.supplier, held);
+            let cut = self.cut_for(bk.supplier, held, today);
             self.platform += cut;
             self.credit(bk.supplier, held - cut);
             self.note(format!("#{b} late cancel by {by}: deposit to {} minus cut {cut}p", bk.supplier));
@@ -301,7 +307,7 @@ impl Chain {
         let bk = self.bookings[b].clone();
         let held = self.escrow.remove(&b).unwrap_or(0);
         let pay = to_supplier.clamp(0, held);
-        let cut = self.cut_for(bk.supplier, pay);
+        let cut = self.cut_for(bk.supplier, pay, bk.event_day);
         self.platform += cut;
         self.credit(bk.supplier, pay - cut);
         self.credit(bk.organiser, held - pay);
@@ -312,7 +318,7 @@ impl Chain {
 
     pub fn buyer_view(&self, b: usize) -> BuyerView { BuyerView { total: self.bookings[b].price } }
     pub fn seller_view(&self, b: usize) -> SellerView {
-        let p = self.bookings[b].price; let c = self.cut_for(self.bookings[b].supplier, p);
+        let p = self.bookings[b].price; let c = self.cut_for(self.bookings[b].supplier, p, self.bookings[b].event_day);
         SellerView { price: p, cut: c, net: p - c }
     }
 
@@ -331,15 +337,16 @@ impl Chain {
 /// 60% growth / 30% owner / 10% tax. Constant across stages; configurable per account.
 /// If the real tax estimate exceeds the tax bucket, the gap is taken from owner first, then growth,
 /// so the tax reserve is never short. Nothing is lost to rounding (remainder goes to growth).
+/// Giving (D-063, Q37 A) is a fixed share of the growth bucket: a tenth by default (6% of net).
 #[derive(Clone, Copy, Debug)]
-pub struct Allocation { pub growth_bps: i64, pub owner_bps: i64, pub tax_bps: i64 }
+pub struct Allocation { pub growth_bps: i64, pub owner_bps: i64, pub tax_bps: i64, pub giving_of_growth_bps: i64 }
 
 impl Default for Allocation {
-    fn default() -> Self { Self { growth_bps: 6_000, owner_bps: 3_000, tax_bps: 1_000 } }
+    fn default() -> Self { Self { growth_bps: 6_000, owner_bps: 3_000, tax_bps: 1_000, giving_of_growth_bps: 1_000 } }
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct Buckets { pub growth: Pence, pub owner: Pence, pub tax: Pence }
+pub struct Buckets { pub growth: Pence, pub giving: Pence, pub owner: Pence, pub tax: Pence }
 
 impl Allocation {
     pub fn split(&self, net: Pence, tax_estimate: Option<Pence>) -> Buckets {
@@ -353,6 +360,13 @@ impl Allocation {
             let from_growth = gap.min(growth); growth -= from_growth;
             tax += from_owner + from_growth;
         }
-        Buckets { growth, owner, tax }
+        let giving = growth * self.giving_of_growth_bps / 10_000;
+        Buckets { growth: growth - giving, giving, owner, tax }
     }
+}
+
+/// Clanstack's default cut (D-078, Q39 A): 3% community, 5% small, 8% once a seller has settled
+/// £50,000 in the last 12 months.
+pub fn default_cut_policy() -> CutPolicy {
+    CutPolicy::Tiered { community_bps: 300, small_bps: 500, large_bps: 800, large_after: 5_000_000 }
 }
