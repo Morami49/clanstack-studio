@@ -13,7 +13,7 @@ jobs:
     defaults: {run: {working-directory: actionmap}}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with: {python-version: "3.12"}
       - run: pip install -r requirements.txt
       - run: python -m tests.test_core
@@ -21,7 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with: {python-version: "3.12"}
       - run: pip install playwright && python -m playwright install --with-deps chromium
       - run: python studio/tests/scenarios.py studio/index.html
