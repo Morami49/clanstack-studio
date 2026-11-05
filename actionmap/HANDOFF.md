@@ -105,6 +105,9 @@ modelling. Phase 1 (rails) is built; voice is next. Owner: Nowed.
 | D-092 | 2026-11-05 | **Friends run their own nodes** (Q45 A): own accounts and keys; shared + encrypted private data; leave any time. | F-18. |
 | D-093 | 2026-11-05 | **Decisions link to their code** (Q48 A): after every build Claude comments `repo/<sha>:<path>` on what it carried out. | FLOW-delivery agreed. |
 | D-094 | 2026-11-05 | **The engine is the only source of rules**: Studio's JS copies (fold, money maths) get conformance tests now and are replaced by engine-wasm later. | Claude's call; S45. |
+| D-095 | 2026-11-05 | **Original: Studio page now, then every node (A → C)**. Nowed: B and C feel the same online; the engine already syncs in any order, so B is skipped. | Proposed; confirm via Q44. |
+| D-096 | 2026-11-05 | **GitLab mirror** (Q47 A): `mirror` workflow pushes each green main to a protected GitLab project, never force. Needs GITLAB_TOKEN secret + GITLAB_REPO variable (Nowed). | 4b923cd; Q54 username. |
+| D-097 | 2026-11-05 | **In-house first**: contributions, CI/CD and distribution happen inside Clanstack Studio; outside services are adapters swapped rung by rung (read → write → run → optional). | Purpose from Nowed; F-22 sandbox objection, Q55. |
 
 ## State log (append-only)
 
@@ -175,6 +178,8 @@ modelling. Phase 1 (rails) is built; voice is next. Owner: Nowed.
 - **2026-11-05 — updates + F-19.** 11 Dependabot updates applied (actions v7, gitleaks v3, ed25519-dalek 3, wasm-bindgen 0.2.130, pip bumps);
   Studio refuses duplicate ids (F-19, s22; 22/22); main f8d255f; Studio page v6. Corrected term codes: T65 blind replica, T66 free ladder,
   T67 guard layer, T68 Studio page, T69 original (T-node pre-existed). Open: Q44 (re-asked), Q47 (re-asked), Q49–Q52. Oracle account exists.
+- **2026-11-05 — mirror + in-house vision.** mirror.yml live (skips until GitLab set up). Oracle locked out (F-21) → deferred to after H1 (Q50 C).
+  "9.5) C" read as Q52 C (confirm). New: T70 mirror, T71 pipeline, T72 sandbox runner; S46–S47; FLOW-release; Q53–Q55. Next build: hub (H1) locally.
 
 ## File map
 - `schema/event.schema.json` — the contract.
