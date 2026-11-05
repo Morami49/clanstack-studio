@@ -2,6 +2,6 @@
 sounddevice>=0.4
 numpy>=1.26
 faster-whisper>=1.0
-pyttsx3>=2.90
+pyttsx3>=2.99
 # optional wake word
 openwakeword>=0.6
