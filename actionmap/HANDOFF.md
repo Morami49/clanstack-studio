@@ -99,6 +99,9 @@ modelling. Phase 1 (rails) is built; voice is next. Owner: Nowed.
 | D-086 | 2026-11-05 | **Build order B > A > D > C** (Q41): addresses + money settings, then the Rust hub, then builder interviews, then Stripe test mode. | B shipped as Studio v0.3. |
 | D-087 | 2026-11-05 | **Main moves only after green CI**: Claude pushes to a branch, waits for CI, then fast-forwards main. GitHub can't enforce this on a private free repo (rulesets need Pro or a public repo). | Enforcement choice: Q43. |
 | D-088 | 2026-11-05 | **Money rules are versioned Studio settings** (SET-*), editors only, undoable; the Money calculator uses exchange-core's integer maths. Engine defaults stay the source until the hub syncs settings. | Studio v0.3, scenarios s20–s21. |
+| D-089 | 2026-11-05 | **Hub on a free ladder** (Q42 C): H1 Cloudflare Workers + Durable Objects (always-on, no card) → H2 PC node (offline, syncs) → H3 Oracle Always Free (2 OCPU/12 GB Arm since 15 Jun 2026; free-only, card check) → H4 friends' own nodes → H5 GitHub Actions. Links: Cloudflare Tunnel; Tailscale Personal dev-only (non-commercial). | Open: Q44 source of truth, Q45 friend nodes, Q46 Oracle timing. |
+| D-090 | 2026-11-05 | **Main guarded by free layers** (Q43 A): rule, pre-push hook, main-guard workflow, gitleaks, Dependabot. | 6be13ae; optional GitLab mirror Q47. |
+| D-091 | 2026-11-05 | **No free provider is load-bearing**: every node keeps the full chain (F-17: Oracle halved free Arm without notice). Friends' logins are never pooled (F-18); friends run their own nodes. | Claude's call. Q48 decision→commit links. |
 
 ## State log (append-only)
 
@@ -164,6 +167,8 @@ modelling. Phase 1 (rails) is built; voice is next. Owner: Nowed.
 - **2026-11-05 — Studio v0.3 (Q41 B).** Go-to addresses (studio/ID@n, chat/R-…#line, repo/sha:path#L), copy address,
   numbered-line highlight, 10 SET-* money settings with a Money calculator; 21/21 scenarios; main 51225e7 after green CI.
   Next: Rust hub (Q42 hosting), then D, then C.
+- **2026-11-05 — guards + hub plan.** guards.yml (main-guard, gitleaks: no leaks), Dependabot, pre-push hook; main 6be13ae.
+  Hub ladder D-089; terms T65–T68 (node, blind replica, free ladder, guard layer); stories S40–S42; FLOW-delivery; Q44–Q48 open.
 
 ## File map
 - `schema/event.schema.json` — the contract.
