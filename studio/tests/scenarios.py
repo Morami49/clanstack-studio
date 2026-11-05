@@ -332,9 +332,59 @@ async def s19_private_area(b):
     return ok, f"stored privately={in_private}, owner sees={a_sees}, co-founder sees={c_sees}, in pack by default={in_pack}, with opt-in={in_pack_opt}"
 
 
+SETTINGS = [("SET-cut-small", "Cut: small seller", 500), ("SET-cut-large", "Cut: after the threshold", 800),
+            ("SET-cut-community", "Cut: community / non-profit", 300), ("SET-tier-threshold", "Threshold over 12 months", 5000000)]
+
+
+def setting_events():
+    return [ev("item.create", None, {"id": k, "type": "setting", "title": t, "body": "", "status": "agreed", "value": v},
+               who="claude", label="Claude", ts=f"2026-11-01T14:0{i}:00.000Z") for i, (k, t, v) in enumerate(SETTINGS)]
+
+
+async def s20_addresses(b):
+    """Nowed pastes an address from a chat into Go to. It must land on the exact item, version and line, and code addresses must link to GitHub."""
+    reply = ev("item.create", None, {"id": "R-261105-2", "type": "asset", "title": "Reply R-261105-2", "status": "built",
+                                     "body": "1) first\n3.1) the line that matters\n4) last"}, who="claude", label="Claude", ts="2026-11-01T14:30:00.000Z")
+    st = Store([reply, ev("item.edit", "D-001", {"body": "second wording"}, ts="2026-11-02T10:00:00.000Z")])
+    p = await open_page(b, st, {})
+    await p.fill("#goAddr", "chat/R-261105-2#3.1"); await p.press("#goAddr", "Enter"); await p.wait_for_timeout(400)
+    hit = await p.evaluate("document.querySelector('#inspBody .ln.hit')?.textContent || ''")
+    await p.fill("#goAddr", "studio/D-001@0"); await p.press("#goAddr", "Enter"); await p.wait_for_timeout(400)
+    past = await p.evaluate("S.asof !== null && document.querySelector('#inspector h2')?.textContent || ''")
+    body0 = await p.evaluate("document.querySelector('#inspBody')?.textContent || ''")
+    await p.evaluate("S.asof=null; refresh()")
+    await p.fill("#goAddr", "repo/b254818:engine/crates/exchange-core/src/lib.rs#L10"); await p.press("#goAddr", "Enter"); await p.wait_for_timeout(300)
+    link = await p.evaluate("document.querySelector('.toast a')?.href || ''")
+    ok = "3.1) the line" in hit and past and "second wording" not in body0 \
+        and link == "https://github.com/Morami49/clanstack-studio/blob/b254818/engine/crates/exchange-core/src/lib.rs#L10" and not p.errors
+    return ok, f"line hit={hit[:30]!r}, past view={bool(past)}, old body shown={'second wording' not in body0}, link={link[-40:]}, errors={p.errors[:1]}"
+
+
+async def s21_money_settings(b):
+    """A seller checks what they'd keep; the owner raises a cut, then undoes it. Maths must match the engine and every change must be a version."""
+    st = Store(setting_events()); p = await open_page(b, st, {})
+    await p.click("#tabs button[data-v=money]"); await p.wait_for_timeout(200)
+    await p.fill("#calcAmt", "1200"); await p.fill("#calcSales", "0"); await p.wait_for_timeout(100)
+    small = await p.inner_text("#calcOut")
+    await p.fill("#calcSales", "50000"); await p.wait_for_timeout(100)
+    large = await p.inner_text("#calcOut")
+    await p.fill('[data-set="SET-cut-small"]', "600"); await p.click('[data-save="SET-cut-small"]'); await p.wait_for_timeout(300)
+    after = await p.evaluate("setting('SET-cut-small')")
+    await p.click("[data-undo]"); await p.wait_for_timeout(300)
+    undone = await p.evaluate("setting('SET-cut-small')")
+    # a co-founder without edit rights sees no edit boxes
+    c = await open_page(b, st, {"me": "u_rad", "owner": False, "canEdit": False})
+    await c.click("#tabs button[data-v=money]"); await c.wait_for_timeout(200)
+    c_inputs = await c.locator("[data-set]").count()
+    ok = "£1,140.00" in small and "£60.00" in small and "£96.00" in large and "growth £32.40" in small.replace("\n", " ") \
+        and after == 600 and undone == 500 and c_inputs == 0
+    return ok, f"small ok={'£1,140.00' in small}, large 8%={'£96.00' in large}, split ok={'growth £32.40' in small}, set→{after}, undo→{undone}, co-founder edit boxes={c_inputs}"
+
+
 SCENARIOS = [s01_tired_misclick, s02_undo, s03_stable_codes, s04_past_view_lock, s05_branch_awareness, s06_view_only_client,
              s07_names, s08_long_history, s09_ai_relay, s10_keyboard_list, s11_offline_capture, s12_member_rights,
-             s13_two_people_at_once, s14_phone, s15_undo_old_status, s16_overwhelm, s17_disagreement, s18_clock_skew, s19_private_area]
+             s13_two_people_at_once, s14_phone, s15_undo_old_status, s16_overwhelm, s17_disagreement, s18_clock_skew, s19_private_area,
+             s20_addresses, s21_money_settings]
 
 
 async def main():

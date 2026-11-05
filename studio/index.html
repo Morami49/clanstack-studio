@@ -8,7 +8,7 @@
 :root{
   --bg:#eef0ee; --surface:#f8f9f7; --raise:#ffffff; --ink:#18201f; --mute:#5c6966; --line:#d5dbd8;
   --accent:#1f5f8b; --accent-ink:#ffffff;
-  --t-decision:#1f5f8b; --t-question:#b5651d; --t-term:#2b7a6b; --t-story:#7b4b94; --t-asset:#4a5553; --t-idea:#3f7d2f; --t-finding:#a8332a; --t-lead:#8a6d00;
+  --t-decision:#1f5f8b; --t-question:#b5651d; --t-term:#2b7a6b; --t-story:#7b4b94; --t-asset:#4a5553; --t-idea:#3f7d2f; --t-finding:#a8332a; --t-lead:#8a6d00; --t-setting:#5b4fa8;
   --ok:#2e7d4f; --warn:#9a5212; --bad:#b03a2e; --band:#fff4e0; --band-ink:#5b3a10;
   --display:"Bricolage Grotesque", "IBM Plex Sans", system-ui, sans-serif;
   --body:"IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -17,12 +17,12 @@
 @media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
   --bg:#111615; --surface:#171d1c; --raise:#1d2423; --ink:#e5ebe8; --mute:#93a19d; --line:#2b3533;
   --accent:#6fb0de; --accent-ink:#0d1517;
-  --t-decision:#6fb0de; --t-question:#e3a15f; --t-term:#5fc2ad; --t-story:#c39ad8; --t-asset:#a5b2af; --t-idea:#8fcf75; --t-finding:#ec7f72; --t-lead:#e2c45a;
+  --t-decision:#6fb0de; --t-question:#e3a15f; --t-term:#5fc2ad; --t-story:#c39ad8; --t-asset:#a5b2af; --t-idea:#8fcf75; --t-finding:#ec7f72; --t-lead:#e2c45a; --t-setting:#a99cf0;
   --ok:#6cc08d; --warn:#e3a15f; --bad:#ec7f72; --band:#2e2416; --band-ink:#f0d2a6; color-scheme:dark }}
 :root[data-theme="dark"]{
   --bg:#111615; --surface:#171d1c; --raise:#1d2423; --ink:#e5ebe8; --mute:#93a19d; --line:#2b3533;
   --accent:#6fb0de; --accent-ink:#0d1517;
-  --t-decision:#6fb0de; --t-question:#e3a15f; --t-term:#5fc2ad; --t-story:#c39ad8; --t-asset:#a5b2af; --t-idea:#8fcf75; --t-finding:#ec7f72; --t-lead:#e2c45a;
+  --t-decision:#6fb0de; --t-question:#e3a15f; --t-term:#5fc2ad; --t-story:#c39ad8; --t-asset:#a5b2af; --t-idea:#8fcf75; --t-finding:#ec7f72; --t-lead:#e2c45a; --t-setting:#a99cf0;
   --ok:#6cc08d; --warn:#e3a15f; --bad:#ec7f72; --band:#2e2416; --band-ink:#f0d2a6; color-scheme:dark }
 html,body{height:100%}
 body{background:var(--bg);color:var(--ink);font:14px/1.5 var(--body);margin:0;display:flex;flex-direction:column}
@@ -81,6 +81,8 @@ h3{font:600 15px/1.3 var(--body);margin:0}
 .log{display:flex;flex-direction:column;gap:6px;margin:0;padding:0;list-style:none}
 .log li{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;font-size:13px}
 .log li.gone{opacity:.55}
+.body .ln{display:block}
+.body .ln.hit{background:color-mix(in srgb, var(--warn) 22%, transparent);outline:1px solid var(--warn);border-radius:4px}
 .log li.gone .what{text-decoration:line-through}
 .log .n{font:500 11px var(--mono);color:var(--mute);padding-top:2px}
 .refs{display:flex;flex-wrap:wrap;gap:6px}
@@ -108,7 +110,7 @@ pre.pack{white-space:pre-wrap;background:var(--raise);border:1px solid var(--lin
 </style>
 
 <header>
-  <div class="brand"><h1>Clanstack Studio</h1><span class="ver" id="ver">v0.2</span></div>
+  <div class="brand"><h1>Clanstack Studio</h1><span class="ver" id="ver">v0.3</span></div>
   <nav id="tabs" aria-label="Views">
     <button data-v="map" aria-current="true">Map</button>
     <button data-v="list">List</button>
@@ -116,7 +118,9 @@ pre.pack{white-space:pre-wrap;background:var(--raise);border:1px solid var(--lin
     <button data-v="capture">Capture</button>
     <button data-v="tree">Tree</button>
     <button data-v="pack">Pack</button>
+    <button data-v="money">Money</button>
   </nav>
+  <form id="goForm" class="row" style="gap:4px" role="search"><input id="goAddr" class="mono" placeholder="Go to: D-063@2 · R-261105-2#3.1 · repo/sha:path#L10" aria-label="Go to an address" style="width:300px;max-width:100%"><button>Go</button></form>
   <span class="spacer"></span>
   <div class="rail">
     <label for="branch">branch</label>
@@ -194,6 +198,23 @@ pre.pack{white-space:pre-wrap;background:var(--raise);border:1px solid var(--lin
     </div>
   </section>
 
+  <section class="view" id="v-money" hidden>
+    <div class="stack" style="max-width:860px">
+      <h2>Money rules</h2>
+      <p class="mute" style="margin:0">Clanstack's cut and the default split, as versioned settings. Every change is kept on the tree; only editors can change them (charter). The calculator uses the same arithmetic as the engine.</p>
+      <div class="card">
+        <h3>Calculator</h3>
+        <div class="row">
+          <label for="calcAmt">Sale £</label><input id="calcAmt" type="number" min="0" step="0.01" value="1200" style="width:110px">
+          <label for="calcClass">Seller</label><select id="calcClass"><option value="small">small seller</option><option value="community">community / non-profit</option></select>
+          <label for="calcSales">Their sales, last 12 months £</label><input id="calcSales" type="number" min="0" step="1" value="0" style="width:120px">
+        </div>
+        <div id="calcOut" class="mono" style="font-size:13px;line-height:1.7"></div>
+      </div>
+      <ul class="log" id="settingsList"></ul>
+    </div>
+  </section>
+
   <section class="view" id="v-pack" hidden>
     <div class="stack" style="max-width:860px">
       <h2>Context pack</h2>
@@ -210,7 +231,7 @@ pre.pack{white-space:pre-wrap;background:var(--raise);border:1px solid var(--lin
 </main>
 
 <script>
-const TYPES = {decision:"Decision", question:"Question", term:"Term", story:"Story", asset:"Asset", idea:"Idea", finding:"Finding", lead:"Lead"};
+const TYPES = {decision:"Decision", question:"Question", term:"Term", story:"Story", asset:"Asset", idea:"Idea", finding:"Finding", lead:"Lead", setting:"Setting"};
 const PLURAL = {story:"Stories"};
 const OPEN = new Set(["proposed","open","default","challenged"]);
 const S = { genesis:null, events:[], shared:[], priv:[], me:null, owner:false, canEdit:null, canWrite:null, names:{}, branch:"main", asof:null,
@@ -278,14 +299,14 @@ function fold(){
   for (const e of evs){
     const h = {id:e._id, ts:e.ts, kind:e.kind, author:e.author, body:e.body, branch:e.branch, gone:gone.has(e._id), reverted:reverted.has(e._id)};
     if (e.kind==="item.create"){ items.set(e.body.id, {id:e.body.id, type:e.body.type, title:e.body.title, body:e.body.body||"", status:e.body.status||"open",
-      refs:e.body.refs||[], sketch:e.body.sketch||null, source:e.body.source||null, private:!!e._private, answers:[], comments:[], history:[h], by:e.author}); continue; }
+      refs:e.body.refs||[], sketch:e.body.sketch||null, source:e.body.source||null, private:!!e._private, value:e.body.value, answers:[], comments:[], history:[h], by:e.author}); continue; }
     const it = items.get(e.item); if (!it) continue;
     if (e.kind==="retract"){ it.history.push(h); continue; }
     it.history.push(h);
     if (h.gone) continue;
     if (e.kind==="answer") it.answers.push(h);
     if (e.kind==="comment") it.comments.push(h);
-    if (e.kind==="item.edit"){ if (e.body.title!=null) it.title=e.body.title; if (e.body.body!=null) it.body=e.body.body; }
+    if (e.kind==="item.edit"){ if (e.body.title!=null) it.title=e.body.title; if (e.body.body!=null) it.body=e.body.body; if (e.body.value!=null) it.value=e.body.value; }
     if (e.kind==="status"){ h.prev = it.status; it.status = e.body.status; }
     if (e.kind==="link") it.refs = [...new Set([...it.refs, ...(e.body.refs||[])])];
   }
@@ -320,6 +341,9 @@ async function revert(eventId){
   if (e.kind==="status"){ const h = F.items.get(e.item)?.history.find(x => x.id===eventId);
     return write("status", e.item, {status:h?.prev || "open", revert_of:eventId}); }
   if (e.kind==="item.create") return write("status", e.body.id, {status:"withdrawn", revert_of:eventId});
+  if (e.kind==="item.edit" && e.body.value!=null){ const prev = [...S.events].filter(x => x.item===e.item && x.kind==="item.edit" && x.body.value!=null && x.ts < e.ts).pop();
+    const genesisVal = F.items.get(e.item)?.history?.[0]?.body?.value;
+    return write("item.edit", e.item, {value: prev ? prev.body.value : (genesisVal ?? SETTING_DEFAULTS[e.item]), revert_of:eventId}); }
 }
 
 /* ---------------------------------------------------------------- people */
@@ -415,13 +439,13 @@ function describe(h){
   const b = h.body || {};
   const src = b.source ? ` <span class="mute">(from ${esc(b.source)})</span>` : "";
   return h.kind==="answer" ? `answered <b>${esc(b.code||"")}</b> ${esc(b.text||"")}${src}` : h.kind==="comment" ? esc(b.text)+src :
-    h.kind==="status" ? (b.revert_of ? `reverted status → ${esc(b.status)}` : `set status → ${esc(b.status)}`) : h.kind==="item.edit" ? "edited" :
+    h.kind==="status" ? (b.revert_of ? `reverted status → ${esc(b.status)}` : `set status → ${esc(b.status)}`) : h.kind==="item.edit" ? (b.value!=null ? (b.revert_of?`reverted value → ${esc(b.value)}`:`set value → ${esc(b.value)}`) : "edited") :
     h.kind==="item.create" ? "created"+src : h.kind==="retract" ? "took back an earlier entry" :
     h.kind==="link" ? `linked ${esc((b.refs||[]).join(", "))}` : h.kind==="genesis" ? "recorded from the chats (genesis)" : esc(h.kind);
 }
 function line(n, h, withUndo){
   const can = withUndo && writable() && h.id && !h.gone && !h.reverted && h.kind!=="retract" && !h.body?.revert_of &&
-              ["answer","comment","status","link"].includes(h.kind) && (h.author?.id===S.me || editor());
+              (["answer","comment","status","link"].includes(h.kind) || (h.kind==="item.edit" && h.body?.value!=null)) && (h.author?.id===S.me || editor());
   return `<li class="${h.gone||h.reverted?"gone":""}"><span class="n">${n}</span><span><span class="mono mute">${esc((h.ts||"").slice(0,16).replace("T"," "))} · ${esc(who(h.author))}${h.branch&&h.branch!=="main"?" · "+esc(h.branch):""}</span>
     ${can?`<button class="link" data-revert="${esc(h.id)}">${h.kind==="status"?"Revert":"Take back"}</button>`:""}<br><span class="what">${describe(h)}</span>${h.gone?' <span class="mute">(taken back)</span>':h.reverted?' <span class="mute">(reverted)</span>':""}</span></li>`;
 }
@@ -437,7 +461,8 @@ function renderInspector(){
       <button id="closeInsp" aria-label="Close">✕</button></div>
     ${it.private?`<div class="pill" style="color:var(--accent);align-self:flex-start">🔒 Only you can see this</div>`:""}
     <h2>${esc(it.title)}</h2>
-    <div class="body">${esc(it.body)}</div>
+    <div class="row"><span class="mono mute">studio/${esc(it.id)}@${it.history.length-1}</span><button class="link" id="copyAddr">copy address</button></div>
+    <div class="body" id="inspBody">${bodyLines(it.body)}</div>
     ${it.sketch?`<img src="${it.sketch}" alt="Sketch attached to ${esc(it.id)}" style="border:1px solid var(--line);border-radius:8px">`:""}
     <div class="stack" style="margin-top:14px">
       <div class="eyebrow">Links</div>
@@ -453,6 +478,9 @@ function renderInspector(){
       <div class="eyebrow">History (${it.history.length})</div>
       <ol class="log">${it.history.map((h,i)=>line(i+1,h,true)).join("")}</ol>
     </div>`;
+  $("#copyAddr").onclick = async () => { const a = `studio/${it.id}@${it.history.length-1}`;
+    try { await navigator.clipboard.writeText(a); toast("Copied "+a); } catch { toast(a); } };
+  if (S.line){ const el = document.getElementById("L-"+S.line); if (el){ el.classList.add("hit"); el.scrollIntoView({block:"center"}); } S.line = null; }
   $("#closeInsp").onclick = () => { $("#inspector").classList.add("closed"); S.sel=null; };
   $("#insp").querySelectorAll("[data-go]").forEach(b => b.onclick = () => select(b.dataset.go));
   $("#insp").querySelectorAll("[data-revert]").forEach(b => b.onclick = async () => { if (await revert(b.dataset.revert)) toast("Done. The original stays in history."); });
@@ -604,7 +632,7 @@ $("#copyPack").onclick = async () => { try { await navigator.clipboard.writeText
   catch { const r=document.createRange(); r.selectNodeContents($("#pack")); const s=getSelection(); s.removeAllRanges(); s.addRange(r); $("#packNote").textContent="Selected — copy it with your keyboard."; } };
 
 /* ---------------------------------------------------------------- views + time */
-const VIEWS = ["map","list","ask","capture","tree","pack"];
+const VIEWS = ["map","list","ask","capture","tree","pack","money"];
 function show(v){ if (!VIEWS.includes(v)) v = "map"; S.view=v; document.querySelectorAll("#tabs button").forEach(b=>b.setAttribute("aria-current", b.dataset.v===v));
   for (const x of VIEWS) $("#v-"+x).hidden = x!==v;
   if (v==="map" && cy) cy.resize(); if (v==="capture") sizePad(); refreshView(); store.set("view", v); }
@@ -614,22 +642,95 @@ $("#asof").oninput = e => { const evs=[...S.events].sort((a,b)=>a.ts<b.ts?-1:1);
   S.asof = v>=evs.length ? null : (v===0 ? "0" : evs[v-1].ts); refresh(); };
 $("#theme").onclick = () => { const r=document.documentElement, dark=matchMedia("(prefers-color-scheme: dark)").matches;
   r.dataset.theme = (r.dataset.theme || (dark?"dark":"light"))==="dark" ? "light" : "dark"; renderMap(false); if (S.view==="tree") renderTree(); if (S.view==="capture") redraw(); };
-function refreshView(){ if (S.view==="map") renderMap(false); if (S.view==="list") renderList(); if (S.view==="ask") renderAsk(); if (S.view==="tree") renderTree(); if (S.view==="pack") renderPack(); }
+function refreshView(){ if (S.view==="map") renderMap(false); if (S.view==="list") renderList(); if (S.view==="ask") renderAsk(); if (S.view==="tree") renderTree(); if (S.view==="pack") renderPack(); if (S.view==="money") renderMoney(); }
 function refresh(){
   if (S.bulk) return;   // a bulk action redraws once at the end
   CODES = stableCodes(); F = fold();
   const n = S.events.length, a = $("#asof"); a.max = n; if (!S.asof) a.value = n;
   $("#when").textContent = S.asof ? (S.asof==="0" ? "genesis" : "as of "+S.asof.slice(5,16).replace("T"," ")) : "live";
   $("#when").className = "status " + (S.asof ? "past" : "live");
-  $("#ver").textContent = `v0.2 · ${F.items.size} items · ${n} changes`;
+  $("#ver").textContent = `v0.3 · ${F.items.size} items · ${n} changes`;
   const bs = branches(), names = Object.keys(bs), sel = $("#branch");
   sel.innerHTML = names.map(x => `<option value="${esc(x)}">${esc(x)}${bs[x].merged?" (merged)":""}</option>`).join(""); if (!names.includes(S.branch)) S.branch = "main"; sel.value = S.branch;
   renderBanners(); buildFilters(); badge(); refreshView(); if (S.sel) renderInspector();
 }
 
+/* ---------------------------------------------------------------- addresses (D-074): space/item@version#line */
+function bodyLines(text){
+  return String(text||"").split("\n").map(l => {
+    const m = l.match(/^\s*(?:[-*•]\s*)?\**\s*(\d+(?:\.\d+)*)[.)]?\s/);
+    return `<span class="ln"${m?` id="L-${esc(m[1])}"`:""}>${esc(l)||"&nbsp;"}</span>`;
+  }).join("");
+}
+const REPO = "https://github.com/Morami49/clanstack-studio";
+function parseAddress(raw){
+  let a = String(raw||"").trim().replace(/^chat\//i,"").replace(/^studio\//i,"");
+  const r = a.match(/^repo\/([0-9a-f]{6,40}):([^#\s]+)(?:#L(\d+))?$/i);
+  if (r) return {repo:true, sha:r[1], path:r[2], line:r[3]};
+  const m = a.match(/^([A-Za-z0-9][\w-]*)(?:@(\d+))?(?:#([\d.]+|L\d+))?$/);
+  if (!m) return null;
+  const id = CODES.back[m[1].toUpperCase()] || m[1];
+  return {id, version: m[2]!=null ? +m[2] : null, line: m[3]||null};
+}
+function openAddress(raw){
+  const a = parseAddress(raw);
+  if (!a){ toast("That address isn't in a format Studio knows."); return false; }
+  if (a.repo){ const url = `${REPO}/blob/${a.sha}/${a.path}${a.line?"#L"+a.line:""}`;
+    showLink(url); return true; }
+  if (!F.items.has(a.id)){ toast(`No item ${a.id} in this view.`); return false; }
+  const it = F.items.get(a.id);
+  if (a.version != null){
+    const h = it.history[a.version];
+    if (!h){ toast(`${a.id} has versions 0–${it.history.length-1}.`); return false; }
+    S.asof = a.version === it.history.length-1 ? null : (h.kind==="genesis" || !h.ts ? "0" : h.ts); refresh();
+  }
+  S.line = a.line; select(a.id); return true;
+}
+function showLink(url){
+  document.querySelectorAll(".toast").forEach(t=>t.remove());
+  const d = document.createElement("div"); d.className = "toast"; d.setAttribute("role","status");
+  d.innerHTML = `<span>Code on GitHub:</span> <a href="${esc(url)}" target="_blank" rel="noopener" style="color:inherit">${esc(url.replace(REPO+"/blob/",""))}</a>`;
+  document.body.append(d); setTimeout(()=>d.remove(), 12000);
+}
+$("#goForm").onsubmit = e => { e.preventDefault(); if (openAddress($("#goAddr").value)) $("#goAddr").value = ""; };
+addEventListener("hashchange", () => { const h = location.hash.slice(1); if (h && F.items.has(h)) select(h); });
+
+/* ---------------------------------------------------------------- money rules (D-078–D-084): same arithmetic as engine/crates/exchange-core */
+const SETTING_DEFAULTS = {"SET-cut-community":300,"SET-cut-small":500,"SET-cut-large":800,"SET-tier-threshold":5000000,
+  "SET-alloc-growth":6000,"SET-alloc-owner":3000,"SET-alloc-tax":1000,"SET-giving-of-growth":1000,"SET-deposit-max":50,"SET-late-max":30};
+function setting(k){ const it = F.items.get(k); const v = it && it.value != null ? +it.value : SETTING_DEFAULTS[k]; return isNaN(v) ? SETTING_DEFAULTS[k] : v; }
+function cutPence(amount, cls, sales12m){
+  const bps = cls==="community" ? setting("SET-cut-community") : sales12m >= setting("SET-tier-threshold") ? setting("SET-cut-large") : setting("SET-cut-small");
+  return {bps, cut: Math.floor(amount * bps / 10000)};
+}
+function split(net){
+  const owner = Math.floor(net*setting("SET-alloc-owner")/10000), tax = Math.floor(net*setting("SET-alloc-tax")/10000);
+  const growthAll = net - owner - tax, giving = Math.floor(growthAll*setting("SET-giving-of-growth")/10000);
+  return {growth: growthAll-giving, giving, owner, tax};
+}
+const gbp = p => "£" + (p/100).toLocaleString("en-GB",{minimumFractionDigits:2, maximumFractionDigits:2});
+function renderMoney(){
+  const amt = Math.round(+$("#calcAmt").value*100)||0, sales = Math.round(+$("#calcSales").value*100)||0, cls = $("#calcClass").value;
+  const {bps, cut} = cutPence(amt, cls, sales), sp = split(cut);
+  $("#calcOut").innerHTML = `Buyer pays ${gbp(amt)} (one all-in price).<br>Seller sees: ${gbp(amt)} − cut ${(bps/100).toFixed(2)}% ${gbp(cut)} = <b>${gbp(amt-cut)}</b>.<br>`+
+    `Clanstack's ${gbp(cut)} splits: growth ${gbp(sp.growth)} · giving ${gbp(sp.giving)} · owner ${gbp(sp.owner)} · tax ${gbp(sp.tax)} (tax tops up to the real estimate when higher).`;
+  const keys = Object.keys(SETTING_DEFAULTS);
+  $("#settingsList").innerHTML = keys.map((k,i) => { const it = F.items.get(k);
+    const unit = k.includes("deposit")||k.includes("late") ? (k.includes("late")?" days":" %") : k.includes("threshold") ? " pence" : " bps";
+    return `<li><span class="n">${i+1}</span><span><b>${esc(it?.title||k)}</b> <span class="mono">${esc(String(setting(k)))}${unit}</span>
+      <span class="mute mono"> · studio/${k}@${it?it.history.length-1:0}</span>
+      ${it && editor() ? `<span class="row" style="margin-top:4px"><input data-set="${k}" ${dis()} value="${esc(String(setting(k)))}" style="width:120px" aria-label="New value for ${esc(it.title)}"><button data-save="${k}" ${dis()}>Save version</button></span>` : ""}</span></li>`; }).join("");
+  $("#settingsList").querySelectorAll("[data-save]").forEach(b => b.onclick = async () => {
+    const k = b.dataset.save, v = +$(`[data-set="${k}"]`).value;
+    if (!Number.isFinite(v) || v < 0){ toast("Use a number, 0 or more."); return; }
+    const id = await write("item.edit", k, {value: v}); if (id) toast(`${k} → ${v}`, [id]); });
+}
+for (const id of ["calcAmt","calcSales","calcClass"]) $("#"+id).oninput = renderMoney;
+
 /* ---------------------------------------------------------------- boot */
 (async function boot(){
   show(store.get("view") || (innerWidth < 600 ? "capture" : "map"));
+  setTimeout(() => { const h = location.hash.slice(1); if (h && F.items.has(h)) select(h); }, 1500);
   refresh();
   const timer = setTimeout(() => { $("#conn").textContent = "can't reach the store yet"; }, 10000);
   if (!window.claude?.use){ clearTimeout(timer); $("#conn").textContent = "offline preview"; return; }
