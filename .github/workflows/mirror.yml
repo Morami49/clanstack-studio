@@ -1,0 +1,28 @@
+name: mirror
+# D-096 (Q47 A): after ci passes on main, copy main to a protected GitLab project.
+# Setup (once, by the owner): GitHub → Settings → Secrets and variables → Actions
+#   secret   GITLAB_TOKEN = GitLab access token with only the write_repository scope
+#   variable GITLAB_REPO  = <gitlab-username>/clanstack-studio
+# Until both exist this job skips. It never force-pushes: if GitLab's history differs, the job fails loudly.
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [main]
+permissions: {contents: read}
+jobs:
+  gitlab:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with: {ref: "${{ github.event.workflow_run.head_sha }}", fetch-depth: 0}
+      - name: Push the tested commit to GitLab main
+        env:
+          TOKEN: ${{ secrets.GITLAB_TOKEN }}
+          REPO: ${{ vars.GITLAB_REPO }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          if [ -z "$TOKEN" ] || [ -z "$REPO" ]; then echo "GitLab mirror not set up yet (Q47/Q54): skipping."; exit 0; fi
+          git push "https://oauth2:${TOKEN}@gitlab.com/${REPO}.git" "${SHA}:refs/heads/main"
+          echo "Mirrored ${SHA:0:7} to gitlab.com/${REPO}"
