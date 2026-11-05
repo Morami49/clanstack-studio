@@ -102,6 +102,9 @@ modelling. Phase 1 (rails) is built; voice is next. Owner: Nowed.
 | D-089 | 2026-11-05 | **Hub on a free ladder** (Q42 C): H1 Cloudflare Workers + Durable Objects (always-on, no card) → H2 PC node (offline, syncs) → H3 Oracle Always Free (2 OCPU/12 GB Arm since 15 Jun 2026; free-only, card check) → H4 friends' own nodes → H5 GitHub Actions. Links: Cloudflare Tunnel; Tailscale Personal dev-only (non-commercial). | Open: Q44 source of truth, Q45 friend nodes, Q46 Oracle timing. |
 | D-090 | 2026-11-05 | **Main guarded by free layers** (Q43 A): rule, pre-push hook, main-guard workflow, gitleaks, Dependabot. | 6be13ae; optional GitLab mirror Q47. |
 | D-091 | 2026-11-05 | **No free provider is load-bearing**: every node keeps the full chain (F-17: Oracle halved free Arm without notice). Friends' logins are never pooled (F-18); friends run their own nodes. | Claude's call. Q48 decision→commit links. |
+| D-092 | 2026-11-05 | **Friends run their own nodes** (Q45 A): own accounts and keys; shared + encrypted private data; leave any time. | F-18. |
+| D-093 | 2026-11-05 | **Decisions link to their code** (Q48 A): after every build Claude comments `repo/<sha>:<path>` on what it carried out. | FLOW-delivery agreed. |
+| D-094 | 2026-11-05 | **The engine is the only source of rules**: Studio's JS copies (fold, money maths) get conformance tests now and are replaced by engine-wasm later. | Claude's call; S45. |
 
 ## State log (append-only)
 
@@ -169,6 +172,9 @@ modelling. Phase 1 (rails) is built; voice is next. Owner: Nowed.
   Next: Rust hub (Q42 hosting), then D, then C.
 - **2026-11-05 — guards + hub plan.** guards.yml (main-guard, gitleaks: no leaks), Dependabot, pre-push hook; main 6be13ae.
   Hub ladder D-089; terms T65–T68 (node, blind replica, free ladder, guard layer); stories S40–S42; FLOW-delivery; Q44–Q48 open.
+- **2026-11-05 — updates + F-19.** 11 Dependabot updates applied (actions v7, gitleaks v3, ed25519-dalek 3, wasm-bindgen 0.2.130, pip bumps);
+  Studio refuses duplicate ids (F-19, s22; 22/22); main f8d255f; Studio page v6. Corrected term codes: T65 blind replica, T66 free ladder,
+  T67 guard layer, T68 Studio page, T69 original (T-node pre-existed). Open: Q44 (re-asked), Q47 (re-asked), Q49–Q52. Oracle account exists.
 
 ## File map
 - `schema/event.schema.json` — the contract.
