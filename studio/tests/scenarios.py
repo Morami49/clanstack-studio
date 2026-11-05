@@ -23,7 +23,7 @@ from playwright.async_api import async_playwright
 HERE = Path(__file__).resolve().parent
 PAGE = (Path(sys.argv[1]) if len(sys.argv) > 1 else HERE.parent / "index.html").resolve()
 GENESIS = json.loads((HERE / "genesis.json").read_text())
-OUT = Path(os.environ.get("STUDIO_TEST_OUT", HERE / "out"))
+OUT = Path(os.environ.get("STUDIO_TEST_OUT", HERE / "out")).resolve()
 OUT.mkdir(parents=True, exist_ok=True)
 # Wrap the page in the same skeleton the Artifact host adds at publish time.
 WRAPPED = OUT / "page.html"
@@ -351,6 +351,8 @@ async def main():
         await b.close()
     (OUT / "results.json").write_text(json.dumps(results, indent=1, ensure_ascii=False))
     print(f"\n{sum(r['pass'] for r in results)}/{len(results)} passed")
+    if not all(r["pass"] for r in results):
+        sys.exit(1)   # a failing scenario must fail CI (D-061)
 
 
 if __name__ == "__main__":
