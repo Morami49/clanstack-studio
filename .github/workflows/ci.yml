@@ -5,14 +5,14 @@ jobs:
     runs-on: ubuntu-latest
     defaults: {run: {working-directory: engine}}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test -p foundation-core -p exchange-core
   actionmap:
     runs-on: ubuntu-latest
     defaults: {run: {working-directory: actionmap}}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with: {python-version: "3.12"}
       - run: pip install -r requirements.txt
@@ -20,7 +20,7 @@ jobs:
   studio:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with: {python-version: "3.12"}
       - run: pip install playwright && python -m playwright install --with-deps chromium
