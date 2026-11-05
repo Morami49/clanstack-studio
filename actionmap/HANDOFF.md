@@ -88,6 +88,10 @@ modelling. Phase 1 (rails) is built; voice is next. Owner: Nowed.
 | D-075 | 2026-11-04 | First Exchange Kit configuration: **event supply chain** (Claude's call, Q31). | Studio A-exchange-event-chain; open Q32 crew engagement, Q33 simulated event type. |
 | D-076 | 2026-11-04 | **Suppliers/agencies engage crew; Clanstack is their tool** (Q32 A); other models much later. | exchange-core enforces supplier right-to-work checks. |
 | D-077 | 2026-11-04 | Simulated event: **a catered builder meetup** (Claude's call, Q33). | engine/crates/exchange-core (11 scenarios). Open: Q34 cut, Q35 deposit, Q36 provider. |
+| D-078 | 2026-11-05 | **Tiered cut** 3% community / 5% small / 8% above threshold; algorithmic later (Q34 C). | CutPolicy::Tiered; threshold Q39. |
+| D-079 | 2026-11-05 | **Suppliers set deposit + late window within limits** (0–50%, 0–30 days) (Q35 C). | set_supplier_terms. |
+| D-080 | 2026-11-05 | Providers compared with **no fixed costs until Clanstack earns**; proposal Stripe Connect (Stripe-handled pricing). | Pending Q38. |
+| D-081 | 2026-11-05 | **Default treasury 60/30/10** (growth/owner/tax) for every account, constant across stages, configurable. | Allocation with tax top-up. Open: Q37 giving, Q39 threshold, Q40 pre-revenue costs. |
 
 ## State log (append-only)
 
