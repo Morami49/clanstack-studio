@@ -1,0 +1,15 @@
+#!/bin/sh
+# Local guard (D-087): refuse a push to main unless that commit already passed CI on a branch.
+# Install once per clone:  git config core.hooksPath scripts/hooks
+# Skip in an emergency:    git push --no-verify   (the main-guard workflow will still flag it)
+while read local_ref local_sha remote_ref remote_sha; do
+  [ "$remote_ref" = "refs/heads/main" ] || continue
+  command -v gh >/dev/null || { echo "pre-push: gh not installed; main-guard workflow will check instead"; exit 0; }
+  n=$(gh run list --commit "$local_sha" --workflow ci --status success --json headBranch \
+        --jq '[.[] | select(.headBranch!="main")] | length' 2>/dev/null || echo 0)
+  if [ "${n:-0}" = "0" ]; then
+    echo "pre-push: $local_sha has no green ci run on a branch yet. Push a branch, wait for green, then move main."
+    exit 1
+  fi
+done
+exit 0

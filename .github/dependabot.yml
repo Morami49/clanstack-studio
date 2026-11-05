@@ -1,0 +1,6 @@
+# Free on private repos: keeps CI actions and dependencies current (clears the Node 20 warnings).
+version: 2
+updates:
+  - {package-ecosystem: github-actions, directory: "/", schedule: {interval: monthly}}
+  - {package-ecosystem: cargo, directory: "/engine", schedule: {interval: monthly}}
+  - {package-ecosystem: pip, directory: "/actionmap", schedule: {interval: monthly}}

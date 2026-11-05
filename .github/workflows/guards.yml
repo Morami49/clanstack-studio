@@ -1,0 +1,31 @@
+name: guards
+# Free protection layers for a private repo on GitHub's free plan (D-087, D-090).
+# GitHub won't enforce rulesets here, so these make any slip visible within minutes.
+on:
+  push:
+  schedule: [{cron: "17 3 * * 1"}]   # weekly secret re-scan
+permissions: {contents: read, actions: read, issues: write}
+jobs:
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: gitleaks/gitleaks-action@v2
+        env: {GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"}
+  main-guard:
+    # Main may only move to a commit that already passed CI on a branch.
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Was this commit green on a branch first?
+        env: {GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}", SHA: "${{ github.sha }}", REPO: "${{ github.repository }}"}
+        run: |
+          ok=$(gh api "repos/$REPO/actions/runs?head_sha=$SHA&status=success&per_page=50" \
+               --jq '[.workflow_runs[] | select(.name=="ci" and .head_branch!="main")] | length')
+          echo "green branch runs for $SHA: $ok"
+          if [ "$ok" = "0" ]; then
+            gh issue create -R "$REPO" --title "main moved without green CI: ${SHA:0:7}" \
+              --body "Commit $SHA reached main without a passing ci run on a branch first (D-087). Check it, then revert or confirm." || true
+            exit 1
+          fi
