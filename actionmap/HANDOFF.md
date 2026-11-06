@@ -111,6 +111,9 @@ modelling. Phase 1 (rails) is built; voice is next. Owner: Nowed.
 | D-098 | 2026-11-06 | **The claude.ai page is Studio Web** (Q49 A); Clanstack Studio is the platform. | T68 renamed. |
 | D-099 | 2026-11-06 | **Key register in both places, names only** (Q52 C): Studio Web private area (KEY-register) + password manager for values. | |
 | D-100 | 2026-11-06 | **Studio's sandbox runner first; GitHub Actions as backup + overflow** (Q55 B + A). No outside contributions until the sandbox runner passes security tests (F-22). | |
+| D-101 | 2026-11-06 | **Two-way merge, no echoes, same order everywhere** (Q44 "C now", prompt edit 2): hub `studio.write` facts → Studio Web as `hub-<id>`; import skips them; all order by (ts, doc id). | df5127a; D-095 revised from A→C to C now. |
+| D-102 | 2026-11-06 | **Prompt edits are branches**: answers/replies record their edit; latest edit wins for intents; earlier edits' work stays as facts and is reconciled (kept/revised/reverted). | Proposed, Q59. F-25. |
+| D-103 | 2026-11-06 | **Hub re-checks Studio Web**; refusals return to Studio Web as visible notes. | Claude's call; build with export (Q56). |
 
 ## State log (append-only)
 
@@ -186,6 +189,9 @@ modelling. Phase 1 (rails) is built; voice is next. Owner: Nowed.
 - **2026-11-06 — hub H1 built.** engine/crates/hub-core (7 tests) + hub/ (Cloudflare Workers + SQLite Durable Object), tested locally
   (24 Studio events → 25 signed facts; dedupe; 401; restart). Reads gated (F-23); workflows-parse guard (F-24); hub-deploy waits for
   Cloudflare secrets (Q57). GitLab = Morami49/clanstack-studio. Open: Q56 export route, Q57 Cloudflare setup, Q58 hub reads.
+- **2026-11-06 — prompt edit 2 reconciled.** Edit 1 (R-261106-1) built hub H1 and recorded Q44 = A; edit 2 changed Q44 to "C now".
+  Kept edit 1's work; added two-way merge (hub-core 8/8, Studio Web 23/23, s23). Mirror + hub deploy still skip (no secrets).
+  Open: Q56 (revised), Q57, Q58, Q59, Q60. Terms T76 prompt edit, T77 reconcile, T78 echo; S50–S51; FLOW-merge.
 
 ## File map
 - `schema/event.schema.json` — the contract.
