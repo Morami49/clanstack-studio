@@ -105,9 +105,12 @@ modelling. Phase 1 (rails) is built; voice is next. Owner: Nowed.
 | D-092 | 2026-11-05 | **Friends run their own nodes** (Q45 A): own accounts and keys; shared + encrypted private data; leave any time. | F-18. |
 | D-093 | 2026-11-05 | **Decisions link to their code** (Q48 A): after every build Claude comments `repo/<sha>:<path>` on what it carried out. | FLOW-delivery agreed. |
 | D-094 | 2026-11-05 | **The engine is the only source of rules**: Studio's JS copies (fold, money maths) get conformance tests now and are replaced by engine-wasm later. | Claude's call; S45. |
-| D-095 | 2026-11-05 | **Original: Studio page now, then every node (A → C)**. Nowed: B and C feel the same online; the engine already syncs in any order, so B is skipped. | Proposed; confirm via Q44. |
+| D-095 | 2026-11-05 | **Original: Studio page now, then every node (A → C)**. Nowed: B and C feel the same online; the engine already syncs in any order, so B is skipped. | Agreed 2026-11-06 (Q44 A). |
 | D-096 | 2026-11-05 | **GitLab mirror** (Q47 A): `mirror` workflow pushes each green main to a protected GitLab project, never force. Needs GITLAB_TOKEN secret + GITLAB_REPO variable (Nowed). | 4b923cd; Q54 username. |
 | D-097 | 2026-11-05 | **In-house first**: contributions, CI/CD and distribution happen inside Clanstack Studio; outside services are adapters swapped rung by rung (read → write → run → optional). | Purpose from Nowed; F-22 sandbox objection, Q55. |
+| D-098 | 2026-11-06 | **The claude.ai page is Studio Web** (Q49 A); Clanstack Studio is the platform. | T68 renamed. |
+| D-099 | 2026-11-06 | **Key register in both places, names only** (Q52 C): Studio Web private area (KEY-register) + password manager for values. | |
+| D-100 | 2026-11-06 | **Studio's sandbox runner first; GitHub Actions as backup + overflow** (Q55 B + A). No outside contributions until the sandbox runner passes security tests (F-22). | |
 
 ## State log (append-only)
 
@@ -180,6 +183,9 @@ modelling. Phase 1 (rails) is built; voice is next. Owner: Nowed.
   T67 guard layer, T68 Studio page, T69 original (T-node pre-existed). Open: Q44 (re-asked), Q47 (re-asked), Q49–Q52. Oracle account exists.
 - **2026-11-05 — mirror + in-house vision.** mirror.yml live (skips until GitLab set up). Oracle locked out (F-21) → deferred to after H1 (Q50 C).
   "9.5) C" read as Q52 C (confirm). New: T70 mirror, T71 pipeline, T72 sandbox runner; S46–S47; FLOW-release; Q53–Q55. Next build: hub (H1) locally.
+- **2026-11-06 — hub H1 built.** engine/crates/hub-core (7 tests) + hub/ (Cloudflare Workers + SQLite Durable Object), tested locally
+  (24 Studio events → 25 signed facts; dedupe; 401; restart). Reads gated (F-23); workflows-parse guard (F-24); hub-deploy waits for
+  Cloudflare secrets (Q57). GitLab = Morami49/clanstack-studio. Open: Q56 export route, Q57 Cloudflare setup, Q58 hub reads.
 
 ## File map
 - `schema/event.schema.json` — the contract.
