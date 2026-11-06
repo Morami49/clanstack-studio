@@ -2,8 +2,9 @@
 //! this file only moves bytes between HTTP, the Durable Object's SQLite storage and hub-core.
 //!
 //! GET  /health                 → "ok"
-//! GET  /status                 → counts + whether the whole chain verifies
-//! GET  /pull?after=N&limit=M   → events in this node's arrival order, from cursor N
+//! GET  /status  (Bearer token) → counts + whether the whole chain verifies
+//! GET  /pull    (Bearer token) → ?after=N&limit=M: events in this node's arrival order, from cursor N
+//! Reads need a token too (F-23): the record is not public. HUB_READ_TOKEN reads; HUB_WRITE_TOKEN reads and writes.
 //! POST /push    (Bearer token) → JSON array of signed engine events
 //! POST /import  (Bearer token) → JSON array of {doc_id, event} from Studio Web (D-095 stage A)
 
@@ -69,10 +70,16 @@ impl Record {
         Ok(())
     }
 
-    fn authorised(&self, req: &Request) -> bool {
-        let want = match self.env.secret("HUB_WRITE_TOKEN") { Ok(s) => s.to_string(), Err(_) => return false };
+    fn has_token(&self, req: &Request, name: &str) -> bool {
+        let want = match self.env.secret(name) { Ok(s) => s.to_string(), Err(_) => return false };
         let got = req.headers().get("authorization").ok().flatten().unwrap_or_default();
         !want.is_empty() && got == format!("Bearer {want}")
+    }
+    fn authorised(&self, req: &Request) -> bool {
+        self.has_token(req, "HUB_WRITE_TOKEN")
+    }
+    fn can_read(&self, req: &Request) -> bool {
+        self.authorised(req) || self.has_token(req, "HUB_READ_TOKEN")
     }
 }
 
@@ -86,6 +93,7 @@ impl DurableObject for Record {
         let url = req.url()?;
         let q = |k: &str| url.query_pairs().find(|(a, _)| a == k).and_then(|(_, v)| v.parse::<usize>().ok());
         match (req.method(), req.path().as_str()) {
+            (Method::Get, "/status" | "/pull") if !self.can_read(&req) => Response::error("unauthorised", 401),
             (Method::Get, "/status") => Response::from_json(&self.hub.borrow().as_ref().unwrap().status()),
             (Method::Get, "/pull") => {
                 let page = self.hub.borrow().as_ref().unwrap().pull(q("after").unwrap_or(0), q("limit").unwrap_or(500).min(2000));
