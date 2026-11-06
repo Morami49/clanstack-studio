@@ -6,8 +6,11 @@
 //!
 //! - `push`  : accept events in any order; the engine checks signatures, chains and authority.
 //! - `pull`  : serve events after a cursor (this node's arrival order), so any node can catch up.
-//! - `import`: stage A of D-095. Studio Web stays the original; each of its events is wrapped as a
-//!             signed fact by the hub's importer key, keeping the Studio doc id for dedupe.
+//! - `import`: Studio Web → hub. Each Studio Web event is wrapped as a signed fact by the hub's
+//!             importer key, keeping the Studio doc id for dedupe.
+//! - `to_studio`: hub → Studio Web (D-095 revised, Q44 "C now"). Writes made on other nodes
+//!             (kind `studio.write`) come back as Studio Web events with doc id `hub-<event id>`.
+//!             `import` skips those ids, so nothing loops (D-101). Both sides order by (ts, doc id).
 
 use foundation_core::event::{Event, Id, KeyPair, Realm};
 use foundation_core::store::{Reject, Store};
@@ -16,6 +19,13 @@ use serde_json::{json, Value};
 use std::collections::HashSet;
 
 pub const IMPORT_KIND: &str = "studio.event";
+/// A Studio-shaped write made on a node other than Studio Web (PC, phone, an AI via the hub).
+pub const WRITE_KIND: &str = "studio.write";
+
+/// The Studio Web doc id a hub write gets. Deterministic, so every node exports the same id.
+pub fn studio_doc_id(event_id: &str) -> String {
+    format!("hub-{}", &event_id[..event_id.len().min(32)])
+}
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Default)]
 pub struct PushResult {
@@ -47,6 +57,8 @@ pub struct Status {
 pub struct Hub {
     store: Store,
     imported: HashSet<String>,
+    /// Studio doc ids of this record's own `studio.write` facts: never re-imported (no loops).
+    exported: HashSet<String>,
 }
 
 impl Hub {
@@ -77,6 +89,9 @@ impl Hub {
         let added: Vec<Id> = self.store.order[before..].to_vec();
         for id in &added {
             let ev = &self.store.events[id];
+            if ev.u.kind == WRITE_KIND {
+                self.exported.insert(studio_doc_id(id));
+            }
             if ev.u.kind == IMPORT_KIND {
                 if let Some(d) = ev.u.body.get("doc_id").and_then(Value::as_str) {
                     self.imported.insert(d.to_string());
@@ -96,6 +111,20 @@ impl Hub {
 
     pub fn get(&self, id: &str) -> Option<&Event> {
         self.store.events.get(id)
+    }
+
+    /// Hub → Studio Web: `studio.write` facts after the cursor, as (doc id, Studio event) pairs.
+    /// Each Studio event keeps its own ts/kind/item/body/author and gains `origin` (the signer).
+    pub fn to_studio(&self, after: usize, limit: usize) -> (Vec<(String, Value)>, usize) {
+        let page = self.pull(after, limit);
+        let docs = page.events.iter().filter(|e| e.u.kind == WRITE_KIND).map(|e| {
+            let mut v = e.u.body.clone();
+            if let Some(o) = v.as_object_mut() {
+                o.insert("origin".into(), json!(e.u.author));
+            }
+            (studio_doc_id(&e.id), v)
+        }).collect();
+        (docs, page.next)
     }
 
     pub fn has_imported(&self, doc_id: &str) -> bool {
@@ -133,7 +162,8 @@ impl Hub {
             ta.cmp(tb).then(a.0.cmp(&b.0))
         });
         for (doc_id, ev) in docs {
-            if self.imported.contains(&doc_id) {
+            // already here, or it is one of our own writes coming back from Studio Web
+            if self.imported.contains(&doc_id) || self.exported.contains(&doc_id) {
                 continue;
             }
             let e = self.store.fact(k, IMPORT_KIND, json!({ "doc_id": doc_id, "event": ev }), Realm::Real, None, ts, &[])?;

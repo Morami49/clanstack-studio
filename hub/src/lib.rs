@@ -6,7 +6,9 @@
 //! GET  /pull    (Bearer token) → ?after=N&limit=M: events in this node's arrival order, from cursor N
 //! Reads need a token too (F-23): the record is not public. HUB_READ_TOKEN reads; HUB_WRITE_TOKEN reads and writes.
 //! POST /push    (Bearer token) → JSON array of signed engine events
-//! POST /import  (Bearer token) → JSON array of {doc_id, event} from Studio Web (D-095 stage A)
+//! POST /import  (Bearer token) → JSON array of {doc_id, event} from Studio Web
+//! GET  /studio-export (Bearer token) → ?after=N&limit=M: {docs:[{doc_id,event}], next}: writes made on other nodes,
+//!                       shaped as Studio Web events (Q44 "C now", D-101). /import skips them, so nothing loops.
 
 use foundation_core::event::{Event, KeyPair};
 use hub_core::Hub;
@@ -93,11 +95,16 @@ impl DurableObject for Record {
         let url = req.url()?;
         let q = |k: &str| url.query_pairs().find(|(a, _)| a == k).and_then(|(_, v)| v.parse::<usize>().ok());
         match (req.method(), req.path().as_str()) {
-            (Method::Get, "/status" | "/pull") if !self.can_read(&req) => Response::error("unauthorised", 401),
+            (Method::Get, "/status" | "/pull" | "/studio-export") if !self.can_read(&req) => Response::error("unauthorised", 401),
             (Method::Get, "/status") => Response::from_json(&self.hub.borrow().as_ref().unwrap().status()),
             (Method::Get, "/pull") => {
                 let page = self.hub.borrow().as_ref().unwrap().pull(q("after").unwrap_or(0), q("limit").unwrap_or(500).min(2000));
                 Response::from_json(&page)
+            }
+            (Method::Get, "/studio-export") => {
+                let (docs, next) = self.hub.borrow().as_ref().unwrap().to_studio(q("after").unwrap_or(0), q("limit").unwrap_or(500).min(2000));
+                let docs: Vec<serde_json::Value> = docs.into_iter().map(|(d, e)| serde_json::json!({"doc_id": d, "event": e})).collect();
+                Response::from_json(&serde_json::json!({"docs": docs, "next": next}))
             }
             (Method::Post, "/push") => {
                 if !self.authorised(&req) { return Response::error("unauthorised", 401); }

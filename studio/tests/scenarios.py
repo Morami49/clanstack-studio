@@ -393,10 +393,23 @@ async def s22_duplicate_id(b):
     return ok, f"title kept={title!=chr(73)+'mposter'} ({title[:30]!r}), history={hist}, duplicate write refused={refused is None}"
 
 
+async def s23_same_order_everywhere(b):
+    """Two nodes write to the same item at the same instant (Q44 C now). Every viewer must fold them in the same order."""
+    ts = "2026-11-06T10:00:00.000Z"
+    a = ev("item.edit", "D-001", {"title": "From Studio Web"}, ts=ts); a["_id"] = "claude-zz"
+    h = ev("item.edit", "D-001", {"title": "From the PC node"}, ts=ts); h["_id"] = "hub-aa"
+    seen = []
+    for order in ([a, h], [h, a]):
+        p = await open_page(b, Store(order), {})
+        seen.append(await p.evaluate("F.items.get('D-001').title"))
+    ok = seen[0] == seen[1]
+    return ok, f"titles by load order: {seen} (must match)"
+
+
 SCENARIOS = [s01_tired_misclick, s02_undo, s03_stable_codes, s04_past_view_lock, s05_branch_awareness, s06_view_only_client,
              s07_names, s08_long_history, s09_ai_relay, s10_keyboard_list, s11_offline_capture, s12_member_rights,
              s13_two_people_at_once, s14_phone, s15_undo_old_status, s16_overwhelm, s17_disagreement, s18_clock_skew, s19_private_area,
-             s20_addresses, s21_money_settings, s22_duplicate_id]
+             s20_addresses, s21_money_settings, s22_duplicate_id, s23_same_order_everywhere]
 
 
 async def main():

@@ -107,3 +107,35 @@ fn outsider_cannot_import_into_someone_elses_chain() {
     assert_eq!(r.added.len(), 1);
     assert_eq!(r.refused.len(), 1);
 }
+
+#[test]
+fn c_now_two_writers_merge_without_loops() {
+    // Q44 "C now": Studio Web and a PC node both write; each side ends with both writes, once.
+    let (imp, pc) = (key(9), key(2));
+    let mut hub = Hub::new();
+    // 1. Studio Web writes an answer; the export brings it in.
+    hub.import(&imp, vec![("claude-1".into(), json!({"ts": "2026-11-06T10:00:00.000Z", "kind": "answer", "item": "Q-x", "body": {"text": "A"}}))], 1).unwrap();
+    // 2. Nowed answers the same question on his PC node, offline, slightly later.
+    let mut s = Store::new();
+    let pc_evs = vec![
+        s.fact(&pc, "identity.genesis", json!({"label": "pc"}), Realm::Real, None, 1, &[]).unwrap(),
+        s.fact(&pc, WRITE_KIND, json!({"ts": "2026-11-06T10:05:00.000Z", "kind": "answer", "item": "Q-x", "body": {"text": "C now"}}), Realm::Real, None, 2, &[]).unwrap(),
+    ];
+    hub.push(pc_evs.clone());
+    // 3. Hub → Studio Web: only the PC write goes back, with a stable id and its origin.
+    let (docs, next) = hub.to_studio(0, 100);
+    assert_eq!(docs.len(), 1);
+    assert_eq!(docs[0].0, studio_doc_id(&pc_evs[1].id));
+    assert_eq!(docs[0].1["body"]["text"], "C now");
+    assert_eq!(docs[0].1["origin"], json!(pc.public));
+    assert_eq!(hub.to_studio(next, 100).0.len(), 0); // cursor: nothing new
+    // 4. Studio Web now holds that doc; the next export includes it. It must not be imported again.
+    let before = hub.status().events;
+    let back = hub.import(&imp, vec![docs[0].clone(), ("claude-1".into(), json!({"ts": "x"}))], 3).unwrap();
+    assert!(back.is_empty());
+    assert_eq!(hub.status().events, before);
+    // 5. Any other node rebuilt from the record knows the same, so no node loops either.
+    let (mut other, _) = Hub::restore(hub.pull(0, 100).events);
+    assert!(other.import(&imp, vec![docs[0].clone()], 4).is_ok());
+    assert_eq!(other.to_studio(0, 100).0, docs);
+}

@@ -244,7 +244,8 @@ const store = { get(k){ try { return localStorage.getItem("studio."+k); } catch 
 
 /* ---------------------------------------------------------------- private area (D-055): each person's own events, readable by nobody else */
 const privPath = () => S.me ? "data/users/" + S.me + "/vault/events" : null;
-function mergeEvents(){ S.events = [...S.shared, ...S.priv].sort((a,b)=>a.ts<b.ts?-1:a.ts>b.ts?1:0); }
+function mergeEvents(){ S.events = [...S.shared, ...S.priv].sort(byTsThenId); } // D-101: same order on every node
+function byTsThenId(a,b){ return a.ts<b.ts?-1:a.ts>b.ts?1:(a._id||"")<(b._id||"")?-1:(a._id||"")>(b._id||"")?1:0; }
 
 /* ---------------------------------------------------------------- permissions: one place decides what this viewer may do */
 const writable = () => !!S.db && !S.asof && S.canWrite !== false;
@@ -584,7 +585,7 @@ $("#capGo").onclick = async () => {
 /* ---------------------------------------------------------------- tree */
 function renderTree(){
   const bs = branches(); const names = Object.keys(bs);
-  const evs = [...S.events].sort((a,b)=>a.ts<b.ts?-1:1);
+  const evs = [...S.events].sort(byTsThenId);
   const W = Math.max(520, 140 + evs.length*22), lane = n => 26 + names.indexOf(n)*30, H = 30 + names.length*30;
   const xOf = ts => { const i = evs.findIndex(e=>e.ts>=ts); return 120 + (i<0?evs.length:i)*22; };
   let svg = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="Branches over time">`;
@@ -640,7 +641,7 @@ function show(v){ if (!VIEWS.includes(v)) v = "map"; S.view=v; document.querySel
   if (v==="map" && cy) cy.resize(); if (v==="capture") sizePad(); refreshView(); store.set("view", v); }
 document.querySelectorAll("#tabs button").forEach(b => b.onclick = () => show(b.dataset.v));
 $("#branch").onchange = e => { S.branch = e.target.value; refresh(); };
-$("#asof").oninput = e => { const evs=[...S.events].sort((a,b)=>a.ts<b.ts?-1:1); const v=+e.target.value;
+$("#asof").oninput = e => { const evs=[...S.events].sort(byTsThenId); const v=+e.target.value;
   S.asof = v>=evs.length ? null : (v===0 ? "0" : evs[v-1].ts); refresh(); };
 $("#theme").onclick = () => { const r=document.documentElement, dark=matchMedia("(prefers-color-scheme: dark)").matches;
   r.dataset.theme = (r.dataset.theme || (dark?"dark":"light"))==="dark" ? "light" : "dark"; renderMap(false); if (S.view==="tree") renderTree(); if (S.view==="capture") redraw(); };
