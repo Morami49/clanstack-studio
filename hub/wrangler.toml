@@ -1,0 +1,18 @@
+name = "clanstack-hub"
+main = "build/worker/shim.mjs"
+compatibility_date = "2026-10-01"
+
+[build]
+command = "cargo install -q worker-build && worker-build --release"
+
+[[durable_objects.bindings]]
+name = "RECORD"
+class_name = "Record"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Record"]
+
+# Secrets (set with `wrangler secret put`, never in this file):
+#   HUB_WRITE_TOKEN  bearer token required for /push and /import
+#   IMPORTER_SEED    64 hex chars: the importer key that signs Studio Web events (key register: Q52)
