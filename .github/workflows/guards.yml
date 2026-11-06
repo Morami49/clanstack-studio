@@ -13,6 +13,12 @@ jobs:
         with: {fetch-depth: 0}
       - uses: gitleaks/gitleaks-action@v3
         env: {GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"}
+  workflows-parse:
+    # F-24: a workflow file that doesn't parse fails silently on GitHub until its trigger fires.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: python3 -c "import glob,yaml; [yaml.safe_load(open(f)) for f in glob.glob('.github/workflows/*.yml')]; print('all workflows parse')"
   main-guard:
     # Main may only move to a commit that already passed CI on a branch.
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'

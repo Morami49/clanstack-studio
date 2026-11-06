@@ -25,7 +25,9 @@ jobs:
     steps:
       - name: Skip until Cloudflare is set up
         id: ready
-        run: if [ -z "$CLOUDFLARE_API_TOKEN" ]; then echo "Cloudflare not set up yet (Q57): skipping."; echo "go=no" >> $GITHUB_OUTPUT; else echo "go=yes" >> $GITHUB_OUTPUT; fi
+        working-directory: .
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then echo "Cloudflare not set up yet (Q57): skipping."; echo "go=no" >> "$GITHUB_OUTPUT"; else echo "go=yes" >> "$GITHUB_OUTPUT"; fi
       - if: steps.ready.outputs.go == 'yes'
         uses: actions/checkout@v7
         with: {ref: "${{ github.event.workflow_run.head_sha }}"}
