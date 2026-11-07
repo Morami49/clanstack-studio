@@ -114,6 +114,12 @@ modelling. Phase 1 (rails) is built; voice is next. Owner: Nowed.
 | D-101 | 2026-11-06 | **Two-way merge, no echoes, same order everywhere** (Q44 "C now", prompt edit 2): hub `studio.write` facts → Studio Web as `hub-<id>`; import skips them; all order by (ts, doc id). | df5127a; D-095 revised from A→C to C now. |
 | D-102 | 2026-11-06 | **Prompt edits are branches**: answers/replies record their edit; latest edit wins for intents; earlier edits' work stays as facts and is reconciled (kept/revised/reverted). | Proposed, Q59. F-25. |
 | D-103 | 2026-11-06 | **Hub re-checks Studio Web**; refusals return to Studio Web as visible notes. | Claude's call; build with export (Q56). |
+| D-104 | 2026-11-06 | **Hub becomes a claude.ai connector** (Q56 B), signing in with OAuth built into the hub (Q62 A). | After the hub is live. |
+| D-105 | 2026-11-06 | **Graded visibility** (Q58 B + nuance, Q61 A): 0 only me · 1 named people · 2 group/space · 3 link holders · 4 public listed; each can be partial. | Token holders only until built. |
+| D-106 | 2026-11-06 | **Walkthroughs stand on their own**: links, exact buttons, checks, reply codes; never "see earlier". | F-26. |
+| D-107 | 2026-11-06 | **Steps count as skipped until Nowed confirms** with a step code (W1.3); open steps are re-listed in full each reply. | SETUP-W1..W4. |
+| D-108 | 2026-11-06 | **Claude detects prompt edits itself** via the state stamp ending each reply (reply · last Studio event · main). | T82. |
+| D-109 | 2026-11-06 | **Real event times** in `recorded_at`; `ts` may be bumped for order. | F-27. |
 
 ## State log (append-only)
 
@@ -192,6 +198,8 @@ modelling. Phase 1 (rails) is built; voice is next. Owner: Nowed.
 - **2026-11-06 — prompt edit 2 reconciled.** Edit 1 (R-261106-1) built hub H1 and recorded Q44 = A; edit 2 changed Q44 to "C now".
   Kept edit 1's work; added two-way merge (hub-core 8/8, Studio Web 23/23, s23). Mirror + hub deploy still skip (no secrets).
   Open: Q56 (revised), Q57, Q58, Q59, Q60. Terms T76 prompt edit, T77 reconcile, T78 echo; S50–S51; FLOW-merge.
+- **2026-11-07 — setup progress.** Nowed confirmed W1 (Bitwarden) and W2 (HUB_WRITE_TOKEN; Cloudflare secrets in): this push is the hub's first real deploy.
+  W3 (two-step sign-in) open; W4 (GitLab mirror) at W4.3. Open: Q60, Q64, Q65.
 
 ## File map
 - `schema/event.schema.json` — the contract.
