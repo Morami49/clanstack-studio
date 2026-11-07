@@ -120,6 +120,15 @@ modelling. Phase 1 (rails) is built; voice is next. Owner: Nowed.
 | D-107 | 2026-11-06 | **Steps count as skipped until Nowed confirms** with a step code (W1.3); open steps are re-listed in full each reply. | SETUP-W1..W4. |
 | D-108 | 2026-11-06 | **Claude detects prompt edits itself** via the state stamp ending each reply (reply · last Studio event · main). | T82. |
 | D-109 | 2026-11-06 | **Real event times** in `recorded_at`; `ts` may be bumped for order. | F-27. |
+| D-110 | 2026-11-07 | **Each venture's resources live in its own container** (Q66 C): GitHub org, GitLab group, Cloudflare account, Bitwarden collection. | Order Q70 A. |
+| D-111 | 2026-11-07 | **No single person is load-bearing (stewardship)**: access moves to management/employee/partner profiles; founder cap on Nowed's *external* profile only. | Amended for prompt edit 2. |
+| D-112 | 2026-11-07 | **Approvals count people, not profiles** (Q72 A; CASE-01 Barings). | P-10. |
+| D-113 | 2026-11-07 | **Recovery**: personal email until Clanstack's domain; paper break-glass now, trusted contacts later. | Sheet done. |
+| D-114 | 2026-11-07 | **Legal entity at first revenue or first partner** (Q69 A); containers GitLab → Cloudflare → GitHub (Q70 A). | Not legal advice. |
+| D-115 | 2026-11-07 | **Index hierarchy L0–L6 adopted**; hierarchies and lenses themselves branch and merge (Q73 A). | VISION-0, P-01..P-10. |
+| D-116 | 2026-11-07 | **Mirror uses a project deploy key** (Q67 B, CASE-02); GitLab host key pinned. | 64dcd51; W4.3+ pending. |
+| D-117 | 2026-11-07 | **Chat index**: `scripts/chat_index.py` gives every prompt M-YYMMDD-n-eK with live/superseded, interruptions, reply code, mentions, sha256; texts private. Run each turn. | ca29a3b. |
+| D-118 | 2026-11-07 | **Merge policy**: index all past chats now (CHAT-*), merge content chat by chat as sourced proposals; conflicts become questions; unrelated personal/third-party content never copied. | Q79–Q81. |
 
 ## State log (append-only)
 
@@ -200,6 +209,10 @@ modelling. Phase 1 (rails) is built; voice is next. Owner: Nowed.
   Open: Q56 (revised), Q57, Q58, Q59, Q60. Terms T76 prompt edit, T77 reconcile, T78 echo; S50–S51; FLOW-merge.
 - **2026-11-07 — setup progress.** Nowed confirmed W1 (Bitwarden) and W2 (HUB_WRITE_TOKEN; Cloudflare secrets in): this push is the hub's first real deploy.
   W3 (two-step sign-in) open; W4 (GitLab mirror) at W4.3. Open: Q60, Q64, Q65.
+- **2026-11-07 — stewardship, index, chat merge.** W1–W3 + break-glass done; W4.1–W4.2 done (GitLab group); W4.3+ = deploy key.
+  Actions pinned to SHAs (F-34). Chat index built and run: this chat = 20 prompts, 13 messages, 5 edited, 7 superseded;
+  10 past chats registered (CHAT-*). F-37 earlier generations differ (Axum/Postgres/Leptos, six-node schema, CVU, n8n on OCI).
+  Open: Q76 (OSA), Q77 (next build), Q78 (productise method), Q79–Q81 (merge).
 
 ## File map
 - `schema/event.schema.json` — the contract.
