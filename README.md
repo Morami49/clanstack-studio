@@ -16,4 +16,4 @@ GitHub won't enforce branch rules on a private free repo, so main is protected i
 2. `scripts/hooks/pre-push` refuses a push to main without a green branch run (`git config core.hooksPath scripts/hooks`).
 3. `guards` workflow: `main-guard` fails and opens an issue if main ever moves to an untested commit; `secrets` scans history with gitleaks on every push and weekly.
 4. Dependabot keeps actions and dependencies current.
-5. `mirror` workflow copies each green main to a protected GitLab project (no force pushes), once `GITLAB_TOKEN` and `GITLAB_REPO` are set.
+5. `mirror` workflow copies each green main to a protected GitLab project (no force pushes), using a deploy key owned by the GitLab project (`GITLAB_DEPLOY_KEY` secret, `GITLAB_REPO` variable), with GitLab's host key pinned.
