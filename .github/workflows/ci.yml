@@ -5,35 +5,36 @@ jobs:
     runs-on: ubuntu-latest
     defaults: {run: {working-directory: engine}}
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with: {toolchain: stable}
       - run: cargo test -p foundation-core -p exchange-core -p hub-core
   hub:
     runs-on: ubuntu-latest
     defaults: {run: {working-directory: hub}}
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-        with: {targets: wasm32-unknown-unknown}
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with: {toolchain: stable, targets: wasm32-unknown-unknown}
       - run: cargo check --target wasm32-unknown-unknown
   actionmap:
     runs-on: ubuntu-latest
     defaults: {run: {working-directory: actionmap}}
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with: {python-version: "3.12"}
       - run: pip install -r requirements.txt
       - run: python -m tests.test_core
   studio:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with: {python-version: "3.12"}
       - run: pip install playwright && python -m playwright install --with-deps chromium
       - run: python studio/tests/scenarios.py studio/index.html
         env: {STUDIO_TEST_OUT: studio/tests/out}
       - if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with: {name: studio-scenarios, path: studio/tests/out}
