@@ -39,7 +39,9 @@ def read_hub(url: str, token: str) -> list[dict]:
         req = urllib.request.Request(url.rstrip("/") + "/mcp", method="POST", data=json.dumps(
             {"jsonrpc": "2.0", "id": i + 1, "method": "tools/call",
              "params": {"name": "read_events", "arguments": {"after": after, "limit": 200}}}).encode(),
-            headers={"authorization": f"Bearer {token}", "content-type": "application/json"})
+            # Cloudflare refuses Python's default client name (F-63), so name the executor
+            headers={"authorization": f"Bearer {token}", "content-type": "application/json",
+                     "accept": "application/json", "user-agent": "clanstack-policy/1 (+github actions)"})
         with urllib.request.urlopen(req, timeout=20) as r:
             page = json.load(r)["result"]["structuredContent"]
         docs += page.get("events") or []
@@ -70,7 +72,7 @@ def main(argv=None) -> int:
         try:
             studio = fold(read_hub(url, token), a.key)
         except Exception as e:  # the hub being down must not stop the executor; the platform copy decides
-            note = f" (hub unreadable: {type(e).__name__})"
+            note = f" (hub unreadable: {type(e).__name__} {getattr(e, 'code', '')})".replace(" )", ")")
     r = resolve(studio, a.platform, a.default)
     line = (f"Policy {a.key}: **{r['effective']}** — Studio: {r['studio']}{note}, platform: {r['platform']}"
             + (" — ⚠ DRIFT: the platform setting differs from Studio; Studio wins." if r["drift"] == "yes" else ""))
