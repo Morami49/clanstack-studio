@@ -269,8 +269,12 @@ async def s13_two_people_at_once(b):
     a = await open_page(b, st, {}); c = await open_page(b, st, {"me": "u_rad", "owner": False, "canEdit": False})
     for pg, txt in ((a, "A from Nowed"), (c, "B from Rad")):
         await pg.evaluate("select('Q-delegation')"); await pg.fill("#reply", txt)
-    await asyncio.gather(a.click("#sendAnswer"), c.click("#sendAnswer")); await a.wait_for_timeout(500)
-    na = await a.evaluate("F.items.get('Q-delegation').answers.length"); nc = await c.evaluate("F.items.get('Q-delegation').answers.length")
+    await asyncio.gather(a.click("#sendAnswer"), c.click("#sendAnswer"))
+    for _ in range(30):   # both writes travel to both pages; slow runners need more than 500 ms (CI flake 8 Nov)
+        await a.wait_for_timeout(100)
+        na = await a.evaluate("F.items.get('Q-delegation').answers.length"); nc = await c.evaluate("F.items.get('Q-delegation').answers.length")
+        if na == 2 and nc == 2:
+            break
     return na == 2 and nc == 2, f"answers seen: Nowed {na}, Rad {nc}"
 
 
