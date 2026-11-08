@@ -40,10 +40,15 @@ const listeners = [];
 window.__evs = C.paths || {events: C.events || []};
 window.__push = (path, evs) => { window.__evs[path] = evs; listeners.forEach(f => f()); };
 const mine = path => !path.startsWith("data/users/") || path.startsWith("data/users/" + C.me + "/");
-function query(path, dir, lim){
+function query(path, dir, lim, filt){
+  const rows = () => { let a=mine(path) ? [...(window.__evs[path]||[])] : []; if (filt) a = a.filter(filt);
+    a.sort((x,y)=>x.ts<y.ts?-1:x.ts>y.ts?1:0); if(dir==="desc")a.reverse(); if(lim)a=a.slice(0,lim); return a; };
   const q = {
-    orderBy:(f,d)=>query(path, d||"asc", lim), limit:n=>query(path, dir, n),
-    onSnapshot:(next, err)=>{ const f=()=>{ let a=mine(path) ? [...(window.__evs[path]||[])] : []; a.sort((x,y)=>x.ts<y.ts?-1:x.ts>y.ts?1:0); if(dir==="desc")a.reverse(); if(lim)a=a.slice(0,lim);
+    orderBy:(f,d)=>query(path, d||"asc", lim, filt), limit:n=>query(path, dir, n, filt),
+    where:(f,op,v)=>query(path, dir, lim, e => op==="<" ? e[f] < v : op===">" ? e[f] > v : e[f] === v),
+    get: async()=>{ const a = rows(); return {docs:a.map(snapOf), size:a.length, empty:!a.length}; },
+    doc: id => ({ set: async d => { if (C.readOnly || !mine(path)) throw {code:"invalid_argument", message:"no"}; await window.__bridgeAdd(path, {...d, _id:id}); } }),
+    onSnapshot:(next, err)=>{ const f=()=>{ const a = rows();
         next({docs:a.map(snapOf), size:a.length, empty:!a.length, metadata:{fromCache:false}, docChanges:()=>[]}); };
       listeners.push(f); setTimeout(f, 30); return ()=>{}; },
     add: async d => { if (C.failWrites) throw {code:"unavailable", message:"offline"}; if (C.readOnly || !mine(path)) throw {code:"invalid_argument", message:"no"};
@@ -57,6 +62,20 @@ window.claude = { use: async n => {
       profiles: async ids => Object.fromEntries(ids.map(i => [i, {id:i, name:(C.names||{})[i]||""}])), me: async()=>({id:C.me}) };
   if (n === "db") return { doc: p => ({ onSnapshot:(next)=>{ setTimeout(()=>next({exists:true, data:()=>C.genesis, metadata:{fromCache:false}}), 20); return ()=>{}; } }),
                            collection: p => query(p, "asc", null) };
+  if (n === "mcp" && C.hub) {
+    // A stand-in for the Clanstack hub connector: read_events pages by cursor, import skips doc ids it has.
+    const H = C.hub; H.calls = [];
+    return { callTool: async (server, tool, input) => {
+      H.calls.push(tool); window.__hubCalls = H.calls;
+      if (server !== "Clanstack hub") throw {code:"server_not_connected"};
+      if (H.fail) throw {code:H.fail};
+      if (tool === "read_events") { const after = input.after||0, lim = input.limit||100, page = H.docs.slice(after, after+lim);
+        return {payload:{events:page, next:after+page.length, total:H.docs.length}}; }
+      if (tool === "import_studio_events") { let n = 0; for (const d of input.docs) if (!H.docs.some(x => x.doc_id === d.doc_id)) { H.docs.push(d); n++; }
+        window.__hubDocs = H.docs.map(x => x.doc_id); return {payload:{imported:n, already_there:input.docs.length-n}}; }
+      if (tool === "hub_status") return {payload:{events:H.docs.length, imported_studio_events:H.docs.length, verified:true, detail:"", build:"test"}};
+      throw {code:"tool_error", message:"unknown tool"}; } };
+  }
   return null; } };
 })();
 """
@@ -406,10 +425,52 @@ async def s23_same_order_everywhere(b):
     return ok, f"titles by load order: {seen} (must match)"
 
 
+async def s24_hub_sync(b):
+    """Nowed syncs Studio with the hub (D-129): missing changes go up with their authors, hub writes come down, and a second sync changes nothing."""
+    e1 = ev("comment", "D-001", {"text": "one"}, ts="2026-11-08T10:00:00.000Z"); e1["_id"] = "claude-a1"
+    e2 = ev("comment", "D-001", {"text": "two"}, who="claude", label="Claude", ts="2026-11-08T10:01:00.000Z"); e2["_id"] = "claude-a2"
+    hubw = {"ts": "2026-11-08T10:02:00.000Z", "kind": "comment", "item": "D-001", "branch": "main", "body": {"text": "from Claude via hub"},
+            "author": {"id": "github:Morami49", "label": "Morami49", "role": "owner"}, "via": "claude-connector"}
+    hub = {"docs": [{"doc_id": "claude-a1", "event": {k: v for k, v in e1.items() if k != "_id"}}, {"doc_id": "hub-xyz", "event": hubw}]}
+    st = Store([e1, e2]); p = await open_page(b, st, {"hub": hub})
+    await p.click("#tabs button[data-v=hub]"); await p.click("#hubSync"); await p.wait_for_timeout(900)
+    note1 = await p.inner_text("#hubNote")
+    hub_ids = await p.evaluate("window.__hubDocs || []")
+    came = any(e.get("_id") == "hub-xyz" for e in st.events)
+    await p.click("#hubSync"); await p.wait_for_timeout(900)
+    note2 = await p.inner_text("#hubRuns")
+    ok = ("1 copied" in note1 and "1 brought here" in note1 and "claude-a2" in hub_ids and came
+          and "0 copied" in note2 and not p.errors)
+    return ok, f"first: {note1[:90]!r}; hub has a2={'claude-a2' in hub_ids}; hub write landed={came}; second run recorded 0 copied={'0 copied' in note2}"
+
+
+async def s25_more_than_1000(b):
+    """A Studio with more than 1,000 changes (F-62). The oldest item must not drop out of the fold."""
+    first = ev("item.create", None, {"id": "D-900", "type": "decision", "title": "Oldest", "body": "x", "status": "agreed"},
+               ts="2026-01-01T00:00:00.000Z")
+    rest = [ev("comment", "D-001", {"text": str(i)}, ts=f"2026-02-01T00:{i//60:02d}:{i%60:02d}.000Z") for i in range(1005)]
+    for i, e in enumerate(rest): e["_id"] = f"c{i:05d}"
+    p = await open_page(b, Store([first] + rest), {}); await p.wait_for_timeout(800)
+    has = await p.evaluate("F.items.has('D-900')")
+    n = await p.evaluate("S.events.length")
+    ok = has and n == 1006 and not p.errors
+    return ok, f"oldest item present={has}, changes folded={n}/1006"
+
+
+async def s26_hub_not_connected(b):
+    """Someone opens the Hub view without the connector. They must be told exactly how to fix it, and nothing breaks."""
+    p = await open_page(b, Store([]), {"hub": {"docs": [], "fail": "server_not_connected"}})
+    await p.click("#tabs button[data-v=hub]"); await p.click("#hubSync"); await p.wait_for_timeout(500)
+    note = await p.inner_text("#hubNote")
+    ok = "Settings" in note and "Connectors" in note and not p.errors
+    return ok, f"message: {note[:100]!r}"
+
+
 SCENARIOS = [s01_tired_misclick, s02_undo, s03_stable_codes, s04_past_view_lock, s05_branch_awareness, s06_view_only_client,
              s07_names, s08_long_history, s09_ai_relay, s10_keyboard_list, s11_offline_capture, s12_member_rights,
              s13_two_people_at_once, s14_phone, s15_undo_old_status, s16_overwhelm, s17_disagreement, s18_clock_skew, s19_private_area,
-             s20_addresses, s21_money_settings, s22_duplicate_id, s23_same_order_everywhere]
+             s20_addresses, s21_money_settings, s22_duplicate_id, s23_same_order_everywhere,
+             s24_hub_sync, s25_more_than_1000, s26_hub_not_connected]
 
 
 async def main():

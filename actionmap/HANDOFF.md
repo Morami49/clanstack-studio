@@ -146,6 +146,9 @@ modelling. Phase 1 (rails) is built; voice is next. Owner: Nowed.
 | D-133 | 2026-11-08 | **Every action has an approval policy** (Q94 A): auto, ask a person, or off; approvals count people (P-10); every run leaves an audit record. Only reversible actions may run on auto (P-12). First instance: Branch cleanup workflow (person starts it; preview by default). | Claude's own branch deletes are refused (HTTP 403, F-53); not worked around. |
 | D-134 | 2026-11-08 | **Build order** (Q95 A then B): D-129 Studio Web ↔ hub sync, then safe repeat writes (F-48) and unknown-item warnings (F-47). | |
 | D-135 | 2026-11-08 | **Automate the doing, never the knowing** (Q94 edit 2, P-13): every automated run leaves a record a person can read and replay — what ran, why, which policy allowed it, inputs, result, undo — so manual work shrinks while understanding and reproducibility grow. | Applies to D-133 policies and every Studio flow. |
+| D-136 | 2026-11-08 | **Executors, not borrowed hands** (answers "how can 1.3 be prevented for all connections"): Claude's sessions keep their own safety refusals; destructive or outside actions run in the platform that owns them (GitHub Actions, the hub, Cloudflare) under a person-set policy, with scoped credentials and a run record. Claude proposes and prepares; executors act. | Branch cleanup is the first executor. |
+| D-137 | 2026-11-08 | **Policies are configurable presets** (Q97, Q98 "combination, configurable"): retention windows and approval defaults are settings per purpose or action type, with A/B/C as named presets that can be mixed; every change is versioned. | First: POLICY_BRANCH_CLEANUP (ask/auto/off). |
+| D-138 | 2026-11-08 | **Studio ↔ hub sync built** (D-129, Q99 A): Studio Web's Hub view copies shared changes into the hub with their original authors (importer key vouches) and brings hub writes back; repeat-safe. | import_studio_events tool; Studio v0.4. |
 
 ## State log (append-only)
 
@@ -245,6 +248,9 @@ modelling. Phase 1 (rails) is built; voice is next. Owner: Nowed.
 - **2026-11-08 — Q94 edited (M-261108-11-e2).** Edit 1's work stands (f565a43, Studio q01–q23); edit 2 adds P-13/D-135.
   F-59: the chat index numbered that edit as a new message after carrying the prior index forward; fixed, test added.
   F-60: edit 1's reply quoted an M-Trends 2026 median dwell time that could not be re-verified; withdrawn.
+- **2026-11-08 — W10 ran three previews, deleted nothing (F-61).** The workflow's default was preview and the run looked green.
+  Now runs are named by mode, preview warns loudly, and POLICY_BRANCH_CLEANUP=auto lets it run itself after each push to main.
+  F-62: Studio Web only subscribed to its newest 1,000 changes (≈810 used); it now reads older pages once. D-129 sync built (D-138).
 
 ## File map
 - `schema/event.schema.json` — the contract.

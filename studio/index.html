@@ -110,7 +110,7 @@ pre.pack{white-space:pre-wrap;background:var(--raise);border:1px solid var(--lin
 </style>
 
 <header>
-  <div class="brand"><h1>Clanstack Studio</h1><span class="ver" id="ver">v0.3</span></div>
+  <div class="brand"><h1>Clanstack Studio</h1><span class="ver" id="ver">v0.4</span></div>
   <nav id="tabs" aria-label="Views">
     <button data-v="map" aria-current="true">Map</button>
     <button data-v="list">List</button>
@@ -119,6 +119,7 @@ pre.pack{white-space:pre-wrap;background:var(--raise);border:1px solid var(--lin
     <button data-v="tree">Tree</button>
     <button data-v="pack">Pack</button>
     <button data-v="money">Money</button>
+    <button data-v="hub">Hub</button>
   </nav>
   <form id="goForm" class="row" style="gap:4px" role="search"><input id="goAddr" class="mono" placeholder="Go to: D-063@2 · R-261105-2#3.1 · repo/sha:path#L10" aria-label="Go to an address" style="width:300px;max-width:100%"><button>Go</button></form>
   <span class="spacer"></span>
@@ -215,6 +216,16 @@ pre.pack{white-space:pre-wrap;background:var(--raise);border:1px solid var(--lin
     </div>
   </section>
 
+  <section class="view" id="v-hub" hidden>
+    <div class="stack" style="max-width:860px">
+      <h2>Hub sync</h2>
+      <p class="mute" style="margin:0">The hub is Clanstack's always-on shared record (D-129). Sync copies this Studio's shared changes into the hub with their own authors, and brings back changes made through the hub, such as answers Claude wrote with the connector. Private items never leave this Studio. Uses your Clanstack hub connector; claude.ai may ask you to allow it.</p>
+      <div class="row"><button class="primary" id="hubSync">Sync now</button><button id="hubCheck">Check hub</button><span class="mute" id="hubNote"></span></div>
+      <div class="card"><h3>Hub</h3><div id="hubStatus" class="mono" style="font-size:13px;line-height:1.7">Not checked yet.</div></div>
+      <div class="card"><h3>Sync runs on this device</h3><ul class="log" id="hubRuns"></ul></div>
+    </div>
+  </section>
+
   <section class="view" id="v-pack" hidden>
     <div class="stack" style="max-width:860px">
       <h2>Context pack</h2>
@@ -244,7 +255,9 @@ const store = { get(k){ try { return localStorage.getItem("studio."+k); } catch 
 
 /* ---------------------------------------------------------------- private area (D-055): each person's own events, readable by nobody else */
 const privPath = () => S.me ? "data/users/" + S.me + "/vault/events" : null;
-function mergeEvents(){ S.events = [...S.shared, ...S.priv].sort(byTsThenId); } // D-101: same order on every node
+function mergeEvents(){ // F-62: older pages + live window, one copy per doc id
+  const m = new Map(); for (const e of [...(S.older||[]), ...S.shared]) m.set(e._id, e);
+  S.events = [...m.values(), ...S.priv].sort(byTsThenId); } // D-101: same order on every node
 function byTsThenId(a,b){ return a.ts<b.ts?-1:a.ts>b.ts?1:(a._id||"")<(b._id||"")?-1:(a._id||"")>(b._id||"")?1:0; }
 
 /* ---------------------------------------------------------------- permissions: one place decides what this viewer may do */
@@ -369,7 +382,7 @@ function renderBanners(){
   if (S.asof) b.push(`<div class="banner"><b>Viewing ${S.asof==="0"?"the genesis record":"as of "+esc(S.asof.slice(0,16).replace("T"," "))}.</b> Nothing can be changed from the past. <button id="toLive">Return to live</button></div>`);
   if (S.branch !== "main") b.push(`<div class="banner">You're on branch <b class="mono">${esc(S.branch)}</b>. Changes here stay on this branch until it's merged into main. <button id="toMain">Back to main</button></div>`);
   if (S.canWrite === false) b.push(`<div class="banner"><b>View only.</b> You can read everything and copy the context pack, but not change anything. Ask the owner for Contributor access to answer.</div>`);
-  if (S.windowFull) b.push(`<div class="banner">This Studio shows its latest 1,000 changes live. Older ones are still kept. Ask Claude to make a checkpoint so nothing drops out of the live view.</div>`);
+  if (S.windowFull && S.olderState==="failed") b.push(`<div class="banner">This Studio has more than 1,000 changes and the older ones couldn't be loaded just now, so some items may look out of date. Reload to try again.</div>`);
   $("#banners").innerHTML = b.join("");
   const l = $("#toLive"); if (l) l.onclick = () => { S.asof = null; refresh(); };
   const m = $("#toMain"); if (m) m.onclick = () => { S.branch = "main"; refresh(); };
@@ -634,8 +647,107 @@ $("#packPriv").onchange = renderPack;
 $("#copyPack").onclick = async () => { try { await navigator.clipboard.writeText($("#pack").textContent); $("#packNote").textContent="Copied."; }
   catch { const r=document.createRange(); r.selectNodeContents($("#pack")); const s=getSelection(); s.removeAllRanges(); s.addRange(r); $("#packNote").textContent="Selected — copy it with your keyboard."; } };
 
+/* ---------------------------------------------------------------- older changes (F-62) */
+// The live subscription carries the newest 1,000 changes; older ones are read once, page by page, so nothing drops out.
+async function loadOlder(){
+  if (S.olderState) return; S.olderState = "loading"; S.older = [];
+  try {
+    let oldest = S.shared.length ? S.shared[S.shared.length-1].ts : null;
+    for (let page = 0; oldest && page < 50; page++){
+      const q = await S.db.collection("events").where("ts","<",oldest).orderBy("ts","desc").limit(1000).get();
+      const docs = q.docs.map(d => ({_id:d.id, ...d.data()}));
+      S.older.push(...docs);
+      if (docs.length < 1000) break;
+      oldest = docs[docs.length-1].ts;
+    }
+    S.olderState = "done";
+  } catch { S.olderState = "failed"; }
+  mergeEvents(); refresh();
+}
+
+/* ---------------------------------------------------------------- hub sync (D-129) */
+const HUB = "Clanstack hub";
+S.hubRuns = []; S.hubBusy = false;
+try { S.hubRuns = JSON.parse(localStorage.getItem("hubRuns")||"[]"); } catch {}
+const HUB_FIX = {
+  server_not_connected: `Add the ${HUB} connector in claude.ai Settings → Connectors, then try again.`,
+  needs_reauth: `Reconnect ${HUB} in claude.ai Settings → Connectors.`,
+  selection_required: `You have more than one connector named ${HUB}; choose one when claude.ai asks.`,
+  not_in_manifest: "Hub access is turned off for this page. Allow it in this artifact's permissions.",
+  blocked_by_policy: "Your organisation's policy blocks this hub tool.",
+  approval_required: "The hub call needs your approval. Press the button again and allow it when asked.",
+  not_granted: "This view can't use connectors. Open the Studio in claude.ai.",
+  capability_disabled: "This view can't use connectors. Open the Studio in claude.ai.",
+  capability_removed: "This view can't use connectors. Open the Studio in claude.ai.",
+  server_unavailable: "The hub didn't answer in time. Try again in a minute.",
+  tool_error: "The hub refused the request."
+};
+function hubError(e){ return (HUB_FIX[e?.code] || `The hub call failed (${e?.code||"unknown"}).`) + (e?.code==="tool_error" && e.message ? " " + e.message : ""); }
+async function hubTool(tool, input){
+  if (!S.mcp) throw {code:"not_granted"};
+  const r = await S.mcp.callTool(HUB, tool, input, {cache:false});
+  return r.payload ?? {};
+}
+function saveRuns(){ try { localStorage.setItem("hubRuns", JSON.stringify(S.hubRuns.slice(0,20))); } catch {} }
+function renderHub(){
+  $("#hubSync").disabled = S.hubBusy || !S.db; $("#hubCheck").disabled = S.hubBusy;
+  const L = $("#hubRuns"); L.replaceChildren();
+  if (!S.hubRuns.length){ const li = document.createElement("li"); li.textContent = "No syncs from this device yet."; L.append(li); }
+  for (const r of S.hubRuns){ const li = document.createElement("li"), t = document.createElement("span"), d = document.createElement("span");
+    t.className = "mono mute"; t.textContent = r.at.replace("T"," ").slice(0,19); d.textContent = r.text; li.append(t, d); L.append(li); }
+}
+async function hubCheck(quiet){
+  S.hubBusy = true; renderHub(); if (!quiet) $("#hubNote").textContent = "Checking…";
+  try { const st = await hubTool("hub_status", {});
+    $("#hubStatus").textContent = `${st.events} events · ${st.imported_studio_events} copied from Studio · chain ${st.verified ? "verified" : "NOT verified: " + st.detail} · build ${st.build||"?"}`;
+    if (!quiet) $("#hubNote").textContent = ""; }
+  catch(e){ $("#hubNote").textContent = hubError(e); }
+  S.hubBusy = false; renderHub();
+}
+async function hubSync(){
+  if (S.asof){ toast("You're looking at the past. Return to live to sync."); return; }
+  S.hubBusy = true; renderHub(); const note = $("#hubNote"), at = new Date().toISOString();
+  let pulled = 0, pushed = 0, already = 0, step = "reading the hub";
+  try {
+    // 1) everything the hub holds, from the start (read_events pages by cursor)
+    const hub = new Map(); let after = 0;
+    for (let i = 0; i < 500; i++){
+      note.textContent = `Reading the hub… ${hub.size}`;
+      const p = await hubTool("read_events", {after, limit:200});
+      for (const x of p.events || []) if (x && x.doc_id) hub.set(x.doc_id, x.event);
+      if (p.next == null || p.next <= after || p.next >= p.total) break;
+      after = p.next;
+    }
+    // 2) hub → Studio: changes made through the hub (they carry "via") that this Studio lacks
+    step = "saving hub changes here";
+    const have = new Set([...(S.older||[]), ...S.shared].map(e => e._id));
+    for (const [id, ev] of hub){
+      if (have.has(id) || !ev || !ev.via) continue;
+      note.textContent = `Bringing hub changes here… ${pulled}`;
+      await S.db.collection("events").doc(id).set(ev); pulled++;
+    }
+    // 3) Studio → hub: shared changes the hub lacks, oldest first, 100 per call (Q99 A: authors kept)
+    step = "copying changes to the hub";
+    const missing = [...(S.older||[]), ...S.shared].filter(e => !hub.has(e._id)).sort(byTsThenId)
+      .map(({_id, ...ev}) => ({doc_id:_id, event:ev}));
+    for (let i = 0; i < missing.length; i += 100){
+      note.textContent = `Copying to the hub… ${i}/${missing.length}`;
+      const r = await hubTool("import_studio_events", {docs: missing.slice(i, i+100)});
+      pushed += r.imported || 0; already += r.already_there || 0;
+    }
+    const text = `Synced: ${pushed} copied to the hub${already ? ` (${already} were already there)` : ""}, ${pulled} brought here. Hub holds ${hub.size + pushed} Studio changes.`;
+    S.hubRuns.unshift({at, text}); note.textContent = text;
+  } catch(e){
+    const text = `Stopped while ${step}: ${hubError(e)}${pushed||pulled ? ` Done before stopping: ${pushed} copied, ${pulled} brought here; syncing again carries on safely.` : ""}`;
+    S.hubRuns.unshift({at, text}); note.textContent = text;
+  }
+  saveRuns(); S.hubBusy = false; renderHub(); hubCheck(true);
+}
+$("#hubSync").onclick = hubSync;
+$("#hubCheck").onclick = () => hubCheck(false);
+
 /* ---------------------------------------------------------------- views + time */
-const VIEWS = ["map","list","ask","capture","tree","pack","money"];
+const VIEWS = ["map","list","ask","capture","tree","pack","money","hub"];
 function show(v){ if (!VIEWS.includes(v)) v = "map"; S.view=v; document.querySelectorAll("#tabs button").forEach(b=>b.setAttribute("aria-current", b.dataset.v===v));
   for (const x of VIEWS) $("#v-"+x).hidden = x!==v;
   if (v==="map" && cy) cy.resize(); if (v==="capture") sizePad(); refreshView(); store.set("view", v); }
@@ -645,7 +757,7 @@ $("#asof").oninput = e => { const evs=[...S.events].sort(byTsThenId); const v=+e
   S.asof = v>=evs.length ? null : (v===0 ? "0" : evs[v-1].ts); refresh(); };
 $("#theme").onclick = () => { const r=document.documentElement, dark=matchMedia("(prefers-color-scheme: dark)").matches;
   r.dataset.theme = (r.dataset.theme || (dark?"dark":"light"))==="dark" ? "light" : "dark"; renderMap(false); if (S.view==="tree") renderTree(); if (S.view==="capture") redraw(); };
-function refreshView(){ if (S.view==="map") renderMap(false); if (S.view==="list") renderList(); if (S.view==="ask") renderAsk(); if (S.view==="tree") renderTree(); if (S.view==="pack") renderPack(); if (S.view==="money") renderMoney(); }
+function refreshView(){ if (S.view==="map") renderMap(false); if (S.view==="list") renderList(); if (S.view==="ask") renderAsk(); if (S.view==="tree") renderTree(); if (S.view==="pack") renderPack(); if (S.view==="money") renderMoney(); if (S.view==="hub") renderHub(); }
 function refresh(){
   if (S.bulk) return;   // a bulk action redraws once at the end
   CODES = stableCodes(); F = fold();
@@ -738,6 +850,7 @@ for (const id of ["calcAmt","calcSales","calcClass"]) $("#"+id).oninput = render
   const timer = setTimeout(() => { $("#conn").textContent = "can't reach the store yet"; }, 10000);
   if (!window.claude?.use){ clearTimeout(timer); $("#conn").textContent = "offline preview"; return; }
   const [db, user] = await Promise.all([window.claude.use("db"), window.claude.use("user")]);
+  window.claude.use("mcp").then(m => { S.mcp = m; if (S.view==="hub") renderHub(); }).catch(() => {});
   if (!db){ clearTimeout(timer); $("#conn").textContent = "sign in to load"; return; }
   S.db = db; S.user = user;
   if (user){
@@ -754,7 +867,7 @@ for (const id of ["calcAmt","calcSales","calcClass"]) $("#"+id).oninput = render
   // Newest 1,000 changes, so the latest always show; older ones stay stored (checkpoints will fold them in).
   db.collection("events").orderBy("ts","desc").limit(1000).onSnapshot(q => {
       S.shared = q.docs.map(d => ({_id:d.id, ...d.data()}));
-      S.windowFull = q.size >= 1000; mergeEvents(); refresh(); loadNames(); },
+      S.windowFull = q.size >= 1000; if (S.windowFull) loadOlder(); mergeEvents(); refresh(); loadNames(); },
     () => { $("#conn").textContent = "changes unavailable"; });
   if (privPath()) db.collection(privPath()).orderBy("ts","desc").limit(1000).onSnapshot(q => {
       S.priv = q.docs.map(d => ({_id:d.id, _private:true, ...d.data()})); mergeEvents(); refresh(); }, () => {});

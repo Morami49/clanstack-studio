@@ -177,7 +177,7 @@ fn mcp_initialize_list_and_tools() {
     assert!(handle(&mut hub, "Morami49", &key, &json!({"jsonrpc": "2.0", "method": "notifications/initialized"}), T0).is_none());
     let tools = handle(&mut hub, "Morami49", &key, &json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}), T0).unwrap();
     let names: Vec<&str> = tools["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
-    assert_eq!(names, ["hub_status", "read_events", "hub_log", "write_event"]);
+    assert_eq!(names, ["hub_status", "read_events", "hub_log", "import_studio_events", "write_event"]);
 
     let call = |hub: &mut Hub, name: &str, args: Value| handle(hub, "Morami49", &key, &json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": name, "arguments": args}}), T0 + 60_000).unwrap()["result"].clone();
     let w = call(&mut hub, "write_event", json!({"kind": "answer", "item": "Q-duress", "body": {"code": "Q86", "text": "A"}}));
@@ -222,4 +222,27 @@ fn f46_pull_with_unbounded_limit_after_writes_does_not_panic() {
     assert_eq!(hub.pull(usize::MAX, usize::MAX).events.len(), 0);
     let st = handle(&mut hub, "Morami49", &key, &json!({"jsonrpc": "2.0", "id": 9, "method": "tools/call", "params": {"name": "hub_status", "arguments": {}}}), T0).unwrap();
     assert_eq!(st["result"]["structuredContent"]["events"], 3); // connector identity + 2 writes
+}
+
+#[test]
+fn import_docs_checks_input_and_import_keeps_authors() {
+    use hub_core::mcp::import_docs;
+    assert!(import_docs(&json!({})).is_err());
+    assert!(import_docs(&json!({"docs": []})).is_err());
+    assert!(import_docs(&json!({"docs": [{"doc_id": "a/b", "event": {"ts": "x", "kind": "comment"}}]})).is_err());
+    assert!(import_docs(&json!({"docs": [{"doc_id": "a", "event": {"kind": "comment"}}]})).is_err());
+    let ev = json!({"ts": "2026-11-08T22:19:01.000Z", "kind": "comment", "item": "F-58", "branch": "main",
+                    "author": {"id": "claude", "label": "Claude", "role": "agent"}, "body": {"text": "hi"}});
+    let docs = import_docs(&json!({"docs": [{"doc_id": "claude-11082219-q01", "event": ev}]})).unwrap();
+    let mut hub = Hub::new();
+    let importer = KeyPair::from_seed([7u8; 32]);
+    let made = hub.import(&importer, docs.clone(), T0).unwrap();
+    assert_eq!(made.len(), 2); // importer identity + the event
+    assert_eq!(hub.import(&importer, docs, T0).unwrap().len(), 0); // repeating is safe
+    let key = KeyPair::from_seed([9u8; 32]);
+    let r = handle(&mut hub, "Morami49", &key, &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": "read_events", "arguments": {"after": 0}}}), T0).unwrap();
+    let got = &r["result"]["structuredContent"]["events"][0];
+    assert_eq!(got["doc_id"], "claude-11082219-q01");
+    assert_eq!(got["event"]["author"]["id"], "claude"); // Q99 A: original author kept
 }

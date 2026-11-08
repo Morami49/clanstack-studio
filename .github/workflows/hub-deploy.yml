@@ -82,7 +82,7 @@ jobs:
           # twice in a row on purpose: the second call is what crashed before F-46 was fixed
           for i in 1 2; do
             rpc '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}' | grep -q '"protocolVersion"'
-            rpc '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' | grep -q '"write_event"'
+            rpc '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' | grep -q '"import_studio_events"'
             rpc '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"hub_status","arguments":{}}}' | grep -q '"verified":true'
             rpc '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"read_events","arguments":{"after":0,"limit":5}}}' | grep -q '"next"'
           done

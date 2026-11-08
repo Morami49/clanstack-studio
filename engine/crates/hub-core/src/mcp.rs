@@ -5,6 +5,7 @@
 //!   hub_status   counts and whether the whole chain verifies
 //!   read_events  Studio-shaped events from a cursor: imported Studio Web events + writes from other nodes
 //!   hub_log      (served by the node, not here) the private request log: time, tool, outcome, duration; never contents
+//!   import_studio_events  (served by the node) Studio Web's events copied in with their own authors (D-129, Q99 A)
 //!   write_event  add a Studio-shaped event (answer, comment, status, item.create, item.edit, link),
 //!                signed by the connector key; it reaches Studio Web through /studio-export (D-101)
 
@@ -50,6 +51,12 @@ fn tools() -> Value {
          "description": "The hub's private request log, newest first: time, route, tool, outcome, ms waiting on network or storage, who (login) and build. Never contents. Includes this call. Use it to time tests and see failed calls.",
          "inputSchema": {"type": "object", "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 200}}},
          "annotations": {"readOnlyHint": true}},
+        {"name": "import_studio_events", "title": "Import Studio events",
+         "description": "Copy Studio Web events into the hub's shared record, keeping each event's original author (Q99 A); the hub's importer key signs the copy. Doc ids already in the hub are skipped, so repeating is safe. Used by Studio Web's sync (D-129).",
+         "inputSchema": {"type": "object", "required": ["docs"], "properties": {
+             "docs": {"type": "array", "maxItems": 200, "items": {"type": "object", "required": ["doc_id", "event"], "properties": {
+                 "doc_id": {"type": "string"}, "event": {"type": "object"}}}}}},
+         "annotations": {"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true}},
         {"name": "write_event", "title": "Write a Studio event",
          "description": "Add an event to the shared Clanstack record, e.g. an answer to a question, a comment, a status change or a new item. It appears in Studio Web on its next sync. Never use for private material.",
          "inputSchema": {"type": "object", "required": ["kind", "body"], "properties": {
@@ -59,6 +66,28 @@ fn tools() -> Value {
          "annotations": {"readOnlyHint": false, "destructiveHint": false}}
     ])
 }
+
+/// Check and unpack `import_studio_events` input: 1..=200 docs, each a doc id (1-200 chars from the
+/// Studio id alphabet) and an event object with a string `ts` and `kind`. Returns the docs or an error text.
+pub fn import_docs(args: &Value) -> Result<Vec<(String, Value)>, String> {
+    let docs = args.get("docs").and_then(Value::as_array).ok_or("docs must be an array")?;
+    if docs.is_empty() || docs.len() > 200 { return Err("send 1 to 200 docs per call".into()); }
+    let mut out = Vec::with_capacity(docs.len());
+    for (i, d) in docs.iter().enumerate() {
+        let id = d.get("doc_id").and_then(Value::as_str).unwrap_or("");
+        let ok_id = !id.is_empty() && id.len() <= 200 && id.chars().all(|c| c.is_ascii_alphanumeric() || "_-.~:@+".contains(c));
+        let ev = d.get("event").filter(|e| e.is_object()).ok_or(format!("docs[{i}].event must be an object"))?;
+        if !ok_id { return Err(format!("docs[{i}].doc_id is not a Studio doc id")); }
+        if ev.get("ts").and_then(Value::as_str).is_none() || ev.get("kind").and_then(Value::as_str).is_none() {
+            return Err(format!("docs[{i}].event needs ts and kind"));
+        }
+        out.push((id.to_string(), ev.clone()));
+    }
+    Ok(out)
+}
+
+/// The result envelope for a tool answer (used by the node for the tools it serves itself).
+pub fn tool_result(v: Value, is_error: bool) -> Value { text_result(v, is_error) }
 
 fn text_result(v: Value, is_error: bool) -> Value {
     json!({"content": [{"type": "text", "text": v.to_string()}], "structuredContent": v, "isError": is_error})
@@ -71,7 +100,7 @@ fn call(hub: &mut Hub, login: &str, key: &KeyPair, name: &str, args: &Value, now
             if let Some(o) = v.as_object_mut() { o.insert("build".into(), json!(BUILD)); }
             text_result(v, false)
         }
-        "hub_log" => text_result(json!({"error": "hub_log is served by the node, not hub-core"}), true),
+        "hub_log" | "import_studio_events" => text_result(json!({"error": format!("{name} is served by the node, not hub-core")}), true),
         "read_events" => {
             let after = args.get("after").and_then(Value::as_u64).unwrap_or(0) as usize;
             let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(100).clamp(1, 200) as usize;
@@ -124,7 +153,7 @@ pub fn handle(hub: &mut Hub, login: &str, key: &KeyPair, msg: &Value, now: i64) 
             let v = if PROTOCOL_VERSIONS.contains(&asked) { asked } else { PROTOCOL_VERSIONS[0] };
             ok(json!({"protocolVersion": v, "capabilities": {"tools": {"listChanged": false}},
                       "serverInfo": {"name": "clanstack-hub", "title": "Clanstack hub", "version": format!("{}+{}", env!("CARGO_PKG_VERSION"), BUILD)},
-                      "instructions": "Clanstack's shared record. hub_status: counts, chain check and build. read_events: Studio events from a cursor. hub_log: the request log (time, tool, outcome, duration; never contents); use it whenever asked for the hub log. write_event: answers, comments, status changes and items. Private compartments never reach the hub."}))
+                      "instructions": "Clanstack's shared record. hub_status: counts, chain check and build. read_events: Studio events from a cursor. hub_log: the request log (time, tool, outcome, duration; never contents); use it whenever asked for the hub log. import_studio_events: used by Studio Web's sync. write_event: answers, comments, status changes and items. Private compartments never reach the hub."}))
         }
         "ping" => ok(json!({})),
         "tools/list" => ok(json!({"tools": tools()})),

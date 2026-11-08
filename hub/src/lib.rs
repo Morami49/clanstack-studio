@@ -194,6 +194,13 @@ impl Record {
         user.get("login").and_then(|v| v.as_str()).map(String::from).ok_or_else(|| Error::RustError("GitHub returned no login".into()))
     }
 
+    fn importer_key(&self) -> Result<KeyPair> {
+        let seed_hex = self.env.secret("IMPORTER_SEED")?.to_string();
+        let seed: [u8; 32] = hex::decode(seed_hex.trim()).ok().and_then(|v| v.try_into().ok())
+            .ok_or_else(|| Error::RustError("IMPORTER_SEED must be 64 hex chars".into()))?;
+        Ok(KeyPair::from_seed(seed))
+    }
+
     fn connector_key(&self) -> Result<KeyPair> {
         let seed_hex = self.env.secret("CONNECTOR_SEED")?.to_string();
         let seed: [u8; 32] = hex::decode(seed_hex.trim()).ok().and_then(|v| v.try_into().ok())
@@ -288,6 +295,25 @@ impl Record {
                         self.log(now, "/mcp", &tool, "ok", &login);
                         let v = self.read_log(limit)?;
                         Some(serde_json::json!({"jsonrpc": "2.0", "id": m["id"], "result": {"content": [{"type": "text", "text": v.to_string()}], "structuredContent": v, "isError": false}}))
+                    } else if tool == "import_studio_events" && m.get("id").is_some() {
+                        // D-129 / Q99 A: Studio Web's events keep their own authors; the importer key vouches for the copy
+                        let args = m.pointer("/params/arguments").cloned().unwrap_or_default();
+                        let v = match mcp::import_docs(&args) {
+                            Err(e) => mcp::tool_result(serde_json::json!({"error": e}), true),
+                            Ok(docs) => {
+                                let sent = docs.len();
+                                let importer = self.importer_key()?;
+                                let r = self.hub.borrow_mut().as_mut().unwrap().import(&importer, docs, now);
+                                match r {
+                                    Ok(made) => {
+                                        let n = made.iter().filter(|e| e.u.kind == hub_core::IMPORT_KIND).count();
+                                        mcp::tool_result(serde_json::json!({"imported": n, "already_there": sent - n}), false)
+                                    }
+                                    Err(e) => mcp::tool_result(serde_json::json!({"error": format!("{e:?}")}), true),
+                                }
+                            }
+                        };
+                        Some(serde_json::json!({"jsonrpc": "2.0", "id": m["id"], "result": v}))
                     } else {
                         let mut b = self.hub.borrow_mut();
                         mcp::handle(b.as_mut().unwrap(), &login, &key, m, now)

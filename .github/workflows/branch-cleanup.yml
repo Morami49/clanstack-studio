@@ -3,10 +3,20 @@
 #   preview  lists what would go and changes nothing (default)
 #   delete   deletes branches named b-* whose every commit is already on main ("Ahead 0")
 # main, Dependabot branches and any branch with unmerged work are never touched.
+#
+# Approval policy (D-133, D-137): the repository variable POLICY_BRANCH_CLEANUP, which only a person with
+# admin rights can set (Settings → Secrets and variables → Actions → Variables):
+#   ask  (or unset)  runs only when a person starts it                       ← default
+#   auto             also runs in delete mode after every push to main (merged branches are restorable, P-12)
+#   off              never runs, not even when started by hand
+# F-61: a preview run is named "(preview)" and warns that nothing was deleted, so it can't be mistaken for a cleanup.
 # The run log and summary record who ran it, when, and each branch with the commit it pointed at,
 # so any branch can be restored from that sha (GitHub → Branches → Restore, or `git push origin <sha>:refs/heads/<name>`).
 name: Branch cleanup
+run-name: Branch cleanup (${{ github.event_name == 'push' && 'delete, automatic' || inputs.mode }})
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       mode:
@@ -19,7 +29,14 @@ permissions:
 concurrency: branch-cleanup
 jobs:
   cleanup:
+    # started by a person (unless the policy is off), or automatically only when the policy says auto
+    if: >-
+      vars.POLICY_BRANCH_CLEANUP != 'off' &&
+      (github.event_name == 'workflow_dispatch' || vars.POLICY_BRANCH_CLEANUP == 'auto')
     runs-on: ubuntu-latest
+    env:
+      MODE: ${{ github.event_name == 'push' && 'delete' || inputs.mode }}
+      POLICY: ${{ vars.POLICY_BRANCH_CLEANUP || 'ask (default)' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -36,8 +53,12 @@ jobs:
             fi
           done
           {
-            echo "### Branch cleanup — mode: ${{ inputs.mode }}, started by @${{ github.actor }}"
+            echo "### Branch cleanup — mode: $MODE, started by @${{ github.actor }} (${{ github.event_name }}), policy: $POLICY"
             echo "main = $(git rev-parse --short origin/main)"
+            if [ "$MODE" = preview ]; then
+              echo
+              echo "> **Preview only — nothing was deleted.** To delete these, choose Run workflow again and set mode to **delete**."
+            fi
             echo
             echo "| branch | last commit (restore point) |"
             echo "|---|---|"
@@ -46,8 +67,9 @@ jobs:
             echo "$(wc -l < merged.txt) merged branch(es) found."
           } >> "$GITHUB_STEP_SUMMARY"
           cat merged.txt
+          if [ "$MODE" = preview ]; then echo "::warning title=Preview only::Nothing was deleted. Run again with mode = delete to remove the $(wc -l < merged.txt) branch(es) listed."; fi
       - name: Delete them
-        if: inputs.mode == 'delete'
+        if: env.MODE == 'delete'
         run: |
           while read -r b sha; do
             git push origin --delete "$b" && echo "deleted $b (was $sha)"
