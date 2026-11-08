@@ -1,0 +1,205 @@
+//! Connector tests (D-128, F-44): every OAuth rule and every MCP tool, end to end, no network.
+
+use foundation_core::event::KeyPair;
+use hub_core::mcp::{handle, iso};
+use hub_core::oauth::*;
+use hub_core::Hub;
+use serde_json::{json, Value};
+
+const T0: i64 = 1_762_600_000_000; // 2025-11-08T11:06:40Z
+// RFC 7636 appendix B test vector
+const VERIFIER: &str = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+const CHALLENGE: &str = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
+
+fn cfg() -> Config {
+    Config { issuer: "https://hub.example".into(), allowed_logins: vec!["Morami49".into()] }
+}
+fn p(pairs: &[(&str, &str)]) -> Params {
+    pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+}
+
+/// Register Claude, authorise, sign in upstream as `login`, return (state, redirect URL or error).
+fn sign_in(s: &mut OAuthState, login: &str) -> Result<String, OAuthError> {
+    s.register(&json!({"client_name": "Claude", "redirect_uris": [CLAUDE_CALLBACK]}), "c1".into(), T0).unwrap();
+    s.authorize(&cfg(), &p(&[("response_type", "code"), ("client_id", "c1"), ("redirect_uri", CLAUDE_CALLBACK),
+        ("code_challenge", CHALLENGE), ("code_challenge_method", "S256"), ("state", "claude-state"),
+        ("resource", "https://hub.example/mcp")]), "up1".into(), T0).unwrap();
+    s.complete(&cfg(), "up1", login, "CODE-1", T0 + 1000)
+}
+
+fn exchange(s: &mut OAuthState, verifier: &str) -> Result<Value, OAuthError> {
+    s.token(&p(&[("grant_type", "authorization_code"), ("code", "CODE-1"), ("client_id", "c1"),
+        ("redirect_uri", CLAUDE_CALLBACK), ("code_verifier", verifier)]), "AT-1", "RT-1", T0 + 2000)
+}
+
+#[test]
+fn discovery_matches_claude_requirements() {
+    let c = cfg();
+    let pr = c.protected_resource_metadata();
+    assert_eq!(pr["resource"], "https://hub.example/mcp");
+    assert_eq!(pr["authorization_servers"][0], "https://hub.example");
+    let asm = c.authorization_server_metadata();
+    assert_eq!(asm["code_challenge_methods_supported"], json!(["S256"]));
+    assert_eq!(asm["token_endpoint_auth_methods_supported"], json!(["none"]));
+    assert_eq!(asm["registration_endpoint"], "https://hub.example/register");
+    assert!(c.www_authenticate().starts_with("Bearer resource_metadata=\"https://hub.example/.well-known/oauth-protected-resource\""));
+}
+
+#[test]
+fn pkce_and_redirects() {
+    assert!(pkce_ok(VERIFIER, CHALLENGE));
+    assert!(!pkce_ok("x".repeat(43).as_str(), CHALLENGE));
+    assert!(!pkce_ok("short", CHALLENGE));
+    assert!(redirect_allowed(CLAUDE_CALLBACK));
+    assert!(redirect_allowed("http://localhost:3118/callback"));
+    assert!(redirect_allowed("http://127.0.0.1:54321/callback"));
+    assert!(redirect_allowed("http://localhost/callback"));
+    for bad in ["https://claude.ai/api/mcp/auth_callback/x", "https://evil.example/callback", "http://localhost.evil.example/callback",
+                "http://localhost:80@evil.example/callback", "http://127.0.0.1:12ab/callback", "http://localhost:3118/other"] {
+        assert!(!redirect_allowed(bad), "{bad} must be refused");
+    }
+}
+
+#[test]
+fn registration_refuses_foreign_redirects_and_confidential_clients() {
+    let mut s = OAuthState::default();
+    assert_eq!(s.register(&json!({"redirect_uris": ["https://evil.example/cb"]}), "x".into(), T0).unwrap_err().error, "invalid_redirect_uri");
+    assert_eq!(s.register(&json!({"redirect_uris": [CLAUDE_CALLBACK], "token_endpoint_auth_method": "client_secret_basic"}), "x".into(), T0).unwrap_err().error, "invalid_client_metadata");
+    assert!(s.clients.is_empty());
+}
+
+#[test]
+fn full_flow_issues_tokens_and_authenticates() {
+    let mut s = OAuthState::default();
+    let url = sign_in(&mut s, "morami49").unwrap(); // login match ignores case
+    assert_eq!(url, "https://claude.ai/api/mcp/auth_callback?code=CODE-1&state=claude-state&iss=https%3A%2F%2Fhub.example");
+    let t = exchange(&mut s, VERIFIER).unwrap();
+    assert_eq!(t["access_token"], "AT-1");
+    assert_eq!(t["refresh_token"], "RT-1");
+    assert_eq!(s.authenticate(Some("Bearer AT-1"), T0 + 3000), Some("morami49".into()));
+    assert_eq!(s.authenticate(Some("Bearer nope"), T0 + 3000), None);
+    assert_eq!(s.authenticate(None, T0 + 3000), None);
+    assert_eq!(s.authenticate(Some("Bearer AT-1"), T0 + 2000 + ACCESS_TTL_MS), None); // expired
+    // only hashes are stored
+    let dump = serde_json::to_string(&s).unwrap();
+    assert!(!dump.contains("AT-1") && !dump.contains("RT-1") && !dump.contains("CODE-1"));
+}
+
+#[test]
+fn strangers_cannot_sign_in() {
+    let mut s = OAuthState::default();
+    let e = sign_in(&mut s, "someone-else").unwrap_err();
+    assert_eq!((e.status, e.error), (403, "access_denied"));
+    assert!(s.codes.is_empty());
+}
+
+#[test]
+fn authorize_rejects_bad_requests() {
+    let mut s = OAuthState::default();
+    s.register(&json!({"redirect_uris": [CLAUDE_CALLBACK]}), "c1".into(), T0).unwrap();
+    let base = [("response_type", "code"), ("client_id", "c1"), ("redirect_uri", CLAUDE_CALLBACK),
+                ("code_challenge", CHALLENGE), ("code_challenge_method", "S256")];
+    let with = |k: &str, v: &str| { let mut q = p(&base); q.insert(k.into(), v.into()); q };
+    for (q, want) in [(with("client_id", "unknown"), "invalid_client"), (with("redirect_uri", "http://localhost:1/callback"), "invalid_request"),
+                      (with("code_challenge_method", "plain"), "invalid_request"), (with("response_type", "token"), "unsupported_response_type"),
+                      (with("resource", "https://other.example/mcp"), "invalid_target")] {
+        assert_eq!(s.authorize(&cfg(), &q, "u".into(), T0).unwrap_err().error, want);
+    }
+    let mut no_pkce = p(&base); no_pkce.remove("code_challenge");
+    assert_eq!(s.authorize(&cfg(), &no_pkce, "u".into(), T0).unwrap_err().error, "invalid_request");
+    assert!(s.pending.is_empty());
+}
+
+#[test]
+fn code_rules_pkce_reuse_expiry_client_redirect() {
+    // wrong verifier
+    let mut s = OAuthState::default(); sign_in(&mut s, "Morami49").unwrap();
+    assert_eq!(exchange(&mut s, &"a".repeat(43)).unwrap_err().error, "invalid_grant");
+    // reuse revokes what the first exchange issued
+    let mut s = OAuthState::default(); sign_in(&mut s, "Morami49").unwrap();
+    exchange(&mut s, VERIFIER).unwrap();
+    assert_eq!(exchange(&mut s, VERIFIER).unwrap_err().description, "code already used");
+    assert_eq!(s.authenticate(Some("Bearer AT-1"), T0 + 3000), None);
+    // expired code
+    let mut s = OAuthState::default(); sign_in(&mut s, "Morami49").unwrap();
+    let late = p(&[("grant_type", "authorization_code"), ("code", "CODE-1"), ("client_id", "c1"), ("redirect_uri", CLAUDE_CALLBACK), ("code_verifier", VERIFIER)]);
+    assert_eq!(s.token(&late, "a", "r", T0 + 1000 + CODE_TTL_MS).unwrap_err().description, "code expired");
+    // another client, or another redirect
+    let mut s = OAuthState::default(); sign_in(&mut s, "Morami49").unwrap();
+    let mut other = late.clone(); other.insert("client_id".into(), "c2".into());
+    assert_eq!(s.token(&other, "a", "r", T0 + 2000).unwrap_err().error, "invalid_grant");
+    let mut redir = late.clone(); redir.insert("redirect_uri".into(), "http://localhost:9/callback".into());
+    assert_eq!(s.token(&redir, "a", "r", T0 + 2000).unwrap_err().error, "invalid_grant");
+    // a stale upstream state can't be completed
+    let mut s = OAuthState::default();
+    s.register(&json!({"redirect_uris": [CLAUDE_CALLBACK]}), "c1".into(), T0).unwrap();
+    s.authorize(&cfg(), &p(&[("response_type", "code"), ("client_id", "c1"), ("redirect_uri", CLAUDE_CALLBACK),
+        ("code_challenge", CHALLENGE), ("code_challenge_method", "S256")]), "up".into(), T0).unwrap();
+    assert!(s.complete(&cfg(), "up", "Morami49", "C", T0 + PENDING_TTL_MS + 1).is_err());
+}
+
+#[test]
+fn refresh_rotates_and_old_token_dies() {
+    let mut s = OAuthState::default(); sign_in(&mut s, "Morami49").unwrap(); exchange(&mut s, VERIFIER).unwrap();
+    let r = |t: &str| p(&[("grant_type", "refresh_token"), ("refresh_token", t), ("client_id", "c1")]);
+    let t2 = s.token(&r("RT-1"), "AT-2", "RT-2", T0 + 5000).unwrap();
+    assert_eq!(t2["refresh_token"], "RT-2");
+    assert_eq!(s.token(&r("RT-1"), "AT-3", "RT-3", T0 + 6000).unwrap_err().error, "invalid_grant"); // rotated away
+    assert_eq!(s.authenticate(Some("Bearer AT-2"), T0 + 6000), Some("Morami49".into()));
+    assert_eq!(s.token(&p(&[("grant_type", "password")]), "a", "r", T0).unwrap_err().error, "unsupported_grant_type");
+}
+
+#[test]
+fn forms_parse_and_encode() {
+    let f = parse_form("grant_type=authorization_code&redirect_uri=https%3A%2F%2Fclaude.ai%2Fapi%2Fmcp%2Fauth_callback&x=a+b&bad=%zz");
+    assert_eq!(f["redirect_uri"], CLAUDE_CALLBACK);
+    assert_eq!(f["x"], "a b");
+    assert_eq!(f["bad"], "%zz");
+    assert_eq!(enc("a b/c"), "a%20b%2Fc");
+}
+
+#[test]
+fn iso_timestamps() {
+    assert_eq!(iso(0), "1970-01-01T00:00:00.000Z");
+    assert_eq!(iso(T0), "2025-11-08T11:06:40.000Z");
+    assert_eq!(iso(951_782_400_123), "2000-02-29T00:00:00.123Z"); // leap day
+}
+
+#[test]
+fn mcp_initialize_list_and_tools() {
+    let mut hub = Hub::new();
+    let key = KeyPair::from_seed([7; 32]);
+    let imp = KeyPair::from_seed([9; 32]);
+    hub.import(&imp, vec![("claude-1".into(), json!({"ts": "2026-11-08T10:00:00.000Z", "kind": "comment", "item": "D-001", "body": {"text": "hi"}}))], T0).unwrap();
+
+    let r = handle(&mut hub, "Morami49", &key, &json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18"}}), T0).unwrap();
+    assert_eq!(r["result"]["protocolVersion"], "2025-06-18");
+    assert!(handle(&mut hub, "Morami49", &key, &json!({"jsonrpc": "2.0", "method": "notifications/initialized"}), T0).is_none());
+    let tools = handle(&mut hub, "Morami49", &key, &json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}), T0).unwrap();
+    let names: Vec<&str> = tools["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["hub_status", "read_events", "write_event"]);
+
+    let call = |hub: &mut Hub, name: &str, args: Value| handle(hub, "Morami49", &key, &json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": name, "arguments": args}}), T0 + 60_000).unwrap()["result"].clone();
+    let w = call(&mut hub, "write_event", json!({"kind": "answer", "item": "Q-duress", "body": {"code": "Q86", "text": "A"}}));
+    assert_eq!(w["isError"], false);
+    let doc = w["structuredContent"]["written"].as_str().unwrap().to_string();
+    assert!(doc.starts_with("hub-"));
+    // it is exported to Studio Web, authored by the signed-in person, and never re-imported
+    let (docs, _) = hub.to_studio(0, 100);
+    assert_eq!(docs.len(), 1);
+    assert_eq!(docs[0].0, doc);
+    assert_eq!(docs[0].1["author"]["id"], "github:Morami49");
+    assert_eq!(docs[0].1["ts"], "2025-11-08T11:07:40.000Z");
+    assert!(hub.import(&imp, vec![docs[0].clone()], T0 + 1).unwrap().is_empty());
+    // read_events sees both the imported Studio event and the new write
+    let r = call(&mut hub, "read_events", json!({"after": 0}));
+    let evs = r["structuredContent"]["events"].as_array().unwrap();
+    assert_eq!(evs.iter().map(|e| e["doc_id"].as_str().unwrap()).collect::<Vec<_>>(), ["claude-1", doc.as_str()]);
+    assert_eq!(call(&mut hub, "hub_status", json!({}))["structuredContent"]["verified"], true);
+    // bad writes are tool errors, not crashes
+    assert_eq!(call(&mut hub, "write_event", json!({"kind": "delete-everything", "body": {}}))["isError"], true);
+    assert_eq!(call(&mut hub, "write_event", json!({"kind": "comment", "body": {"text": "no item"}}))["isError"], true);
+    assert_eq!(call(&mut hub, "write_event", json!({"kind": "item.create", "item": null, "body": {"title": "no id"}}))["isError"], true);
+    let unknown = handle(&mut hub, "Morami49", &key, &json!({"jsonrpc": "2.0", "id": 4, "method": "resources/list"}), T0).unwrap();
+    assert_eq!(unknown["error"]["code"], -32601);
+}

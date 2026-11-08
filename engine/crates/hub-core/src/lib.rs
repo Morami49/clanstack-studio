@@ -18,6 +18,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashSet;
 
+pub mod mcp;
+pub mod oauth;
+
 pub const IMPORT_KIND: &str = "studio.event";
 /// A Studio-shaped write made on a node other than Studio Web (PC, phone, an AI via the hub).
 pub const WRITE_KIND: &str = "studio.write";
@@ -170,6 +173,20 @@ impl Hub {
             self.imported.insert(doc_id);
             out.push(e);
         }
+        Ok(out)
+    }
+
+    /// A Studio-shaped write made through this node (e.g. the Claude connector): signed by `k` as a
+    /// `studio.write` fact, so it flows to Studio Web via /studio-export and never echoes back (D-101).
+    /// Returns the new facts in order (persist them); the last one is the write itself.
+    pub fn write(&mut self, k: &KeyPair, label: &str, studio_event: Value, ts: i64) -> Result<Vec<Event>, Reject> {
+        let mut out = vec![];
+        if let Some(g) = self.ensure_importer(k, label, ts)? {
+            out.push(g);
+        }
+        let e = self.store.fact(k, WRITE_KIND, studio_event, Realm::Real, None, ts, &[])?;
+        self.exported.insert(studio_doc_id(&e.id));
+        out.push(e);
         Ok(out)
     }
 }
