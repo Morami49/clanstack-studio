@@ -56,6 +56,7 @@ function query(path, dir, lim, filt){
   };
   return q;
 }
+window.__autoSyncDelay = C.autoSyncDelay ?? 60000;   // tests opt in to the on-open sync
 window.claude = { use: async n => {
   if (n === "user") return { id: async()=>C.me, isOwner: async()=>C.owner, canEdit: async()=>C.canEdit,
       can: async k => k==="data.write" ? C.canWrite : null,
@@ -437,11 +438,13 @@ async def s24_hub_sync(b):
     note1 = await p.inner_text("#hubNote")
     hub_ids = await p.evaluate("window.__hubDocs || []")
     came = any(e.get("_id") == "hub-xyz" for e in st.events)
+    runs = [e for e in st.events if e.get("item") == "RUNS-hub-sync" or (e.get("body") or {}).get("id") == "RUNS-hub-sync"]
     await p.click("#hubSync"); await p.wait_for_timeout(900)
-    note2 = await p.inner_text("#hubRuns")
-    ok = ("1 copied" in note1 and "1 brought here" in note1 and "claude-a2" in hub_ids and came
-          and "0 copied" in note2 and not p.errors)
-    return ok, f"first: {note1[:90]!r}; hub has a2={'claude-a2' in hub_ids}; hub write landed={came}; second run recorded 0 copied={'0 copied' in note2}"
+    note2 = await p.inner_text("#hubNote")
+    # the second sync copies only the first run's own record (P-13): the run-log item and its comment
+    ok = ("1 copied" in note1 and "1 brought here" in note1 and "claude-a2" in hub_ids and came and len(runs) == 2
+          and "2 copied" in note2 and "0 brought here" in note2 and not p.errors)
+    return ok, f"first: {note1[:80]!r}; hub has a2={'claude-a2' in hub_ids}; hub write landed={came}; run records={len(runs)}; second: {note2[:60]!r}"
 
 
 async def s25_more_than_1000(b):
@@ -466,11 +469,40 @@ async def s26_hub_not_connected(b):
     return ok, f"message: {note[:100]!r}"
 
 
+async def s27_read_on_open(b):
+    """Q102 A: Nowed opens Studio; hub changes arrive by themselves, but nothing is copied up until enough clean runs."""
+    hubw = {"ts": "2026-11-08T10:02:00.000Z", "kind": "comment", "item": "D-001", "branch": "main", "body": {"text": "via hub"},
+            "author": {"id": "github:Morami49", "label": "Morami49", "role": "owner"}, "via": "claude-connector"}
+    st = Store([]); p = await open_page(b, st, {"hub": {"docs": [{"doc_id": "hub-q1", "event": hubw}]}, "autoSyncDelay": 300})
+    await p.wait_for_timeout(1500)
+    came = any(e.get("_id") == "hub-q1" for e in st.events)
+    calls = await p.evaluate("window.__hubCalls || []")
+    ok = came and "import_studio_events" not in calls and not p.errors
+    return ok, f"hub change arrived={came}; calls={calls}"
+
+
+async def s28_push_after_clean_runs(b):
+    """After 5 clean recorded runs (the default), copying up runs by itself on open; a viewer who isn't the owner never auto-syncs."""
+    runs = [ev("item.create", None, {"id": "RUNS-hub-sync", "type": "asset", "title": "Hub sync runs", "body": "", "status": "built"},
+               ts="2026-11-08T09:00:00.000Z")]
+    runs += [ev("comment", "RUNS-hub-sync", {"text": "ok", "clean": True, "pushed": 0, "pulled": 0}, ts=f"2026-11-08T09:0{i+1}:00.000Z") for i in range(5)]
+    local = ev("comment", "D-001", {"text": "local"}, ts="2026-11-08T11:00:00.000Z")
+    hub = {"docs": []}
+    st = Store(runs + [local]); p = await open_page(b, st, {"hub": hub, "autoSyncDelay": 300})
+    await p.wait_for_timeout(1800)
+    pushed = await p.evaluate("(window.__hubDocs || []).length")
+    st2 = Store([local]); q = await open_page(b, st2, {"hub": {"docs": []}, "autoSyncDelay": 300, "owner": False, "me": "u_rad"})
+    await q.wait_for_timeout(1200)
+    other = await q.evaluate("window.__hubCalls || []")
+    ok = pushed >= 7 and other == [] and not p.errors and not q.errors
+    return ok, f"copied up on open={pushed}; non-owner calls={other}"
+
+
 SCENARIOS = [s01_tired_misclick, s02_undo, s03_stable_codes, s04_past_view_lock, s05_branch_awareness, s06_view_only_client,
              s07_names, s08_long_history, s09_ai_relay, s10_keyboard_list, s11_offline_capture, s12_member_rights,
              s13_two_people_at_once, s14_phone, s15_undo_old_status, s16_overwhelm, s17_disagreement, s18_clock_skew, s19_private_area,
              s20_addresses, s21_money_settings, s22_duplicate_id, s23_same_order_everywhere,
-             s24_hub_sync, s25_more_than_1000, s26_hub_not_connected]
+             s24_hub_sync, s25_more_than_1000, s26_hub_not_connected, s27_read_on_open, s28_push_after_clean_runs]
 
 
 async def main():

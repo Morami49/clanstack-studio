@@ -149,6 +149,8 @@ modelling. Phase 1 (rails) is built; voice is next. Owner: Nowed.
 | D-136 | 2026-11-08 | **Executors, not borrowed hands** (answers "how can 1.3 be prevented for all connections"): Claude's sessions keep their own safety refusals; destructive or outside actions run in the platform that owns them (GitHub Actions, the hub, Cloudflare) under a person-set policy, with scoped credentials and a run record. Claude proposes and prepares; executors act. | Branch cleanup is the first executor. |
 | D-137 | 2026-11-08 | **Policies are configurable presets** (Q97, Q98 "combination, configurable"): retention windows and approval defaults are settings per purpose or action type, with A/B/C as named presets that can be mixed; every change is versioned. | First: POLICY_BRANCH_CLEANUP (ask/auto/off). |
 | D-138 | 2026-11-08 | **Studio ↔ hub sync built** (D-129, Q99 A): Studio Web's Hub view copies shared changes into the hub with their original authors (importer key vouches) and brings hub writes back; repeat-safe. | import_studio_events tool; Studio v0.4. |
+| D-139 | 2026-11-08 | **Studio is the source of truth for policies** (Q101 A): settings SET-policy-*; executors read them from the hub (scripts/policy.py), fall back to the platform copy when the hub can't answer, and flag drift. Branch cleanup first. | Q100 A: cleanup auto (30 branches deleted 23:33). |
+| D-140 | 2026-11-08 | **Sync on open** (Q102 A): Studio reads from the hub when it opens; copying up runs itself only after SET-policy-hub-push-clean-runs (default 5) clean recorded runs. Owner only. Every sync leaves a run record on RUNS-hub-sync (P-13). | Studio v0.5. |
 
 ## State log (append-only)
 

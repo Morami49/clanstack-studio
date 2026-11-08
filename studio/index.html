@@ -110,7 +110,7 @@ pre.pack{white-space:pre-wrap;background:var(--raise);border:1px solid var(--lin
 </style>
 
 <header>
-  <div class="brand"><h1>Clanstack Studio</h1><span class="ver" id="ver">v0.4</span></div>
+  <div class="brand"><h1>Clanstack Studio</h1><span class="ver" id="ver">v0.5</span></div>
   <nav id="tabs" aria-label="Views">
     <button data-v="map" aria-current="true">Map</button>
     <button data-v="list">List</button>
@@ -223,6 +223,9 @@ pre.pack{white-space:pre-wrap;background:var(--raise);border:1px solid var(--lin
       <div class="row"><button class="primary" id="hubSync">Sync now</button><button id="hubCheck">Check hub</button><span class="mute" id="hubNote"></span></div>
       <div class="card"><h3>Hub</h3><div id="hubStatus" class="mono" style="font-size:13px;line-height:1.7">Not checked yet.</div></div>
       <div class="card"><h3>Sync runs on this device</h3><ul class="log" id="hubRuns"></ul></div>
+      <div class="card"><h3>Policies</h3>
+        <p class="mute" style="margin:0">Studio is the source of truth for every approval policy (D-133, Q101 A). Executors read these; a platform's own copy (like GitHub's variable) is checked against Studio and flagged when it differs. Each change is a version on the tree.</p>
+        <ul class="log" id="policyList"></ul></div>
     </div>
   </section>
 
@@ -665,6 +668,35 @@ async function loadOlder(){
   mergeEvents(); refresh();
 }
 
+/* ---------------------------------------------------------------- policies (D-133, D-137, Q101 A) */
+const POLICIES = {
+  "SET-policy-branch-cleanup": {title:"Branch cleanup", choices:["ask","auto","off"], def:"ask",
+    help:"auto: merged b-* branches are deleted after every change to main. Mirror: GitHub variable POLICY_BRANCH_CLEANUP."},
+  "SET-policy-hub-read": {title:"Read from the hub when Studio opens", choices:["auto","ask","off"], def:"auto",
+    help:"Brings changes made through the hub into Studio on open (Q102 A)."},
+  "SET-policy-hub-push": {title:"Copy Studio changes up to the hub", choices:["ask","auto-after-clean-runs","auto","off"], def:"auto-after-clean-runs",
+    help:"auto-after-clean-runs: stays a button until the number of clean runs below, then runs on open."},
+  "SET-policy-hub-push-clean-runs": {title:"Clean runs before copying up runs itself", number:true, def:5, help:"Counts recorded sync runs that finished without errors."}
+};
+function policy(k){ const it = F.items.get(k), d = POLICIES[k].def; if (!it || it.value == null) return d;
+  if (POLICIES[k].number){ const v = +it.value; return Number.isFinite(v) && v >= 0 ? v : d; }
+  return POLICIES[k].choices.includes(it.value) ? it.value : d; }
+function renderPolicies(){
+  const L = $("#policyList"); if (!L) return;
+  L.innerHTML = Object.entries(POLICIES).map(([k, P], i) => { const it = F.items.get(k), v = policy(k);
+    const input = P.number ? `<input data-pol="${k}" type="number" min="0" step="1" value="${esc(String(v))}" style="width:80px" ${dis()}>`
+      : `<select data-pol="${k}" ${dis()}>${P.choices.map(c => `<option ${c===v?"selected":""}>${esc(c)}</option>`).join("")}</select>`;
+    return `<li><span class="n">${i+1}</span><span><b>${esc(P.title)}</b> <span class="mono">${esc(String(v))}</span><span class="mute mono"> · studio/${k}@${it?it.history.length-1:"default"}</span>
+      <br><span class="mute">${esc(P.help)}</span>
+      ${editor() ? `<span class="row" style="margin-top:4px">${input}<button data-polsave="${k}" ${dis()}>Save version</button></span>` : ""}</span></li>`; }).join("");
+  L.querySelectorAll("[data-polsave]").forEach(b => b.onclick = async () => {
+    const k = b.dataset.polsave, P = POLICIES[k], raw = $(`[data-pol="${k}"]`).value, v = P.number ? +raw : raw;
+    if (P.number ? !(Number.isFinite(v) && v >= 0) : !P.choices.includes(v)){ toast("That value isn't allowed here."); return; }
+    const id = F.items.has(k) ? await write("item.edit", k, {value: v})
+      : await write("item.create", null, {id:k, type:"setting", title:P.title, body:P.help, status:"agreed", refs:["D-133","D-137"], value:v});
+    if (id) toast(`${P.title} → ${v}`, [id]); });
+}
+
 /* ---------------------------------------------------------------- hub sync (D-129) */
 const HUB = "Clanstack hub";
 S.hubRuns = []; S.hubBusy = false;
@@ -690,7 +722,7 @@ async function hubTool(tool, input){
 }
 function saveRuns(){ try { localStorage.setItem("hubRuns", JSON.stringify(S.hubRuns.slice(0,20))); } catch {} }
 function renderHub(){
-  $("#hubSync").disabled = S.hubBusy || !S.db; $("#hubCheck").disabled = S.hubBusy;
+  $("#hubSync").disabled = S.hubBusy || !S.db; $("#hubCheck").disabled = S.hubBusy; renderPolicies();
   const L = $("#hubRuns"); L.replaceChildren();
   if (!S.hubRuns.length){ const li = document.createElement("li"); li.textContent = "No syncs from this device yet."; L.append(li); }
   for (const r of S.hubRuns){ const li = document.createElement("li"), t = document.createElement("span"), d = document.createElement("span");
@@ -704,8 +736,16 @@ async function hubCheck(quiet){
   catch(e){ $("#hubNote").textContent = hubError(e); }
   S.hubBusy = false; renderHub();
 }
-async function hubSync(){
-  if (S.asof){ toast("You're looking at the past. Return to live to sync."); return; }
+// Clean runs come from the shared run records (P-13), so every device counts the same runs.
+function cleanPushRuns(){ const it = F.items.get("RUNS-hub-sync"); return it ? it.comments.filter(c => c.body?.clean && c.body?.pushed != null).length : 0; }
+async function recordRun(body){
+  if (!F.items.has("RUNS-hub-sync")) await write("item.create", null, {id:"RUNS-hub-sync", type:"asset", title:"Hub sync runs",
+    body:"One comment per sync between Studio Web and the hub: who, when, mode, counts, and whether it finished cleanly (P-13).", status:"built", refs:["D-138","P-13"]});
+  await write("comment", "RUNS-hub-sync", body);
+}
+async function hubSync(mode = "full", auto = false){
+  if (S.asof){ if (!auto) toast("You're looking at the past. Return to live to sync."); return; }
+  if (S.hubBusy) return;
   S.hubBusy = true; renderHub(); const note = $("#hubNote"), at = new Date().toISOString();
   let pulled = 0, pushed = 0, already = 0, step = "reading the hub";
   try {
@@ -728,6 +768,7 @@ async function hubSync(){
     }
     // 3) Studio → hub: shared changes the hub lacks, oldest first, 100 per call (Q99 A: authors kept)
     step = "copying changes to the hub";
+    if (mode === "full"){
     const missing = [...(S.older||[]), ...S.shared].filter(e => !hub.has(e._id)).sort(byTsThenId)
       .map(({_id, ...ev}) => ({doc_id:_id, event:ev}));
     for (let i = 0; i < missing.length; i += 100){
@@ -735,15 +776,27 @@ async function hubSync(){
       const r = await hubTool("import_studio_events", {docs: missing.slice(i, i+100)});
       pushed += r.imported || 0; already += r.already_there || 0;
     }
-    const text = `Synced: ${pushed} copied to the hub${already ? ` (${already} were already there)` : ""}, ${pulled} brought here. Hub holds ${hub.size + pushed} Studio changes.`;
+    }
+    const text = mode === "full"
+      ? `Synced${auto ? " (automatic)" : ""}: ${pushed} copied to the hub${already ? ` (${already} were already there)` : ""}, ${pulled} brought here. Hub holds ${hub.size + pushed} Studio changes.`
+      : `Read from the hub${auto ? " on open" : ""}: ${pulled} brought here.`;
     S.hubRuns.unshift({at, text}); note.textContent = text;
+    if (mode === "full" || pulled) await recordRun({text, mode, auto, clean:true, pulled, ...(mode === "full" ? {pushed, already} : {})});
   } catch(e){
     const text = `Stopped while ${step}: ${hubError(e)}${pushed||pulled ? ` Done before stopping: ${pushed} copied, ${pulled} brought here; syncing again carries on safely.` : ""}`;
     S.hubRuns.unshift({at, text}); note.textContent = text;
+    try { await recordRun({text, mode, auto, clean:false, error:e?.code||"unknown", pulled, pushed}); } catch {}
   }
   saveRuns(); S.hubBusy = false; renderHub(); hubCheck(true);
 }
-$("#hubSync").onclick = hubSync;
+$("#hubSync").onclick = () => hubSync("full", false);
+// Q102 A: on open, read from the hub (policy SET-policy-hub-read); copying up runs itself only once the push policy allows it.
+async function hubAutoSync(){
+  if (S.hubAutoDone || !S.mcp || !S.db || !S.owner) return; S.hubAutoDone = true;
+  const push = policy("SET-policy-hub-push"), enough = cleanPushRuns() >= policy("SET-policy-hub-push-clean-runs");
+  if (push === "auto" || (push === "auto-after-clean-runs" && enough)) return hubSync("full", true);
+  if (policy("SET-policy-hub-read") === "auto") return hubSync("read", true);
+}
 $("#hubCheck").onclick = () => hubCheck(false);
 
 /* ---------------------------------------------------------------- views + time */
@@ -850,7 +903,7 @@ for (const id of ["calcAmt","calcSales","calcClass"]) $("#"+id).oninput = render
   const timer = setTimeout(() => { $("#conn").textContent = "can't reach the store yet"; }, 10000);
   if (!window.claude?.use){ clearTimeout(timer); $("#conn").textContent = "offline preview"; return; }
   const [db, user] = await Promise.all([window.claude.use("db"), window.claude.use("user")]);
-  window.claude.use("mcp").then(m => { S.mcp = m; if (S.view==="hub") renderHub(); }).catch(() => {});
+  window.claude.use("mcp").then(m => { S.mcp = m; if (S.view==="hub") renderHub(); if (m) setTimeout(hubAutoSync, window.__autoSyncDelay ?? 4000); }).catch(() => {});
   if (!db){ clearTimeout(timer); $("#conn").textContent = "sign in to load"; return; }
   S.db = db; S.user = user;
   if (user){

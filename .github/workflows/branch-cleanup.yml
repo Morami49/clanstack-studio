@@ -4,8 +4,9 @@
 #   delete   deletes branches named b-* whose every commit is already on main ("Ahead 0")
 # main, Dependabot branches and any branch with unmerged work are never touched.
 #
-# Approval policy (D-133, D-137): the repository variable POLICY_BRANCH_CLEANUP, which only a person with
-# admin rights can set (Settings → Secrets and variables → Actions → Variables):
+# Approval policy (D-133, D-137, Q101 A): Studio's setting SET-policy-branch-cleanup is the source of truth,
+# read from the hub (scripts/policy.py). The repository variable POLICY_BRANCH_CLEANUP is the fallback when the
+# hub can't answer, and any difference is flagged as drift. Values:
 #   ask  (or unset)  runs only when a person starts it                       ← default
 #   auto             also runs in delete mode after every push to main (merged branches are restorable, P-12)
 #   off              never runs, not even when started by hand
@@ -29,19 +30,31 @@ permissions:
 concurrency: branch-cleanup
 jobs:
   cleanup:
-    # started by a person (unless the policy is off), or automatically only when the policy says auto
-    if: >-
-      vars.POLICY_BRANCH_CLEANUP != 'off' &&
-      (github.event_name == 'workflow_dispatch' || vars.POLICY_BRANCH_CLEANUP == 'auto')
+    # every push starts the job so drift is always checked; the policy step decides whether anything happens
     runs-on: ubuntu-latest
     env:
       MODE: ${{ github.event_name == 'push' && 'delete' || inputs.mode }}
-      POLICY: ${{ vars.POLICY_BRANCH_CLEANUP || 'ask (default)' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
+      - name: Resolve the policy (Studio first, Q101 A)
+        id: pol
+        env:
+          HUB_URL: https://clanstack-hub.ndab-utube.workers.dev
+          HUB_TOKEN: ${{ secrets.HUB_WRITE_TOKEN }}
+          PLATFORM: ${{ vars.POLICY_BRANCH_CLEANUP }}
+        run: |
+          python3 scripts/policy.py SET-policy-branch-cleanup --platform "$PLATFORM" --default ask
+      - name: Decide
+        id: go
+        env: {EFFECTIVE: "${{ steps.pol.outputs.effective }}", EVENT: "${{ github.event_name }}"}
+        run: |
+          if [ "$EFFECTIVE" = off ]; then echo "run=no" >> "$GITHUB_OUTPUT"; echo "Policy is off: nothing runs." >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$EVENT" = push ] && [ "$EFFECTIVE" != auto ]; then echo "run=no" >> "$GITHUB_OUTPUT"; echo "Policy is $EFFECTIVE: automatic cleanup skipped." >> "$GITHUB_STEP_SUMMARY"
+          else echo "run=yes" >> "$GITHUB_OUTPUT"; fi
       - name: Find merged b-* branches
+        if: steps.go.outputs.run == 'yes'
         id: find
         run: |
           git fetch --prune origin '+refs/heads/*:refs/remotes/origin/*'
@@ -53,7 +66,7 @@ jobs:
             fi
           done
           {
-            echo "### Branch cleanup — mode: $MODE, started by @${{ github.actor }} (${{ github.event_name }}), policy: $POLICY"
+            echo "### Branch cleanup — mode: $MODE, started by @${{ github.actor }} (${{ github.event_name }}), policy: ${{ steps.pol.outputs.effective }}"
             echo "main = $(git rev-parse --short origin/main)"
             if [ "$MODE" = preview ]; then
               echo
@@ -69,7 +82,7 @@ jobs:
           cat merged.txt
           if [ "$MODE" = preview ]; then echo "::warning title=Preview only::Nothing was deleted. Run again with mode = delete to remove the $(wc -l < merged.txt) branch(es) listed."; fi
       - name: Delete them
-        if: env.MODE == 'delete'
+        if: steps.go.outputs.run == 'yes' && env.MODE == 'delete'
         run: |
           while read -r b sha; do
             git push origin --delete "$b" && echo "deleted $b (was $sha)"
