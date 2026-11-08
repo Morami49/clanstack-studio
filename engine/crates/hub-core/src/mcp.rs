@@ -81,7 +81,10 @@ fn call(hub: &mut Hub, login: &str, key: &KeyPair, name: &str, args: &Value, now
                 k if k == WRITE_KIND => Some(json!({"doc_id": studio_doc_id(&e.id), "event": e.u.body})),
                 _ => None,
             }).collect();
-            text_result(json!({"events": events, "next": page.next, "total": page.total}), false)
+            let skipped = page.events.len() - events.len();
+            // F-55: say what was skipped, so nobody guesses (a key's first fact is its identity, not a Studio event)
+            text_result(json!({"events": events, "next": page.next, "total": page.total, "skipped_non_studio": skipped,
+                "note": "Events that are not Studio events (e.g. a key's identity fact) are skipped and counted in skipped_non_studio. Nothing private is ever stored in the hub."}), false)
         }
         "write_event" => {
             let kind = args.get("kind").and_then(Value::as_str).unwrap_or("");
@@ -121,7 +124,7 @@ pub fn handle(hub: &mut Hub, login: &str, key: &KeyPair, msg: &Value, now: i64) 
             let v = if PROTOCOL_VERSIONS.contains(&asked) { asked } else { PROTOCOL_VERSIONS[0] };
             ok(json!({"protocolVersion": v, "capabilities": {"tools": {"listChanged": false}},
                       "serverInfo": {"name": "clanstack-hub", "title": "Clanstack hub", "version": format!("{}+{}", env!("CARGO_PKG_VERSION"), BUILD)},
-                      "instructions": "Clanstack's shared record. Read with read_events; write answers, comments and items with write_event. Private compartments are never exposed here."}))
+                      "instructions": "Clanstack's shared record. hub_status: counts, chain check and build. read_events: Studio events from a cursor. hub_log: the request log (time, tool, outcome, duration; never contents); use it whenever asked for the hub log. write_event: answers, comments, status changes and items. Private compartments never reach the hub."}))
         }
         "ping" => ok(json!({})),
         "tools/list" => ok(json!({"tools": tools()})),

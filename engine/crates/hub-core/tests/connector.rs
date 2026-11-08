@@ -195,6 +195,7 @@ fn mcp_initialize_list_and_tools() {
     let r = call(&mut hub, "read_events", json!({"after": 0}));
     let evs = r["structuredContent"]["events"].as_array().unwrap();
     assert_eq!(evs.iter().map(|e| e["doc_id"].as_str().unwrap()).collect::<Vec<_>>(), ["claude-1", doc.as_str()]);
+    assert_eq!(r["structuredContent"]["skipped_non_studio"], 2); // importer identity + connector identity (F-55)
     assert_eq!(call(&mut hub, "hub_status", json!({}))["structuredContent"]["verified"], true);
     assert_eq!(call(&mut hub, "hub_status", json!({}))["structuredContent"]["build"], hub_core::mcp::BUILD);
     // bad writes are tool errors, not crashes
