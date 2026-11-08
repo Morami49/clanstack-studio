@@ -70,6 +70,18 @@ def test_compaction_keeps_prior_and_recovers_last_prompt():
     assert build(after, idx)["prompts"] == idx["prompts"]               # re-running adds nothing
 
 
+def test_edit_after_carry_keeps_message_number():
+    # F-59: message 2's first version was indexed alone; an edit arrives later in the same transcript
+    rows = transcript()[:2] + [row("v1", "a1", "user", "2026-11-07T12:00:00Z", "Q94 A")]
+    first = build(rows)
+    assert [p["id"] for p in first["prompts"]] == ["M-261107-1-e1", "M-261107-2-e1"]
+    rows.append(row("v2", "a1", "user", "2026-11-07T12:10:00Z", "Q94 A, reproducible"))
+    idx = build(rows, first)
+    got = {p["id"]: p["live"] for p in idx["prompts"]}
+    assert got == {"M-261107-1-e1": True, "M-261107-2-e1": False, "M-261107-2-e2": True}, got
+    assert idx["messages"] == 2 and idx["edited_messages"] == 1
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

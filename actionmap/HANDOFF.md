@@ -145,6 +145,7 @@ modelling. Phase 1 (rails) is built; voice is next. Owner: Nowed.
 | D-132 | 2026-11-08 | **Retention is per purpose** (Q93 "depends on auditing and analytics needs"): each log or record kind names the audit or analytics need that sets how long it stays; no single number. | Request log keeps 5000 rows until a purpose sets otherwise. |
 | D-133 | 2026-11-08 | **Every action has an approval policy** (Q94 A): auto, ask a person, or off; approvals count people (P-10); every run leaves an audit record. Only reversible actions may run on auto (P-12). First instance: Branch cleanup workflow (person starts it; preview by default). | Claude's own branch deletes are refused (HTTP 403, F-53); not worked around. |
 | D-134 | 2026-11-08 | **Build order** (Q95 A then B): D-129 Studio Web ↔ hub sync, then safe repeat writes (F-48) and unknown-item warnings (F-47). | |
+| D-135 | 2026-11-08 | **Automate the doing, never the knowing** (Q94 edit 2, P-13): every automated run leaves a record a person can read and replay — what ran, why, which policy allowed it, inputs, result, undo — so manual work shrinks while understanding and reproducibility grow. | Applies to D-133 policies and every Studio flow. |
 
 ## State log (append-only)
 
@@ -241,6 +242,9 @@ modelling. Phase 1 (rails) is built; voice is next. Owner: Nowed.
 - **2026-11-08 — W9 passed.** hub_log lists itself, probes read "not offered", Settings shows 4 tools. No hub rows between
   18:12 and 18:29, so Claude's 18:17 connection attempt (F-58) never reached /mcp; sign-in and discovery routes are now logged
   too. Branch cleanup workflow added (D-133).
+- **2026-11-08 — Q94 edited (M-261108-11-e2).** Edit 1's work stands (f565a43, Studio q01–q23); edit 2 adds P-13/D-135.
+  F-59: the chat index numbered that edit as a new message after carrying the prior index forward; fixed, test added.
+  F-60: edit 1's reply quoted an M-Trends 2026 median dwell time that could not be re-verified; withdrawn.
 
 ## File map
 - `schema/event.schema.json` — the contract.

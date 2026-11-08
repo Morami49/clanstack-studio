@@ -121,15 +121,17 @@ def build(rows: list[dict], prior: dict | None = None) -> dict:
             edit_of[p["uuid"]] = (k, len(g), g[0]["uuid"])
 
     # message numbers per day, shared by all edits of one message; numbering continues the prior index
-    kept = [q for q in (prior or {}).get("prompts", [])]
-    seen = {q["uuid"] for q in kept}
-    day_count, msg_no, out = defaultdict(int), {}, []
-    for q in kept:
+    # F-59: a prompt still in the transcript is rebuilt (an edit may have arrived since), keeping the
+    # message number the prior index gave it; only prompts gone from the transcript are carried as they were.
+    prior_q = (prior or {}).get("prompts", [])
+    present = {p["uuid"] for p in prompts}
+    kept = [q for q in prior_q if q["uuid"] not in present]
+    day_count, out = defaultdict(int), []
+    msg_no = {q["uuid"]: q["message"] for q in prior_q if q["edit"] == 1}
+    for q in prior_q:
         day, n = q["message"].split("-")[1], int(q["message"].split("-")[2])
         day_count[day] = max(day_count[day], n)
     for p in prompts:
-        if p["uuid"] in seen:
-            continue
         k, n, first = edit_of[p["uuid"]]
         if first not in msg_no:
             day = by_id[first].get("timestamp", "")[:10].replace("-", "")[2:]
