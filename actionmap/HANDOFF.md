@@ -137,6 +137,9 @@ modelling. Phase 1 (rails) is built; voice is next. Owner: Nowed.
 | D-124 | 2026-11-08 | **Profile model** (Q83 A+): per-compartment keys; every user gets a control profile (manages all profiles, contents, bridges) and a public-safe profile (full control, nothing sensitive shown); each profile has its own Studio surface (ActionMap). | Q88 duress option. |
 | D-125 | 2026-11-08 | **Neutral infrastructure, not deniability** (Q84 A): content-neutral tools, OSA risk assessment before first outside user, valid-request process, transparency log, unreadable compartments. | CASE-06, CASE-07. |
 | D-126 | 2026-11-08 | **Embed order**: Claude connector → cross-tool browser extension → the rest (Q85). | |
+| D-127 | 2026-11-08 | **Duress code opens a decoy and locks compartments** (Q86 A); no wipe. | CASE-08. |
+| D-128 | 2026-11-08 | **Claude connector all in Rust, GitHub sign-in** (Q87 B, Q88 A): hub is OAuth 2.1 + MCP server; owner-only allowlist. | aabfc71; F-44 risk; W5 done, W6 next. |
+| D-129 | 2026-11-08 | **Next: Studio Web syncs with the hub through the connector** (Q89 A): one-time import, then both ways. | Closes F-45. |
 
 ## State log (append-only)
 
@@ -223,6 +226,8 @@ modelling. Phase 1 (rails) is built; voice is next. Owner: Nowed.
   Open: Q76 (OSA), Q77 (next build), Q78 (productise method), Q79–Q81 (merge).
 - **2026-11-08 — W4 done by Nowed; first mirror run.** GitLab path clanstack-devs/Clanstack-studio (Ultimate trial: rely on nothing trial-only).
   Profile model, neutral infrastructure, embed order recorded. Next: hub connector (Q86 implementation, Q87 sign-in).
+- **2026-11-08 — connector live.** /mcp answers 401 + discovery; GitHub OAuth App made (W5); this push loads GH_OAUTH_* into the hub.
+  Mirror complete (W4.8). Next: W6 add connector in Claude, then D-129 sync.
 
 ## File map
 - `schema/event.schema.json` — the contract.
