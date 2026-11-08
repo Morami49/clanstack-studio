@@ -86,6 +86,6 @@ jobs:
             rpc '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"hub_status","arguments":{}}}' | grep -q '"verified":true'
             rpc '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"read_events","arguments":{"after":0,"limit":5}}}' | grep -q '"next"'
           done
-          rpc '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"hub_log","arguments":{"limit":3}}}' | grep -q '"entries"'
+          rpc '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"hub_log","arguments":{"limit":3}}}' | grep -q '"tool":"hub_log"'
           curl -fsS "$URL/health" | grep -q "ok $(echo "${{ github.event.workflow_run.head_sha }}" | cut -c1-7)"
           echo "connector smoke test passed"

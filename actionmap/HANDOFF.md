@@ -140,6 +140,9 @@ modelling. Phase 1 (rails) is built; voice is next. Owner: Nowed.
 | D-127 | 2026-11-08 | **Duress code opens a decoy and locks compartments** (Q86 A); no wipe. | CASE-08. |
 | D-128 | 2026-11-08 | **Claude connector all in Rust, GitHub sign-in** (Q87 B, Q88 A): hub is OAuth 2.1 + MCP server; owner-only allowlist. | aabfc71; F-44 risk; W5 done, W6 next. |
 | D-129 | 2026-11-08 | **Next: Studio Web syncs with the hub through the connector** (Q89 A): one-time import, then both ways. | Closes F-45. |
+| D-130 | 2026-11-08 | **Request log: time, route, tool, outcome, ms, who, build; never contents** (Q90 A). Newest 5000 rows. | 7de9622; hub_log tool. |
+| D-131 | 2026-11-08 | **Sealed capture later**: contents captured only sealed to the caller's key, with compartment keys (Q91 A+C). Off for now. | Needs D-119 keys. |
+| D-132 | 2026-11-08 | **Retention is per purpose** (Q93 "depends on auditing and analytics needs"): each log or record kind names the audit or analytics need that sets how long it stays; no single number. | Request log keeps 5000 rows until a purpose sets otherwise. |
 
 ## State log (append-only)
 
@@ -228,6 +231,11 @@ modelling. Phase 1 (rails) is built; voice is next. Owner: Nowed.
   Profile model, neutral infrastructure, embed order recorded. Next: hub connector (Q86 implementation, Q87 sign-in).
 - **2026-11-08 — connector live.** /mcp answers 401 + discovery; GitHub OAuth App made (W5); this push loads GH_OAUTH_* into the hub.
   Mirror complete (W4.8). Next: W6 add connector in Claude, then D-129 sync.
+- **2026-11-08 — connector tested (W6–W8).** F-46 overflow fixed (a881602) + deploy smoke test; build shown on /health (F-52);
+  request log + hub_log (7de9622); read_events says what it skipped (F-55, 3e7e99c). W8: Claude caches a connector's tool list
+  until Disconnect/Connect (F-54) — test rule: reconnect after any new tool. F-56: compaction rewrites the transcript, so the chat
+  index is now cumulative (--prior) and recovers the newest prompt from `last-prompt`. hub_log now lists itself; probes for
+  methods the hub lacks (server/discover) log as "not offered"; ms counts I/O waits only (Workers freeze the clock).
 
 ## File map
 - `schema/event.schema.json` — the contract.

@@ -13,9 +13,15 @@ type / timestamp / message) and builds:
   * a sha256 of the prompt text, so copies pasted into other chats or tools can be matched
 
 The full prompt text is kept only in the private output; the shared index carries ids,
-hashes, codes and branch facts. Usage:
+hashes, codes and branch facts.
 
-    python3 scripts/chat_index.py TRANSCRIPT.jsonl --out index.json
+F-56: when a long chat is compacted, the transcript is rewritten and earlier prompts vanish from
+it. So the index is cumulative: pass the previous full index as --prior and every prompt it holds
+is kept. The newest prompt also survives compaction as a `last-prompt` row; if no ordinary row
+carries it, it is added from there (flagged "from": "last-prompt", time taken from the compaction).
+Usage:
+
+    python3 scripts/chat_index.py TRANSCRIPT.jsonl --prior index.json --out index.json
 """
 from __future__ import annotations
 
@@ -56,8 +62,23 @@ def _is_interrupt(row) -> bool:
     return row.get("type") == "user" and _text(row).strip().startswith("[Request interrupted")
 
 
-def build(rows: list[dict]) -> dict:
-    rows = [r for r in rows if r.get("uuid")]
+def _recover_last_prompt(rows: list[dict]) -> list[dict]:
+    """Turn the newest `last-prompt` row into a prompt row when compaction removed the original."""
+    lasts = [r for r in rows if r.get("type") == "last-prompt" and r.get("lastPrompt")]
+    if not lasts:
+        return []
+    text = lasts[-1]["lastPrompt"].strip()
+    if any(_is_prompt(r) and REMINDER.sub("", _text(r)).strip() == text for r in rows):
+        return []
+    summary = next((r for r in reversed(rows) if r.get("isCompactSummary")), None)
+    uuids = (summary or {}).get("summarizedTurnPromptUuids") or []
+    uuid = uuids[-1] if uuids else "last-prompt:" + hashlib.sha256(text.encode()).hexdigest()[:12]
+    return [{"uuid": uuid, "parentUuid": None, "type": "user", "from": "last-prompt",
+             "timestamp": (summary or {}).get("timestamp", ""), "message": {"content": text}}]
+
+
+def build(rows: list[dict], prior: dict | None = None) -> dict:
+    rows = [r for r in rows if r.get("uuid")] + _recover_last_prompt(rows)
     by_id = {r["uuid"]: r for r in rows}
     kids = defaultdict(list)
     for r in rows:
@@ -99,9 +120,16 @@ def build(rows: list[dict]) -> dict:
         for k, p in enumerate(sorted(g, key=lambda r: r.get("timestamp", "")), 1):
             edit_of[p["uuid"]] = (k, len(g), g[0]["uuid"])
 
-    # message numbers per day, shared by all edits of one message
+    # message numbers per day, shared by all edits of one message; numbering continues the prior index
+    kept = [q for q in (prior or {}).get("prompts", [])]
+    seen = {q["uuid"] for q in kept}
     day_count, msg_no, out = defaultdict(int), {}, []
+    for q in kept:
+        day, n = q["message"].split("-")[1], int(q["message"].split("-")[2])
+        day_count[day] = max(day_count[day], n)
     for p in prompts:
+        if p["uuid"] in seen:
+            continue
         k, n, first = edit_of[p["uuid"]]
         if first not in msg_no:
             day = by_id[first].get("timestamp", "")[:10].replace("-", "")[2:]
@@ -117,18 +145,24 @@ def build(rows: list[dict]) -> dict:
             "edits": n,
             "uuid": p["uuid"],
             "ts": p.get("timestamp"),
-            "live": p["uuid"] in live,
+            "live": p["uuid"] in live or p.get("from") == "last-prompt",   # the newest prompt is live
             "interrupted": interrupted,
             "reply_code": reply_codes[0] if reply_codes else None,
             "mentions": sorted({m.upper() for m in MENTIONS.findall(body)}),
             "sha256": hashlib.sha256(body.encode()).hexdigest(),
             "chars": len(body),
             "text": body,
+            # a last-prompt row may hold only the start of the text, so its hash matches a prefix
+            **({"from": p["from"], "partial": True} if p.get("from") else {}),
         })
+    out += kept      # kept prompts keep their branch facts: compaction removes rows, never branches
+    out.sort(key=lambda q: (q.get("ts") or "", q["id"]))
+    msgs = {q["message"] for q in out}
+    edited = {q["message"] for q in out if q["edits"] > 1}
     return {
         "prompts": out,
-        "messages": len(msg_no),
-        "edited_messages": sum(1 for g in groups.values() if len(g) > 1),
+        "messages": len(msgs),
+        "edited_messages": len(edited),
         "superseded": sum(1 for p in out if not p["live"]),
     }
 
@@ -141,10 +175,12 @@ def shared_view(index: dict) -> dict:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("transcript")
+    ap.add_argument("--prior", help="previous full index to carry forward (F-56: compaction drops old rows)")
     ap.add_argument("--out", help="write the full index (with texts) here; omit to print the shared view")
     a = ap.parse_args(argv)
     rows = [json.loads(line) for line in open(a.transcript, encoding="utf-8") if line.strip()]
-    idx = build(rows)
+    prior = json.load(open(a.prior, encoding="utf-8")) if a.prior else None
+    idx = build(rows, prior)
     if a.out:
         json.dump(idx, open(a.out, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
     else:

@@ -53,6 +53,23 @@ def test_shared_view_has_no_texts():
     assert all("text" not in p and len(p["sha256"]) == 64 for p in s["prompts"])
 
 
+def test_compaction_keeps_prior_and_recovers_last_prompt():
+    # F-56: after compaction only a summary and a last-prompt row remain
+    prior = build(transcript())
+    after = [
+        row("s1", None, "user", "2026-11-07T12:00:00Z", "summary", isCompactSummary=True,
+            summarizedTurnPromptUuids=["u9"]),
+        {"type": "last-prompt", "lastPrompt": "Q93 depends", "leafUuid": "x"},
+    ]
+    idx = build(after, prior)
+    ids = [p["id"] for p in idx["prompts"]]
+    assert ids[:4] == [p["id"] for p in prior["prompts"]], ids        # nothing lost
+    last = idx["prompts"][-1]
+    assert last["id"] == "M-261107-3-e1" and last["uuid"] == "u9" and last["from"] == "last-prompt" and last["live"]
+    assert last["mentions"] == ["Q93"] and idx["messages"] == 3
+    assert build(after, idx)["prompts"] == idx["prompts"]               # re-running adds nothing
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

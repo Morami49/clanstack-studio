@@ -47,7 +47,7 @@ fn tools() -> Value {
              "limit": {"type": "integer", "minimum": 1, "maximum": 200}}},
          "annotations": {"readOnlyHint": true}},
         {"name": "hub_log", "title": "Request log",
-         "description": "The hub's private request log, newest first: time, route, tool, outcome, duration in ms, who (login) and build. Never contents. Use it to time tests and see failed calls.",
+         "description": "The hub's private request log, newest first: time, route, tool, outcome, ms waiting on network or storage, who (login) and build. Never contents. Includes this call. Use it to time tests and see failed calls.",
          "inputSchema": {"type": "object", "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 200}}},
          "annotations": {"readOnlyHint": true}},
         {"name": "write_event", "title": "Write a Studio event",

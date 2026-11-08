@@ -160,7 +160,8 @@ impl Record {
         let rows: Vec<Row> = sql.exec("SELECT ts, route, tool, outcome, ms, who, build FROM reqlog ORDER BY seq DESC LIMIT ?", vec![(limit as f64).into()])?.to_array()?;
         let rows: Vec<serde_json::Value> = rows.into_iter().map(|r| serde_json::json!({
             "time": mcp::iso(r.ts as i64), "route": r.route, "tool": r.tool, "outcome": r.outcome, "ms": r.ms as i64, "who": r.who, "build": r.build})).collect();
-        Ok(serde_json::json!({ "entries": rows }))
+        Ok(serde_json::json!({ "entries": rows,
+            "note": "ms counts only time spent waiting on the network or storage: Cloudflare freezes the clock while code computes (a timing-attack defence), so ms 0 means no waiting, not no work. 'not offered' means a client asked for a method this hub does not have; it is a probe, not a failure." }))
     }
 
     fn secret_opt(&self, name: &str) -> Option<String> {
@@ -283,6 +284,8 @@ impl Record {
                     let tool = if method == "tools/call" { m.pointer("/params/name").and_then(|v| v.as_str()).unwrap_or("-").to_string() } else { method.clone() };
                     let r = if tool == "hub_log" && m.get("id").is_some() {
                         let limit = m.pointer("/params/arguments/limit").and_then(|v| v.as_u64()).unwrap_or(50).clamp(1, 200) as usize;
+                        // logged before reading, so the call that asks for the log appears in it
+                        self.log(now, "/mcp", &tool, "ok", &login);
                         let v = self.read_log(limit)?;
                         Some(serde_json::json!({"jsonrpc": "2.0", "id": m["id"], "result": {"content": [{"type": "text", "text": v.to_string()}], "structuredContent": v, "isError": false}}))
                     } else {
@@ -291,11 +294,13 @@ impl Record {
                     };
                     let outcome = match &r {
                         None => "notification".to_string(),
+                        // a client probing for a method this hub does not offer (e.g. server/discover) is not a failure
+                        Some(v) if v.pointer("/error/code") == Some(&serde_json::json!(-32601)) => "not offered".to_string(),
                         Some(v) if v.get("error").is_some() => format!("error {}", v.pointer("/error/code").cloned().unwrap_or_default()),
                         Some(v) if v.pointer("/result/isError") == Some(&serde_json::Value::Bool(true)) => "tool error".to_string(),
                         Some(_) => "ok".to_string(),
                     };
-                    self.log(now, "/mcp", &tool, &outcome, &login);
+                    if tool != "hub_log" { self.log(now, "/mcp", &tool, &outcome, &login); }
                     if let Some(v) = r { replies.push(v); }
                 }
                 let added = self.hub.borrow().as_ref().unwrap().pull(before, usize::MAX).events;
