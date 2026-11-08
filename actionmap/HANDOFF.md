@@ -129,6 +129,14 @@ modelling. Phase 1 (rails) is built; voice is next. Owner: Nowed.
 | D-116 | 2026-11-07 | **Mirror uses a project deploy key** (Q67 B, CASE-02); GitLab host key pinned. | 64dcd51; W4.3+ pending. |
 | D-117 | 2026-11-07 | **Chat index**: `scripts/chat_index.py` gives every prompt M-YYMMDD-n-eK with live/superseded, interruptions, reply code, mentions, sha256; texts private. Run each turn. | ca29a3b. |
 | D-118 | 2026-11-07 | **Merge policy**: index all past chats now (CHAT-*), merge content chat by chat as sourced proposals; conflicts become questions; unrelated personal/third-party content never copied. | Q79–Q81. |
+| D-119 | 2026-11-08 | **Nothing is off-limits inside compartments**: per-compartment keys, owner-approved bridges; sensitive material under Nowed's profiles. | F-40 GDPR controller, F-41 concentration. |
+| D-120 | 2026-11-08 | **Studio embeds inside other AI tools**: funnel new users + capability capture (module, or docs when compute is short). | FLOW-capture. |
+| D-121 | 2026-11-08 | **Next build: hub connector (OAuth), then builder interviews** (Q77 A). | Q86–Q87. |
+| D-122 | 2026-11-08 | **Productise the Studio method** for competitive advantage once the Purpose tree exists (Q78 A). | |
+| D-123 | 2026-11-08 | **Merge past chats one by one**, Master Reference v2.0 first (Q79–Q80 A); Kenzee profile later (Q81); exports/feeds later (Q82 B). | |
+| D-124 | 2026-11-08 | **Profile model** (Q83 A+): per-compartment keys; every user gets a control profile (manages all profiles, contents, bridges) and a public-safe profile (full control, nothing sensitive shown); each profile has its own Studio surface (ActionMap). | Q88 duress option. |
+| D-125 | 2026-11-08 | **Neutral infrastructure, not deniability** (Q84 A): content-neutral tools, OSA risk assessment before first outside user, valid-request process, transparency log, unreadable compartments. | CASE-06, CASE-07. |
+| D-126 | 2026-11-08 | **Embed order**: Claude connector → cross-tool browser extension → the rest (Q85). | |
 
 ## State log (append-only)
 
@@ -213,6 +221,8 @@ modelling. Phase 1 (rails) is built; voice is next. Owner: Nowed.
   Actions pinned to SHAs (F-34). Chat index built and run: this chat = 20 prompts, 13 messages, 5 edited, 7 superseded;
   10 past chats registered (CHAT-*). F-37 earlier generations differ (Axum/Postgres/Leptos, six-node schema, CVU, n8n on OCI).
   Open: Q76 (OSA), Q77 (next build), Q78 (productise method), Q79–Q81 (merge).
+- **2026-11-08 — W4 done by Nowed; first mirror run.** GitLab path clanstack-devs/Clanstack-studio (Ultimate trial: rely on nothing trial-only).
+  Profile model, neutral infrastructure, embed order recorded. Next: hub connector (Q86 implementation, Q87 sign-in).
 
 ## File map
 - `schema/event.schema.json` — the contract.
