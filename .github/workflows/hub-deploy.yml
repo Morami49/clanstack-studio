@@ -67,3 +67,22 @@ jobs:
             curl -fsS -X POST -H "authorization: Bearer $HUB_WRITE_TOKEN" "$URL/import" --data-binary @../exports/studio-events.json; echo
           fi
           [ -n "$HUB_WRITE_TOKEN" ] && curl -fsS -H "authorization: Bearer $HUB_WRITE_TOKEN" "$URL/status"; echo
+      - if: steps.ready.outputs.go == 'yes'
+        name: Smoke-test the Claude connector (F-46)
+        env: {URL: "${{ steps.deploy.outputs.url }}", HUB_WRITE_TOKEN: "${{ secrets.HUB_WRITE_TOKEN }}"}
+        run: |
+          set -e
+          # unauthenticated: must start sign-in
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$URL/mcp" -d '{}'); test "$code" = 401
+          curl -fsS "$URL/.well-known/oauth-protected-resource" | grep -q '"resource"'
+          curl -fsS "$URL/.well-known/oauth-authorization-server" | grep -q '"S256"'
+          [ -z "$HUB_WRITE_TOKEN" ] && exit 0
+          rpc() { curl -fsS -X POST "$URL/mcp" -H "authorization: Bearer $HUB_WRITE_TOKEN" -H 'content-type: application/json' -d "$1"; }
+          # twice in a row on purpose: the second call is what crashed before F-46 was fixed
+          for i in 1 2; do
+            rpc '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}' | grep -q '"protocolVersion"'
+            rpc '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' | grep -q '"write_event"'
+            rpc '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"hub_status","arguments":{}}}' | grep -q '"verified":true'
+            rpc '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"read_events","arguments":{"after":0,"limit":5}}}' | grep -q '"next"'
+          done
+          echo "connector smoke test passed"

@@ -238,7 +238,9 @@ impl Record {
             (Method::Post, "/mcp") => {
                 self.load_oauth()?;
                 let bearer = req.headers().get("authorization").ok().flatten();
-                let login = self.oauth.borrow().as_ref().unwrap().authenticate(bearer.as_deref(), now);
+                let mut login = self.oauth.borrow().as_ref().unwrap().authenticate(bearer.as_deref(), now);
+                // F-46 follow-up: the deploy's smoke test drives /mcp with HUB_WRITE_TOKEN (already full-access via /push)
+                if login.is_none() && self.authorised(req) { login = Some("service:deploy-check".into()); }
                 let Some(login) = login else {
                     let h = Headers::new();
                     h.set("www-authenticate", &cfg.www_authenticate())?;
