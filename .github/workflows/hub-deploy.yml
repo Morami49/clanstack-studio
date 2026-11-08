@@ -39,6 +39,7 @@ jobs:
         name: Deploy
         id: deploy
         run: |
+          export BUILD_SHA=$(echo "${{ github.event.workflow_run.head_sha }}" | cut -c1-7)
           npx -y wrangler@4.158.0 deploy | tee deploy.log
           echo "url=$(grep -oE 'https://[a-z0-9.-]+\.workers\.dev' deploy.log | head -1)" >> $GITHUB_OUTPUT
       - if: steps.ready.outputs.go == 'yes'
@@ -85,4 +86,6 @@ jobs:
             rpc '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"hub_status","arguments":{}}}' | grep -q '"verified":true'
             rpc '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"read_events","arguments":{"after":0,"limit":5}}}' | grep -q '"next"'
           done
+          rpc '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"hub_log","arguments":{"limit":3}}}' | grep -q '"entries"'
+          curl -fsS "$URL/health" | grep -q "ok $(echo "${{ github.event.workflow_run.head_sha }}" | cut -c1-7)"
           echo "connector smoke test passed"

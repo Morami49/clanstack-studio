@@ -177,7 +177,7 @@ fn mcp_initialize_list_and_tools() {
     assert!(handle(&mut hub, "Morami49", &key, &json!({"jsonrpc": "2.0", "method": "notifications/initialized"}), T0).is_none());
     let tools = handle(&mut hub, "Morami49", &key, &json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}), T0).unwrap();
     let names: Vec<&str> = tools["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
-    assert_eq!(names, ["hub_status", "read_events", "write_event"]);
+    assert_eq!(names, ["hub_status", "read_events", "hub_log", "write_event"]);
 
     let call = |hub: &mut Hub, name: &str, args: Value| handle(hub, "Morami49", &key, &json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": name, "arguments": args}}), T0 + 60_000).unwrap()["result"].clone();
     let w = call(&mut hub, "write_event", json!({"kind": "answer", "item": "Q-duress", "body": {"code": "Q86", "text": "A"}}));
@@ -196,6 +196,7 @@ fn mcp_initialize_list_and_tools() {
     let evs = r["structuredContent"]["events"].as_array().unwrap();
     assert_eq!(evs.iter().map(|e| e["doc_id"].as_str().unwrap()).collect::<Vec<_>>(), ["claude-1", doc.as_str()]);
     assert_eq!(call(&mut hub, "hub_status", json!({}))["structuredContent"]["verified"], true);
+    assert_eq!(call(&mut hub, "hub_status", json!({}))["structuredContent"]["build"], hub_core::mcp::BUILD);
     // bad writes are tool errors, not crashes
     assert_eq!(call(&mut hub, "write_event", json!({"kind": "delete-everything", "body": {}}))["isError"], true);
     assert_eq!(call(&mut hub, "write_event", json!({"kind": "comment", "body": {"text": "no item"}}))["isError"], true);

@@ -29,7 +29,7 @@ use worker::*;
 #[event(fetch)]
 async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     if req.path() == "/health" {
-        return Response::ok("ok");
+        return Response::ok(format!("ok {}", mcp::BUILD));
     }
     // One record for now; later one Durable Object per space.
     let ns = env.durable_object("RECORD")?;
@@ -141,6 +141,28 @@ impl Record {
         Ok(())
     }
 
+    /// Q90 A: one row per connector request. Time, route, tool, outcome, duration, who, build. Never contents.
+    fn log(&self, started: i64, route: &str, tool: &str, outcome: &str, who: &str) {
+        let sql = self.sql();
+        let _ = sql.exec("CREATE TABLE IF NOT EXISTS reqlog (seq INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER, route TEXT, tool TEXT, outcome TEXT, ms INTEGER, who TEXT, build TEXT)", None);
+        let ms = Date::now().as_millis() as i64 - started;
+        let _ = sql.exec("INSERT INTO reqlog (ts, route, tool, outcome, ms, who, build) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            vec![(started as f64).into(), route.into(), tool.into(), outcome.into(), (ms as f64).into(), who.into(), mcp::BUILD.into()]);
+        // keep the newest 5000 rows
+        let _ = sql.exec("DELETE FROM reqlog WHERE seq <= (SELECT MAX(seq) FROM reqlog) - 5000", None);
+    }
+
+    fn read_log(&self, limit: usize) -> Result<serde_json::Value> {
+        let sql = self.sql();
+        sql.exec("CREATE TABLE IF NOT EXISTS reqlog (seq INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER, route TEXT, tool TEXT, outcome TEXT, ms INTEGER, who TEXT, build TEXT)", None)?;
+        #[derive(Deserialize, serde::Serialize)]
+        struct Row { ts: f64, route: String, tool: String, outcome: String, ms: f64, who: String, build: String }
+        let rows: Vec<Row> = sql.exec("SELECT ts, route, tool, outcome, ms, who, build FROM reqlog ORDER BY seq DESC LIMIT ?", vec![(limit as f64).into()])?.to_array()?;
+        let rows: Vec<serde_json::Value> = rows.into_iter().map(|r| serde_json::json!({
+            "time": mcp::iso(r.ts as i64), "route": r.route, "tool": r.tool, "outcome": r.outcome, "ms": r.ms as i64, "who": r.who, "build": r.build})).collect();
+        Ok(serde_json::json!({ "entries": rows }))
+    }
+
     fn secret_opt(&self, name: &str) -> Option<String> {
         self.env.secret(name).ok().map(|s| s.to_string()).filter(|s| !s.is_empty())
     }
@@ -242,6 +264,7 @@ impl Record {
                 // F-46 follow-up: the deploy's smoke test drives /mcp with HUB_WRITE_TOKEN (already full-access via /push)
                 if login.is_none() && self.authorised(req) { login = Some("service:deploy-check".into()); }
                 let Some(login) = login else {
+                    self.log(now, "/mcp", "-", "401 sign-in needed", "-");
                     let h = Headers::new();
                     h.set("www-authenticate", &cfg.www_authenticate())?;
                     h.set("content-type", "application/json")?;
@@ -253,14 +276,28 @@ impl Record {
                 };
                 let key = self.connector_key()?;
                 let before = self.hub.borrow().as_ref().unwrap().status().events;
-                let replies: Vec<serde_json::Value> = {
-                    let mut b = self.hub.borrow_mut();
-                    let hub = b.as_mut().unwrap();
-                    match &msg {
-                        serde_json::Value::Array(batch) => batch.iter().filter_map(|m| mcp::handle(hub, &login, &key, m, now)).collect(),
-                        m => mcp::handle(hub, &login, &key, m, now).into_iter().collect(),
-                    }
-                };
+                let msgs: Vec<serde_json::Value> = match &msg { serde_json::Value::Array(b) => b.clone(), m => vec![m.clone()] };
+                let mut replies: Vec<serde_json::Value> = vec![];
+                for m in &msgs {
+                    let method = m.get("method").and_then(|v| v.as_str()).unwrap_or("-").to_string();
+                    let tool = if method == "tools/call" { m.pointer("/params/name").and_then(|v| v.as_str()).unwrap_or("-").to_string() } else { method.clone() };
+                    let r = if tool == "hub_log" && m.get("id").is_some() {
+                        let limit = m.pointer("/params/arguments/limit").and_then(|v| v.as_u64()).unwrap_or(50).clamp(1, 200) as usize;
+                        let v = self.read_log(limit)?;
+                        Some(serde_json::json!({"jsonrpc": "2.0", "id": m["id"], "result": {"content": [{"type": "text", "text": v.to_string()}], "structuredContent": v, "isError": false}}))
+                    } else {
+                        let mut b = self.hub.borrow_mut();
+                        mcp::handle(b.as_mut().unwrap(), &login, &key, m, now)
+                    };
+                    let outcome = match &r {
+                        None => "notification".to_string(),
+                        Some(v) if v.get("error").is_some() => format!("error {}", v.pointer("/error/code").cloned().unwrap_or_default()),
+                        Some(v) if v.pointer("/result/isError") == Some(&serde_json::Value::Bool(true)) => "tool error".to_string(),
+                        Some(_) => "ok".to_string(),
+                    };
+                    self.log(now, "/mcp", &tool, &outcome, &login);
+                    if let Some(v) = r { replies.push(v); }
+                }
                 let added = self.hub.borrow().as_ref().unwrap().pull(before, usize::MAX).events;
                 self.persist(&added)?;
                 match (&msg, replies.len()) {

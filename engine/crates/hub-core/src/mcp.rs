@@ -4,6 +4,7 @@
 //! Tools (all act on the shared record, never on private compartments):
 //!   hub_status   counts and whether the whole chain verifies
 //!   read_events  Studio-shaped events from a cursor: imported Studio Web events + writes from other nodes
+//!   hub_log      (served by the node, not here) the private request log: time, tool, outcome, duration; never contents
 //!   write_event  add a Studio-shaped event (answer, comment, status, item.create, item.edit, link),
 //!                signed by the connector key; it reaches Studio Web through /studio-export (D-101)
 
@@ -12,6 +13,8 @@ use foundation_core::event::KeyPair;
 use serde_json::{json, Value};
 
 pub const PROTOCOL_VERSIONS: [&str; 3] = ["2025-11-25", "2025-06-18", "2025-03-26"];
+/// Commit the node was built from (set by the deploy as BUILD_SHA), so a test knows which code answered.
+pub const BUILD: &str = match option_env!("BUILD_SHA") { Some(b) => b, None => "dev" };
 pub const WRITE_KINDS: [&str; 6] = ["answer", "comment", "status", "item.create", "item.edit", "link"];
 
 /// Milliseconds since 1970 → `YYYY-MM-DDTHH:MM:SS.mmmZ` (Studio's timestamp shape).
@@ -43,6 +46,10 @@ fn tools() -> Value {
              "after": {"type": "integer", "minimum": 0, "description": "cursor from a previous call (0 to start)"},
              "limit": {"type": "integer", "minimum": 1, "maximum": 200}}},
          "annotations": {"readOnlyHint": true}},
+        {"name": "hub_log", "title": "Request log",
+         "description": "The hub's private request log, newest first: time, route, tool, outcome, duration in ms, who (login) and build. Never contents. Use it to time tests and see failed calls.",
+         "inputSchema": {"type": "object", "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 200}}},
+         "annotations": {"readOnlyHint": true}},
         {"name": "write_event", "title": "Write a Studio event",
          "description": "Add an event to the shared Clanstack record, e.g. an answer to a question, a comment, a status change or a new item. It appears in Studio Web on its next sync. Never use for private material.",
          "inputSchema": {"type": "object", "required": ["kind", "body"], "properties": {
@@ -59,7 +66,12 @@ fn text_result(v: Value, is_error: bool) -> Value {
 
 fn call(hub: &mut Hub, login: &str, key: &KeyPair, name: &str, args: &Value, now: i64) -> Value {
     match name {
-        "hub_status" => text_result(serde_json::to_value(hub.status()).unwrap_or(Value::Null), false),
+        "hub_status" => {
+            let mut v = serde_json::to_value(hub.status()).unwrap_or(Value::Null);
+            if let Some(o) = v.as_object_mut() { o.insert("build".into(), json!(BUILD)); }
+            text_result(v, false)
+        }
+        "hub_log" => text_result(json!({"error": "hub_log is served by the node, not hub-core"}), true),
         "read_events" => {
             let after = args.get("after").and_then(Value::as_u64).unwrap_or(0) as usize;
             let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(100).clamp(1, 200) as usize;
@@ -108,7 +120,7 @@ pub fn handle(hub: &mut Hub, login: &str, key: &KeyPair, msg: &Value, now: i64) 
             let asked = msg.pointer("/params/protocolVersion").and_then(Value::as_str).unwrap_or("");
             let v = if PROTOCOL_VERSIONS.contains(&asked) { asked } else { PROTOCOL_VERSIONS[0] };
             ok(json!({"protocolVersion": v, "capabilities": {"tools": {"listChanged": false}},
-                      "serverInfo": {"name": "clanstack-hub", "title": "Clanstack hub", "version": env!("CARGO_PKG_VERSION")},
+                      "serverInfo": {"name": "clanstack-hub", "title": "Clanstack hub", "version": format!("{}+{}", env!("CARGO_PKG_VERSION"), BUILD)},
                       "instructions": "Clanstack's shared record. Read with read_events; write answers, comments and items with write_event. Private compartments are never exposed here."}))
         }
         "ping" => ok(json!({})),
