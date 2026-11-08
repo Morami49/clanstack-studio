@@ -107,7 +107,7 @@ impl Hub {
     pub fn pull(&self, after: usize, limit: usize) -> Page {
         let total = self.store.order.len();
         let start = after.min(total);
-        let end = (start + limit.max(1)).min(total);
+        let end = start.saturating_add(limit.max(1)).min(total); // F-46: never overflow, whatever limit is asked
         let events = self.store.order[start..end].iter().map(|id| self.store.events[id].clone()).collect();
         Page { events, next: end, total }
     }

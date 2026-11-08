@@ -203,3 +203,21 @@ fn mcp_initialize_list_and_tools() {
     let unknown = handle(&mut hub, "Morami49", &key, &json!({"jsonrpc": "2.0", "id": 4, "method": "resources/list"}), T0).unwrap();
     assert_eq!(unknown["error"]["code"], -32601);
 }
+
+#[test]
+fn f46_pull_with_unbounded_limit_after_writes_does_not_panic() {
+    // The worker asks for "everything after N" with usize::MAX after every /mcp call. Once the hub held
+    // events, start + usize::MAX overflowed and every later call crashed (found in Nowed's W6 test, 8 Nov).
+    let mut hub = Hub::new();
+    let key = KeyPair::from_seed([7; 32]);
+    let w = |hub: &mut Hub, n: u64| handle(hub, "Morami49", &key, &json!({"jsonrpc": "2.0", "id": n, "method": "tools/call",
+        "params": {"name": "write_event", "arguments": {"kind": "comment", "item": "D-128", "body": {"text": format!("write {n}")}}}}), T0 + n as i64).unwrap();
+    w(&mut hub, 1);
+    let before = hub.status().events;
+    assert_eq!(hub.pull(before, usize::MAX).events.len(), 0);
+    w(&mut hub, 2);
+    assert_eq!(hub.pull(before, usize::MAX).events.len(), 1);
+    assert_eq!(hub.pull(usize::MAX, usize::MAX).events.len(), 0);
+    let st = handle(&mut hub, "Morami49", &key, &json!({"jsonrpc": "2.0", "id": 9, "method": "tools/call", "params": {"name": "hub_status", "arguments": {}}}), T0).unwrap();
+    assert_eq!(st["result"]["structuredContent"]["events"], 3); // connector identity + 2 writes
+}
