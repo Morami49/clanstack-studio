@@ -143,6 +143,8 @@ modelling. Phase 1 (rails) is built; voice is next. Owner: Nowed.
 | D-130 | 2026-11-08 | **Request log: time, route, tool, outcome, ms, who, build; never contents** (Q90 A). Newest 5000 rows. | 7de9622; hub_log tool. |
 | D-131 | 2026-11-08 | **Sealed capture later**: contents captured only sealed to the caller's key, with compartment keys (Q91 A+C). Off for now. | Needs D-119 keys. |
 | D-132 | 2026-11-08 | **Retention is per purpose** (Q93 "depends on auditing and analytics needs"): each log or record kind names the audit or analytics need that sets how long it stays; no single number. | Request log keeps 5000 rows until a purpose sets otherwise. |
+| D-133 | 2026-11-08 | **Every action has an approval policy** (Q94 A): auto, ask a person, or off; approvals count people (P-10); every run leaves an audit record. Only reversible actions may run on auto (P-12). First instance: Branch cleanup workflow (person starts it; preview by default). | Claude's own branch deletes are refused (HTTP 403, F-53); not worked around. |
+| D-134 | 2026-11-08 | **Build order** (Q95 A then B): D-129 Studio Web ↔ hub sync, then safe repeat writes (F-48) and unknown-item warnings (F-47). | |
 
 ## State log (append-only)
 
@@ -236,6 +238,9 @@ modelling. Phase 1 (rails) is built; voice is next. Owner: Nowed.
   until Disconnect/Connect (F-54) — test rule: reconnect after any new tool. F-56: compaction rewrites the transcript, so the chat
   index is now cumulative (--prior) and recovers the newest prompt from `last-prompt`. hub_log now lists itself; probes for
   methods the hub lacks (server/discover) log as "not offered"; ms counts I/O waits only (Workers freeze the clock).
+- **2026-11-08 — W9 passed.** hub_log lists itself, probes read "not offered", Settings shows 4 tools. No hub rows between
+  18:12 and 18:29, so Claude's 18:17 connection attempt (F-58) never reached /mcp; sign-in and discovery routes are now logged
+  too. Branch cleanup workflow added (D-133).
 
 ## File map
 - `schema/event.schema.json` — the contract.

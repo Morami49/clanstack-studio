@@ -1,0 +1,55 @@
+# Branch cleanup (Q94, D-133): a human-approved action with an audit trail.
+# Runs only when a person starts it (Actions → Branch cleanup → Run workflow), so the approval is the click.
+#   preview  lists what would go and changes nothing (default)
+#   delete   deletes branches named b-* whose every commit is already on main ("Ahead 0")
+# main, Dependabot branches and any branch with unmerged work are never touched.
+# The run log and summary record who ran it, when, and each branch with the commit it pointed at,
+# so any branch can be restored from that sha (GitHub → Branches → Restore, or `git push origin <sha>:refs/heads/<name>`).
+name: Branch cleanup
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "preview (change nothing) or delete"
+        type: choice
+        options: [preview, delete]
+        default: preview
+permissions:
+  contents: write
+concurrency: branch-cleanup
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+      - name: Find merged b-* branches
+        id: find
+        run: |
+          git fetch --prune origin '+refs/heads/*:refs/remotes/origin/*'
+          : > merged.txt
+          for ref in $(git for-each-ref --format='%(refname:strip=3)' 'refs/remotes/origin/b-*'); do
+            case "$ref" in main|dependabot/*) continue;; esac
+            if git merge-base --is-ancestor "origin/$ref" origin/main; then
+              echo "$ref $(git rev-parse --short "origin/$ref")" >> merged.txt
+            fi
+          done
+          {
+            echo "### Branch cleanup — mode: ${{ inputs.mode }}, started by @${{ github.actor }}"
+            echo "main = $(git rev-parse --short origin/main)"
+            echo
+            echo "| branch | last commit (restore point) |"
+            echo "|---|---|"
+            while read -r b sha; do echo "| $b | $sha |"; done < merged.txt
+            echo
+            echo "$(wc -l < merged.txt) merged branch(es) found."
+          } >> "$GITHUB_STEP_SUMMARY"
+          cat merged.txt
+      - name: Delete them
+        if: inputs.mode == 'delete'
+        run: |
+          while read -r b sha; do
+            git push origin --delete "$b" && echo "deleted $b (was $sha)"
+          done < merged.txt
+          echo "Deleted $(wc -l < merged.txt) branch(es)." >> "$GITHUB_STEP_SUMMARY"

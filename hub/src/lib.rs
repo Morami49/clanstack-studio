@@ -330,7 +330,15 @@ impl DurableObject for Record {
     async fn fetch(&self, mut req: Request) -> Result<Response> {
         self.load()?;
         let url = req.url()?;
+        let started = Date::now().as_millis() as i64;
+        let path = req.path();
+        let method = req.method().to_string();
         if let Some(r) = self.connector(&mut req, &url).await? {
+            // F-58: sign-in and discovery steps are logged too (route, method, status; never codes, tokens or bodies),
+            // so a connection that fails before /mcp still leaves a trace. /mcp logs each message itself.
+            if path != "/mcp" {
+                self.log(started, &path, &method, &format!("{}", r.status_code()), "-");
+            }
             return Ok(r);
         }
         let q = |k: &str| url.query_pairs().find(|(a, _)| a == k).and_then(|(_, v)| v.parse::<usize>().ok());
