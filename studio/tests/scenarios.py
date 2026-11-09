@@ -502,11 +502,34 @@ async def s28_push_after_clean_runs(b):
     return ok, f"copied up on open={pushed}; non-owner calls={other}"
 
 
+async def s29_runs_timeline(b):
+    """Nowed checks what ran overnight: every executor's runs in one list, newest first, failures marked, filterable, each with its undo."""
+    def mk(ex):
+        e = ev("item.create", None, {"id": f"RUNS-{ex}", "type": "asset", "title": ex, "body": "", "status": "built"}, ts="2026-11-09T00:00:00.000Z")
+        e["_id"] = "runs-" + ex
+        return e
+    runs = [mk("branch-cleanup"), mk("hub-deploy"), mk("hub-sync"),
+            ev("comment", "RUNS-branch-cleanup", {"text": "Deleted 1 merged branch(es): b-x@abc.", "outcome": "success", "policy": "auto",
+               "trigger": "push", "undo": "Restore from sha", "run_url": "https://github.com/x/y/actions/runs/1"}, who="github:service", ts="2026-11-09T01:00:00.000Z"),
+            ev("comment", "RUNS-hub-deploy", {"text": "Deploy of abc1234 failure", "outcome": "failure", "policy": "auto"}, who="github:service", ts="2026-11-09T02:00:00.000Z"),
+            ev("comment", "RUNS-hub-sync", {"text": "Read from the hub on open: 1 brought here.", "clean": True, "mode": "read", "auto": True}, ts="2026-11-09T03:00:00.000Z")]
+    p = await open_page(b, Store(runs), {})
+    await p.click("#tabs button[data-v=runs]"); await p.wait_for_timeout(200)
+    items = await p.locator("#runList li").all_inner_texts()
+    first_sync = "hub-sync" in items[0] if items else False
+    failed = any("failed" in t and "hub-deploy" in t for t in items)
+    undo = any("Undo: Restore from sha" in t for t in items)
+    await p.select_option("#runOutcome", "failure"); await p.wait_for_timeout(100)
+    only = await p.locator("#runList li").all_inner_texts()
+    ok = len(items) == 3 and first_sync and failed and undo and len(only) == 1 and "hub-deploy" in only[0] and not p.errors
+    return ok, f"runs={len(items)}, newest first={first_sync}, failure marked={failed}, undo shown={undo}, filtered={len(only)}"
+
+
 SCENARIOS = [s01_tired_misclick, s02_undo, s03_stable_codes, s04_past_view_lock, s05_branch_awareness, s06_view_only_client,
              s07_names, s08_long_history, s09_ai_relay, s10_keyboard_list, s11_offline_capture, s12_member_rights,
              s13_two_people_at_once, s14_phone, s15_undo_old_status, s16_overwhelm, s17_disagreement, s18_clock_skew, s19_private_area,
              s20_addresses, s21_money_settings, s22_duplicate_id, s23_same_order_everywhere,
-             s24_hub_sync, s25_more_than_1000, s26_hub_not_connected, s27_read_on_open, s28_push_after_clean_runs]
+             s24_hub_sync, s25_more_than_1000, s26_hub_not_connected, s27_read_on_open, s28_push_after_clean_runs, s29_runs_timeline]
 
 
 async def main():

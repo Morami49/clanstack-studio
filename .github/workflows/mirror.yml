@@ -35,3 +35,17 @@ jobs:
           git push "git@gitlab.com:${REPO}.git" "${SHA}:refs/heads/main"
           echo "Mirrored ${SHA:0:7} to gitlab.com/${REPO}"
           rm -f ~/.ssh/mirror
+      - name: Record the run in Studio (P-13)
+        if: always()
+        env:
+          HUB_URL: https://clanstack-hub.ndab-utube.workers.dev
+          HUB_TOKEN: ${{ secrets.HUB_WRITE_TOKEN }}
+          STATUS: ${{ job.status }}
+          REPO: ${{ vars.GITLAB_REPO }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          [ -n "$REPO" ] || exit 0
+          if [ "$STATUS" = success ]; then text="Mirrored ${RUN_SHA:0:7} to gitlab.com/$REPO (never force-pushed)."; o=success
+          else text="Mirror of ${RUN_SHA:0:7} to gitlab.com/$REPO $STATUS."; o=failure; fi
+          python3 scripts/run_record.py gitlab-mirror --title "GitLab mirror runs" --outcome "$o" --text "$text" \
+            --undo "Nothing to undo: the mirror only adds commits GitHub already has." --field "target=gitlab.com/$REPO"

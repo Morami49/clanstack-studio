@@ -153,6 +153,7 @@ modelling. Phase 1 (rails) is built; voice is next. Owner: Nowed.
 | D-140 | 2026-11-08 | **Sync on open** (Q102 A): Studio reads from the hub when it opens; copying up runs itself only after SET-policy-hub-push-clean-runs (default 5) clean recorded runs. Owner only. Every sync leaves a run record on RUNS-hub-sync (P-13). | Studio v0.5. |
 | D-141 | 2026-11-09 | **Drift becomes a Studio finding** (Q103 A): Studio wins, the run warns, and the executor writes DRIFT-<setting> to Studio through the hub, once per distinct drift (idempotency keys). | scripts/policy.py. |
 | D-142 | 2026-11-09 | **Hub writes are repeat-safe and checked** (Q104 A): write_event takes an idempotency_key (F-48) and warns when the target item is unknown or a create duplicates an id (F-47). Survives restarts. | Next: Q105. |
+| D-143 | 2026-11-09 | **Every run readable, in order** (Q105 A): 1) executors write run records into Studio (scripts/run_record.py → RUNS-<executor>); 2) deploys are an executor under SET-policy-hub-deploy (auto/ask/off, dispatch with a sha to roll back); 3) Studio's Runs view lists all runs with outcome, policy and undo. | Studio v0.6. |
 
 ## State log (append-only)
 

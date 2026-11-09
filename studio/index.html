@@ -110,7 +110,7 @@ pre.pack{white-space:pre-wrap;background:var(--raise);border:1px solid var(--lin
 </style>
 
 <header>
-  <div class="brand"><h1>Clanstack Studio</h1><span class="ver" id="ver">v0.5</span></div>
+  <div class="brand"><h1>Clanstack Studio</h1><span class="ver" id="ver">v0.6</span></div>
   <nav id="tabs" aria-label="Views">
     <button data-v="map" aria-current="true">Map</button>
     <button data-v="list">List</button>
@@ -120,6 +120,7 @@ pre.pack{white-space:pre-wrap;background:var(--raise);border:1px solid var(--lin
     <button data-v="pack">Pack</button>
     <button data-v="money">Money</button>
     <button data-v="hub">Hub</button>
+    <button data-v="runs">Runs</button>
   </nav>
   <form id="goForm" class="row" style="gap:4px" role="search"><input id="goAddr" class="mono" placeholder="Go to: D-063@2 · R-261105-2#3.1 · repo/sha:path#L10" aria-label="Go to an address" style="width:300px;max-width:100%"><button>Go</button></form>
   <span class="spacer"></span>
@@ -226,6 +227,17 @@ pre.pack{white-space:pre-wrap;background:var(--raise);border:1px solid var(--lin
       <div class="card"><h3>Policies</h3>
         <p class="mute" style="margin:0">Studio is the source of truth for every approval policy (D-133, Q101 A). Executors read these; a platform's own copy (like GitHub's variable) is checked against Studio and flagged when it differs. Each change is a version on the tree.</p>
         <ul class="log" id="policyList"></ul></div>
+    </div>
+  </section>
+
+  <section class="view" id="v-runs" hidden>
+    <div class="stack" style="max-width:960px">
+      <h2>Runs</h2>
+      <p class="mute" style="margin:0">Every automated run, from every executor, newest first (P-13): who started it, why (trigger and policy), what it changed, the outcome, and how to undo it. Runs from GitHub open on GitHub, where Re-run repeats them.</p>
+      <div class="row"><label for="runExec">Executor</label><select id="runExec"><option value="">all</option></select>
+        <label for="runOutcome">Outcome</label><select id="runOutcome"><option value="">all</option><option value="success">succeeded</option><option value="failure">failed</option></select>
+        <span class="mute" id="runCount"></span></div>
+      <ul class="log" id="runList"></ul>
     </div>
   </section>
 
@@ -672,6 +684,8 @@ async function loadOlder(){
 const POLICIES = {
   "SET-policy-branch-cleanup": {title:"Branch cleanup", choices:["ask","auto","off"], def:"ask",
     help:"auto: merged b-* branches are deleted after every change to main. Mirror: GitHub variable POLICY_BRANCH_CLEANUP."},
+  "SET-policy-hub-deploy": {title:"Deploy the hub", choices:["auto","ask","off"], def:"auto",
+    help:"auto: deploy after every green change to main. ask: only when a person starts it (Actions → hub-deploy). Mirror: GitHub variable POLICY_HUB_DEPLOY."},
   "SET-policy-hub-read": {title:"Read from the hub when Studio opens", choices:["auto","ask","off"], def:"auto",
     help:"Brings changes made through the hub into Studio on open (Q102 A)."},
   "SET-policy-hub-push": {title:"Copy Studio changes up to the hub", choices:["ask","auto-after-clean-runs","auto","off"], def:"auto-after-clean-runs",
@@ -799,8 +813,46 @@ async function hubAutoSync(){
 }
 $("#hubCheck").onclick = () => hubCheck(false);
 
+/* ---------------------------------------------------------------- runs timeline (P-13, Q105 A step 3) */
+function allRuns(){
+  const out = [];
+  for (const it of F.items.values()){
+    if (!it.id.startsWith("RUNS-")) continue;
+    const exec = it.id.slice(5);
+    for (const c of it.comments){ const b = c.body || {};
+      const outcome = b.outcome || (b.clean === false ? "failure" : "success");
+      out.push({exec, ts:c.ts, id:c.id, outcome, text:b.text||"", policy:b.policy, trigger:b.trigger || (b.auto ? "on open" : b.mode ? "button" : ""),
+                actor:b.actor || who(c.author), sha:b.sha, undo:b.undo, url:b.run_url, mode:b.mode}); }
+  }
+  return out.sort((a,b) => a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0);
+}
+function renderRuns(){
+  const runs = allRuns(), sel = $("#runExec"), keep = sel.value;
+  const execs = [...new Set(runs.map(r => r.exec))].sort();
+  sel.innerHTML = `<option value="">all</option>` + execs.map(e => `<option ${e===keep?"selected":""}>${esc(e)}</option>`).join("");
+  const ex = sel.value, oc = $("#runOutcome").value;
+  const shown = runs.filter(r => (!ex || r.exec===ex) && (!oc || r.outcome===oc));
+  $("#runCount").textContent = `${shown.length} of ${runs.length} runs`;
+  const L = $("#runList"); L.replaceChildren();
+  if (!shown.length){ const li = document.createElement("li"); li.textContent = runs.length ? "No runs match." : "No runs recorded yet."; L.append(li); return; }
+  for (const r of shown.slice(0, 300)){
+    const li = document.createElement("li"), t = document.createElement("span"), d = document.createElement("span");
+    t.className = "mono mute"; t.textContent = (r.ts||"").replace("T"," ").slice(0,16);
+    const ok = r.outcome === "success";
+    d.innerHTML = `<span class="pill" style="color:var(${ok?"--ok":"--bad"})">${ok?"✓ ok":"✗ failed"}</span> <b>${esc(r.exec)}</b> ${esc(r.text)}
+      <br><span class="mute mono">${[r.trigger && "trigger "+r.trigger, r.policy && "policy "+r.policy, r.actor && "by "+r.actor, r.sha && "commit "+r.sha].filter(Boolean).map(esc).join(" · ")}</span>
+      ${r.undo ? `<br><span class="mute">Undo: ${esc(r.undo)}</span>` : ""}
+      <span class="row" style="margin-top:4px">${r.url ? `<a href="${esc(r.url)}" target="_blank" rel="noopener">Open run ↗</a>` : ""}
+      ${r.exec==="hub-sync" ? `<button data-resync="${esc(r.mode||"read")}">Run again</button>` : ""}
+      <a href="#RUNS-${esc(r.exec)}" class="mute mono">studio/RUNS-${esc(r.exec)}</a></span>`;
+    li.append(t, d); L.append(li);
+  }
+  L.querySelectorAll("[data-resync]").forEach(b => b.onclick = () => { show("hub"); hubSync(b.dataset.resync === "full" ? "full" : "read", false); });
+}
+$("#runExec").onchange = renderRuns; $("#runOutcome").onchange = renderRuns;
+
 /* ---------------------------------------------------------------- views + time */
-const VIEWS = ["map","list","ask","capture","tree","pack","money","hub"];
+const VIEWS = ["map","list","ask","capture","tree","pack","money","hub","runs"];
 function show(v){ if (!VIEWS.includes(v)) v = "map"; S.view=v; document.querySelectorAll("#tabs button").forEach(b=>b.setAttribute("aria-current", b.dataset.v===v));
   for (const x of VIEWS) $("#v-"+x).hidden = x!==v;
   if (v==="map" && cy) cy.resize(); if (v==="capture") sizePad(); refreshView(); store.set("view", v); }
@@ -810,7 +862,7 @@ $("#asof").oninput = e => { const evs=[...S.events].sort(byTsThenId); const v=+e
   S.asof = v>=evs.length ? null : (v===0 ? "0" : evs[v-1].ts); refresh(); };
 $("#theme").onclick = () => { const r=document.documentElement, dark=matchMedia("(prefers-color-scheme: dark)").matches;
   r.dataset.theme = (r.dataset.theme || (dark?"dark":"light"))==="dark" ? "light" : "dark"; renderMap(false); if (S.view==="tree") renderTree(); if (S.view==="capture") redraw(); };
-function refreshView(){ if (S.view==="map") renderMap(false); if (S.view==="list") renderList(); if (S.view==="ask") renderAsk(); if (S.view==="tree") renderTree(); if (S.view==="pack") renderPack(); if (S.view==="money") renderMoney(); if (S.view==="hub") renderHub(); }
+function refreshView(){ if (S.view==="map") renderMap(false); if (S.view==="list") renderList(); if (S.view==="ask") renderAsk(); if (S.view==="tree") renderTree(); if (S.view==="pack") renderPack(); if (S.view==="money") renderMoney(); if (S.view==="hub") renderHub(); if (S.view==="runs") renderRuns(); }
 function refresh(){
   if (S.bulk) return;   // a bulk action redraws once at the end
   CODES = stableCodes(); F = fold();

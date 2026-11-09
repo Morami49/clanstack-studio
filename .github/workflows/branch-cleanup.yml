@@ -88,3 +88,23 @@ jobs:
             git push origin --delete "$b" && echo "deleted $b (was $sha)"
           done < merged.txt
           echo "Deleted $(wc -l < merged.txt) branch(es)." >> "$GITHUB_STEP_SUMMARY"
+      - name: Record the run in Studio (P-13)
+        # a push with nothing to delete leaves no record; every person-started run and every failure does
+        if: always() && steps.go.outputs.run == 'yes'
+        env:
+          HUB_URL: https://clanstack-hub.ndab-utube.workers.dev
+          HUB_TOKEN: ${{ secrets.HUB_WRITE_TOKEN }}
+          STATUS: ${{ job.status }}
+          POLICY: ${{ steps.pol.outputs.effective }}
+        run: |
+          n=$(wc -l < merged.txt 2>/dev/null || echo 0)
+          list=$(awk '{printf "%s%s@%s", (NR>1?",":""), $1, $2}' merged.txt 2>/dev/null)
+          if [ "$STATUS" = success ] && [ "$GITHUB_EVENT_NAME" = push ] && [ "$n" = 0 ]; then echo "nothing to record"; exit 0; fi
+          case "$MODE" in
+            delete)  text="Deleted $n merged branch(es)${list:+: $list}." ; undo="Restore any branch from its sha: GitHub → Branches → Restore, or git push origin <sha>:refs/heads/<name>." ;;
+            *)       text="Preview: $n merged branch(es) would be deleted${list:+: $list}. Nothing changed." ; undo="" ;;
+          esac
+          [ "$STATUS" = success ] || text="Run $STATUS. $text"
+          outcome=$([ "$STATUS" = success ] && echo success || echo failure)
+          python3 scripts/run_record.py branch-cleanup --title "Branch cleanup runs" --outcome "$outcome" \
+            --text "$text" --policy "$POLICY" --undo "$undo" --field "mode=$MODE" --field "branches=$n"
