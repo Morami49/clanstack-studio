@@ -113,7 +113,7 @@ pre.pack{white-space:pre-wrap;background:var(--raise);border:1px solid var(--lin
 </style>
 
 <header>
-  <div class="brand"><h1>Clanstack Studio</h1><span class="ver" id="ver">v0.8</span></div>
+  <div class="brand"><h1>Clanstack Studio</h1><span class="ver" id="ver">v0.9</span></div>
   <nav id="tabs" aria-label="Views">
     <button data-v="map" aria-current="true">Map</button>
     <button data-v="list">List</button>
@@ -251,8 +251,14 @@ pre.pack{white-space:pre-wrap;background:var(--raise);border:1px solid var(--lin
       <p class="mute" style="margin:0">Find community builders, interview them, turn it into content, and use it to grow multi-capital (D-069). Every builder is a real person, so they live in <b>your private area</b>: nobody else can read them. Nothing is published without their recorded release (T-release).</p>
       <div class="card"><h3>Next up</h3><ol class="log" id="bNext"></ol></div>
       <div class="card"><h3>Pipeline</h3><div class="row" id="bStages" style="flex-wrap:wrap;gap:6px"></div><ul class="log" id="bList"></ul></div>
-      <div class="card"><h3>Content tests</h3><p class="mute" style="margin:0">Every interview's raw material (recordings, transcript, notes, photos) is cut into pieces in several formats, published in cycles, and compared (Q109). Enter a result for each published piece (reactions, replies, sign-ups: one number you choose per channel) to see which formats work.</p>
+      <div class="card"><h3>Content tests</h3><p class="mute" style="margin:0">Every interview's raw material is cut into pieces in several formats, published in cycles, and compared (Q109). You choose the measures (Q110): by default a channel's own measure (e.g. reactions on LinkedIn, views on YouTube) and replies, the one that counts relationships everywhere. Design the table below and save it as your view.</p>
+        <div class="row" style="flex-wrap:wrap"><label for="mList">Measures</label><input id="mList" style="width:320px" aria-label="Measures, comma separated"><button id="mSave">Save measures</button></div>
+        <div class="row" style="flex-wrap:wrap"><label for="dMetric">Show</label><select id="dMetric"></select><select id="dAgg" aria-label="How"><option value="avg">average</option><option value="sum">total</option><option value="count">pieces with a value</option></select>
+          <label for="dGroup">by</label><select id="dGroup"><option value="format">format</option><option value="channel">channel</option><option value="cycle">cycle</option><option value="kind">kind of builder</option><option value="who">builder</option></select>
+          <button id="dSave">Save as my view</button><span class="mute" id="dNote"></span></div>
         <div id="bTests"></div></div>
+      <div class="card"><h3>Private files</h3><p class="mute" style="margin:0">Raw recordings and photos upload into Studio's file store <b>encrypted in this browser</b> with your compartment passphrase (Q111 B, D-119). The passphrase is never saved: without it nobody, including Studio, can open the files, and if you lose it they can't be recovered. Files over 15 MB, or when uploads aren't available, go in your own storage with a link instead (Q111 A).</p>
+        <div class="row"><input id="vPass" type="password" autocomplete="off" placeholder="Compartment passphrase (kept only while this page is open)" style="width:340px" aria-label="Compartment passphrase"><span class="mute" id="vNote"></span></div></div>
       <div class="card"><h3>Add a builder</h3>
         <div class="row" style="flex-wrap:wrap">
           <input id="bName" placeholder="Name or handle" aria-label="Name or handle" style="width:180px">
@@ -911,33 +917,50 @@ const PIECE_STAGES = ["planned","drafted","published","dropped"];
 const fmtLabel = k => (FORMATS.find(f => f[0]===k)||[k,k])[1];
 const cycleNow = () => new Date().toISOString().slice(0,7);   // a cycle is a month by default, e.g. 2026-11
 // A piece is one cut of an interview in one format; its comments are folded in order, latest field wins.
-function pieces(it){ const m = new Map(); for (const c of it.comments){ const p = c.body?.piece; if (!p?.id) continue; m.set(p.id, {...(m.get(p.id)||{}), ...p}); } return [...m.values()]; }
+function pieces(it){ const m = new Map(); for (const c of it.comments){ const p = c.body?.piece; if (!p?.id) continue; const o = m.get(p.id)||{};
+  m.set(p.id, {...o, ...p, results:{...(o.results||{}), ...(p.results||{}), ...(p.result!=null ? {result:p.result} : {})}}); } return [...m.values()]; }
+const resultsOf = p => p.results || {};
+// Q110: measures are the user's choice (a shared setting); the dashboard view is each person's own (private item).
+const METRICS_DEFAULT = "channel measure, replies";
+function metrics(){ const v = F.items.get("SET-content-metrics")?.value; return String(v || METRICS_DEFAULT).split(",").map(x => x.trim()).filter(Boolean); }
+function dashView(){ const it = F.items.get("DASH-content"); try { return {metric:metrics()[0], agg:"avg", group:"format", ...(it?.value ? JSON.parse(it.value) : {})}; } catch { return {metric:metrics()[0], agg:"avg", group:"format"}; } }
 function raws(it){ return it.comments.filter(c => c.body?.raw).map(c => c.body.raw); }
 function materialsPanel(b){
   const ps = pieces(b), rs = raws(b);
   return `<span class="stack" data-matpanel="${esc(b.id)}" hidden style="margin-top:6px;padding:8px;border:1px solid var(--line);border-radius:6px">
-    <b>Raw material</b>${rs.length ? `<span class="mute">${rs.map(r => esc(r.kind + ": " + r.where)).join("<br>")}</span>` : `<span class="mute">None yet.</span>`}
+    <b>Raw material</b>${rs.length ? rs.map(r => `<span class="row" style="flex-wrap:wrap"><span class="mute">${esc(r.kind)}: ${r.asset ? `🔒 ${esc(r.name||"file")} <span class="mono">${(r.size/1048576).toFixed(1)} MB</span>` : esc(r.where)}${r.asset && r.where ? ` · backup ${esc(r.where)}` : ""}</span>
+      ${r.asset ? `<button data-vopen="${esc(r.asset)}">Open</button><button data-vsave="${esc(r.asset)}">Save a copy</button>` : ""}</span>`).join("") : `<span class="mute">None yet.</span>`}
+    <span data-vview></span>
     <span class="row" style="flex-wrap:wrap"><select data-rawkind aria-label="Kind of material">${RAW_KINDS.map(k => `<option>${esc(k)}</option>`).join("")}</select>
-      <input data-rawwhere placeholder="Where it is (a link or a place)" style="width:240px"><button data-rawadd="${esc(b.id)}" ${dis()}>Add</button></span>
+      <input data-rawwhere placeholder="Link or place (backup, or for files over 15 MB)" style="width:260px"><button data-rawadd="${esc(b.id)}" ${dis()}>Add link</button>
+      <input type="file" data-rawfile aria-label="Upload a file"><button data-rawup="${esc(b.id)}" ${dis()}>Upload encrypted</button></span>
     <b>Pieces</b>${ps.length ? ps.map(pc => `<span class="row" style="flex-wrap:wrap"><span class="mono">${esc(fmtLabel(pc.format))}</span><span class="mute">${esc(pc.channel||"")} · cycle ${esc(pc.cycle||"")}</span>
       <select data-piecestat="${esc(b.id)}|${esc(pc.id)}" ${dis()} aria-label="Piece status">${PIECE_STAGES.map(k => `<option ${k===pc.status?"selected":""}>${k}</option>`).join("")}</select>
-      ${pc.status==="published" ? `<input type="number" min="0" value="${pc.result ?? ""}" placeholder="result" style="width:80px" aria-label="Result"><button data-pieceres="${esc(b.id)}|${esc(pc.id)}" ${dis()}>Save result</button>` : ""}</span>`).join("") : `<span class="mute">None yet.</span>`}
+      ${pc.status==="published" ? `<span class="row" data-resform style="flex-wrap:wrap">${metrics().map(m => `<label class="mono" style="font-size:12px">${esc(m)} <input type="number" min="0" data-metric="${esc(m)}" value="${resultsOf(pc)[m] ?? ""}" style="width:70px"></label>`).join("")}<button data-pieceres="${esc(b.id)}|${esc(pc.id)}" ${dis()}>Save results</button></span>` : ""}</span>`).join("") : `<span class="mute">None yet.</span>`}
     <span class="row" style="flex-wrap:wrap"><select data-piecefmt aria-label="Format">${FORMATS.map(([k, l]) => `<option value="${k}">${esc(l)}</option>`).join("")}</select>
       <input data-piecech placeholder="Channel (e.g. LinkedIn)" style="width:150px"><input data-piececy placeholder="Cycle (${cycleNow()})" style="width:110px"><button data-pieceadd="${esc(b.id)}" ${dis()}>Plan piece</button></span></span>`;
 }
 // Content tests (Q109): which formats and channels work, per cycle, from the results entered on published pieces.
 function renderTests(){
-  const all = builders().flatMap(b => pieces(b).map(p => ({...p, who:b.title})));
+  const all = builders().flatMap(b => pieces(b).map(p => ({...p, who:b.title, kind:b.meta.kind})));
+  const v = dashView(), ms = metrics();
+  if (document.activeElement !== $("#mList")) $("#mList").value = ms.join(", ");
+  const pick = S.dashTouched ? $("#dMetric").value : v.metric;
+  $("#dMetric").innerHTML = ms.map(m => `<option ${m===pick?"selected":""}>${esc(m)}</option>`).join("");
+  if (!S.dashTouched){ $("#dAgg").value = v.agg; $("#dGroup").value = v.group; }
   const pub = all.filter(p => p.status === "published");
   const T = $("#bTests");
   if (!all.length){ T.innerHTML = `<p class="mute">No pieces yet. Open a builder's Materials to plan one.</p>`; return; }
-  const row = (label, xs) => { const scored = xs.filter(p => Number.isFinite(p.result)); const avg = scored.length ? (scored.reduce((a, p) => a + p.result, 0) / scored.length) : null;
-    return `<tr><td>${esc(label)}</td><td class="mono">${xs.length}</td><td class="mono">${scored.length}</td><td class="mono">${avg==null ? "–" : avg.toFixed(1)}</td></tr>`; };
-  const group = key => [...new Set(pub.map(p => p[key] || "–"))].sort().map(k => row(key==="format" ? fmtLabel(k) : k, pub.filter(p => (p[key]||"–") === k))).join("");
+  const metric = $("#dMetric").value || ms[0], agg = $("#dAgg").value, key = $("#dGroup").value;
+  const val = p => resultsOf(p)[metric];
+  const row = (label, xs) => { const sc = xs.filter(p => Number.isFinite(val(p))); const tot = sc.reduce((a, p) => a + val(p), 0);
+    const shown = agg === "count" ? sc.length : !sc.length ? null : agg === "sum" ? tot : tot / sc.length;
+    return `<tr><td>${esc(label)}</td><td class="mono">${xs.length}</td><td class="mono">${sc.length}</td><td class="mono">${shown==null ? "–" : Number.isInteger(shown) ? shown : shown.toFixed(1)}</td></tr>`; };
+  const groups = [...new Set(pub.map(p => p[key] || "–"))].sort();
+  const aggLabel = {avg:"Average", sum:"Total", count:"Pieces with"}[agg];
   T.innerHTML = `<p class="mute" style="margin:0">${all.length} pieces planned or made · ${pub.length} published</p>
-    <table class="tbl"><thead><tr><th>Format</th><th>Published</th><th>With result</th><th>Average result</th></tr></thead><tbody>${group("format") || `<tr><td colspan="4" class="mute">Nothing published yet.</td></tr>`}</tbody></table>
-    <table class="tbl"><thead><tr><th>Channel</th><th>Published</th><th>With result</th><th>Average result</th></tr></thead><tbody>${group("channel")}</tbody></table>
-    <table class="tbl"><thead><tr><th>Cycle</th><th>Published</th><th>With result</th><th>Average result</th></tr></thead><tbody>${group("cycle")}</tbody></table>`;
+    <table class="tbl"><thead><tr><th>${esc(key==="kind" ? "kind of builder" : key)}</th><th>Published</th><th>With ${esc(metric)}</th><th>${esc(aggLabel)} ${esc(metric)}</th></tr></thead>
+    <tbody>${groups.map(k => row(key==="format" ? fmtLabel(k) : k, pub.filter(p => (p[key]||"–") === k))).join("") || `<tr><td colspan="4" class="mute">Nothing published yet.</td></tr>`}</tbody></table>`;
 }
 function renderBuilders(){
   if (!$("#bKind").options.length) $("#bKind").innerHTML = B_KINDS.map(k => `<option>${esc(k)}</option>`).join("");
@@ -988,13 +1011,86 @@ function renderBuilders(){
     const id = await write("comment", it.id, {text:`Piece ${fmtLabel(pc.format)} → ${sel.value}.`, piece:{id:pid, status:sel.value, ...(sel.value==="published" ? {published:new Date().toISOString().slice(0,10)} : {})}});
     if (id) toast(`Piece ${sel.value}`, [id]); });
   L.querySelectorAll("[data-pieceres]").forEach(btn => btn.onclick = async () => { const [bid, pid] = btn.dataset.pieceres.split("|"), it = F.items.get(bid);
-    const v = +btn.previousElementSibling.value; if (!Number.isFinite(v) || v < 0){ toast("Enter a number of 0 or more."); return; }
-    const id = await write("comment", it.id, {text:`Piece result: ${v}.`, piece:{id:pid, result:v}}); if (id) toast("Result saved", [id]); });
+    const results = {}; for (const inp of btn.parentElement.querySelectorAll("[data-metric]")){ if (inp.value === "") continue; const v = +inp.value;
+      if (!Number.isFinite(v) || v < 0){ toast(`${inp.dataset.metric}: enter a number of 0 or more.`); return; } results[inp.dataset.metric] = v; }
+    if (!Object.keys(results).length){ toast("Enter at least one measure."); return; }
+    const id = await write("comment", it.id, {text:`Piece results: ${Object.entries(results).map(([k, v]) => k + " " + v).join(", ")}.`, piece:{id:pid, results}});
+    if (id) toast("Results saved", [id]); });
+  L.querySelectorAll("[data-rawup]").forEach(btn => btn.onclick = () => uploadRaw(F.items.get(btn.dataset.rawup), btn.parentElement));
+  L.querySelectorAll("[data-vopen]").forEach(btn => btn.onclick = () => openRaw(btn.dataset.vopen, btn.closest("[data-matpanel]").querySelector("[data-vview]"), false));
+  L.querySelectorAll("[data-vsave]").forEach(btn => btn.onclick = () => openRaw(btn.dataset.vsave, null, true));
   renderTests();
   const kf = $("#bKitFor"), keep = kf.value; kf.innerHTML = `<option value="">(any builder)</option>` + all.map(b => `<option value="${esc(b.id)}" ${b.id===keep?"selected":""}>${esc(b.title)}</option>`).join("");
   $("#bKit").textContent = kitText(F.items.get(kf.value));
 }
 $("#bKitFor").onchange = renderBuilders;
+for (const k of ["#dMetric","#dAgg","#dGroup"]) $(k).onchange = () => { S.dashTouched = true; renderTests(); };
+$("#mSave").onclick = async () => {
+  const list = $("#mList").value.split(",").map(x => x.trim()).filter(Boolean); if (!list.length){ toast("Name at least one measure."); return; }
+  const value = list.join(", "), k = "SET-content-metrics";
+  const id = F.items.has(k) ? await write("item.edit", k, {value}) : await write("item.create", null, {id:k, type:"setting", title:"Content measures",
+    body:"The measures a published piece can record, comma separated (Q110). Each person designs their own view of them.", status:"agreed", refs:["D-147"], value});
+  if (id) toast("Measures saved", [id]); };
+$("#dSave").onclick = async () => {
+  const value = JSON.stringify({metric:$("#dMetric").value, agg:$("#dAgg").value, group:$("#dGroup").value}), k = "DASH-content";
+  if (!privPath()){ $("#dNote").textContent = "Your private area isn't available here."; return; }
+  const id = F.items.has(k) ? await write("item.edit", k, {value}) : await write("item.create", null, {id:k, type:"setting", title:"My content view",
+    body:"Your own layout of Content tests: measure, how, and grouping.", status:"agreed", refs:["D-147"], value, private:true}, {private:true});
+  if (id){ S.dashTouched = false; $("#dNote").textContent = "Saved as your view."; } };
+
+/* private files (Q111 B, D-119): encrypted in the browser before upload; the passphrase never leaves memory */
+const ENC_MAGIC = "CLANSTACK-ENC1";
+const MAX_ENC_BYTES = 15 * 1048576;   // base64 of 15 MB stays under the store's 20 MB per file
+const b64 = buf => { let s = "", a = new Uint8Array(buf); for (let i = 0; i < a.length; i += 0x8000) s += String.fromCharCode(...a.subarray(i, i + 0x8000)); return btoa(s); };
+const unb64 = t => Uint8Array.from(atob(t), c => c.charCodeAt(0));
+async function vaultKey(pass, salt){
+  const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(pass), "PBKDF2", false, ["deriveKey"]);
+  return crypto.subtle.deriveKey({name:"PBKDF2", salt, iterations:310000, hash:"SHA-256"}, base, {name:"AES-GCM", length:256}, false, ["encrypt","decrypt"]);
+}
+async function sealFile(file, pass){
+  const salt = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt({name:"AES-GCM", iv}, await vaultKey(pass, salt), await file.arrayBuffer());
+  const head = {v:1, salt:b64(salt), iv:b64(iv), name:file.name, type:file.type||"application/octet-stream", size:file.size};
+  return new Blob([ENC_MAGIC + "\n" + JSON.stringify(head) + "\n" + b64(ct)], {type:"text/plain"});
+}
+async function openSealed(text, pass){
+  const a = text.indexOf("\n"), b = text.indexOf("\n", a + 1);
+  const magic = text.slice(0, a), headLine = text.slice(a + 1, b), body = text.slice(b + 1);
+  if (magic !== ENC_MAGIC) throw new Error("not a Clanstack file");
+  const h = JSON.parse(headLine);
+  const pt = await crypto.subtle.decrypt({name:"AES-GCM", iv:unb64(h.iv)}, await vaultKey(pass, unb64(h.salt)), unb64(body));
+  return {blob:new Blob([pt], {type:h.type}), name:h.name, type:h.type};
+}
+async function uploadRaw(it, row){
+  const file = row.querySelector("[data-rawfile]").files[0], pass = $("#vPass").value, kind = row.parentElement.querySelector("[data-rawkind]")?.value || "other";
+  if (!file){ toast("Choose a file first."); return; }
+  if (pass.length < 8){ toast("Enter your compartment passphrase (8 characters or more) at the top of Private files."); $("#vPass").focus(); return; }
+  if (file.size > MAX_ENC_BYTES){ toast(`${file.name} is ${(file.size/1048576).toFixed(0)} MB: over Studio's 15 MB. Put it in your own storage and add the link instead.`); return; }
+  const assets = await window.claude.use("assets").catch(() => null);
+  if (!assets){ toast("Uploads aren't available in this view. Add a link to your own storage instead."); return; }
+  $("#vNote").textContent = `Encrypting ${file.name}…`;
+  try {
+    const sealed = await sealFile(file, pass);
+    $("#vNote").textContent = `Uploading ${file.name}…`;
+    const up = await assets.upload(sealed, {type:"text/plain"});
+    const backup = row.querySelector("[data-rawwhere]").value.trim();
+    const id = await write("comment", it.id, {text:`Raw material: ${kind}, ${file.name} (encrypted upload).`, raw:{kind, asset:up.id, name:file.name, size:file.size, type:file.type, enc:"aes-256-gcm/pbkdf2-sha256-310k", ...(backup ? {where:backup} : {})}});
+    $("#vNote").textContent = id ? `${file.name} stored encrypted.` : "";
+  } catch(e){ $("#vNote").textContent = `Upload failed (${e?.code || e?.message || "unknown"}). Add a link to your own storage instead.`; }
+}
+async function openRaw(assetId, slot, save){
+  const pass = $("#vPass").value; if (!pass){ toast("Enter your compartment passphrase at the top of Private files."); $("#vPass").focus(); return; }
+  try {
+    const text = await (await fetch("/_blob/" + assetId)).text();
+    const f = await openSealed(text, pass);
+    if (save){ const dl = await window.claude.use("downloads").catch(() => null); if (!dl){ toast("Saving isn't available in this view."); return; }
+      await dl.save({filename:f.name, data:f.blob}).catch(e => { if (e?.code !== "declined") toast("The copy wasn't saved."); }); return; }
+    const url = URL.createObjectURL(f.blob), tag = f.type.startsWith("audio/") ? "audio" : f.type.startsWith("video/") ? "video" : f.type.startsWith("image/") ? "img" : null;
+    if (!tag){ toast("This kind of file can't be shown here. Use Save a copy."); return; }
+    const el = document.createElement(tag); el.src = url; if (tag !== "img") el.controls = true; el.style.maxWidth = "100%";
+    slot.replaceChildren(el);
+  } catch(e){ toast(e?.name === "OperationError" ? "Wrong passphrase, or the file was changed." : "Couldn't open this file."); }
+}
 for (const [btn, head] of [["#bCopyOut","## Outreach"],["#bCopyQs","## Questions"]]) $(btn).onclick = async () => {
   const t = kitPart(kitText(F.items.get($("#bKitFor").value)), head);
   try { await navigator.clipboard.writeText(t); $("#bKitNote").textContent = "Copied."; } catch { $("#bKitNote").textContent = "Select the text in the kit and copy it."; } };

@@ -63,6 +63,14 @@ window.claude = { use: async n => {
       profiles: async ids => Object.fromEntries(ids.map(i => [i, {id:i, name:(C.names||{})[i]||""}])), me: async()=>({id:C.me}) };
   if (n === "db") return { doc: p => ({ onSnapshot:(next)=>{ setTimeout(()=>next({exists:true, data:()=>C.genesis, metadata:{fromCache:false}}), 20); return ()=>{}; } }),
                            collection: p => query(p, "asc", null) };
+  if (n === "assets" && C.assets) {
+    // a stand-in for the file store: keeps text uploads in memory and serves them at /_blob/<id>
+    window.__blobs = {}; let k = 0;
+    const realFetch = window.fetch.bind(window);
+    window.fetch = async (u, o) => { const m = String(u).match(/^\/_blob\/(\w+)$/); if (m) return new Response(window.__blobs[m[1]] ?? "", {status: window.__blobs[m[1]] ? 200 : 404}); return realFetch(u, o); };
+    return { upload: async (blob, opt) => { if ((opt?.type || blob.type) !== "text/plain") throw {code:"unsupported_type"}; const id = "a" + (++k);
+      window.__blobs[id] = await blob.text(); return {id, url:"/_blob/" + id, sizeBytes:blob.size, contentType:"text/plain"}; } };
+  }
   if (n === "mcp" && C.hub) {
     // A stand-in for the Clanstack hub connector: read_events pages by cursor, import skips doc ids it has.
     const H = C.hub; H.calls = [];
@@ -578,18 +586,46 @@ async def s31_content_cycles(b):
     await p.select_option(f'[data-piecestat="{bid}|{a["id"]}"]', "published"); await p.wait_for_timeout(300)
     audio_blocked = (await p.evaluate(f"pieces(F.items.get('{bid}')).find(x => x.id === '{a['id']}').status")) == "planned"
     await p.select_option(f'[data-piecestat="{bid}|{q["id"]}"]', "published"); await p.wait_for_timeout(300)
-    await p.fill(f'{m} [data-pieceres="{bid}|{q["id"]}"] >> xpath=preceding-sibling::input[1]', "42"); await p.click(f'[data-pieceres="{bid}|{q["id"]}"]'); await p.wait_for_timeout(300)
+    form = f'{m} [data-pieceres="{bid}|{q["id"]}"] >> xpath=..'
+    await p.fill(f'{form} >> [data-metric="channel measure"]', "42"); await p.fill(f'{form} >> [data-metric="replies"]', "3")
+    await p.click(f'[data-pieceres="{bid}|{q["id"]}"]'); await p.wait_for_timeout(300)
     tests = await p.inner_text("#bTests")
     raw = await p.inner_text(m)
-    ok = audio_blocked and "Quote cards" in tests and "42.0" in tests and "drive/amina.m4a" in raw and not p.errors
-    return ok, f"audio blocked by release={audio_blocked}, tests show quotes avg 42={'42.0' in tests}, raw listed={'drive/amina.m4a' in raw}"
+    ok = audio_blocked and "Quote cards" in tests and "42" in tests and "drive/amina.m4a" in raw and not p.errors
+    return ok, f"audio blocked by release={audio_blocked}, tests show quotes avg 42={'42' in tests}, raw listed={'drive/amina.m4a' in raw}"
+
+
+async def s32_private_files_and_views(b):
+    """Q111 B + Q110: a guest's recording is encrypted before it leaves the browser; the wrong passphrase can't open it; Nowed designs and saves his own view."""
+    kit = ev("item.create", None, {"id": "KIT-builder-interview", "type": "asset", "title": "Kit", "status": "built", "body": "## Outreach\nHi"}, ts="2026-11-09T00:00:00.000Z")
+    st = Store([kit]); p = await open_page(b, st, {"assets": True})
+    await p.click("#tabs button[data-v=builders]")
+    await p.fill("#bName", "Amina"); await p.click("#bAdd"); await p.wait_for_timeout(300)
+    bid = await p.evaluate("[...F.items.values()].find(i => i.title === 'Amina').id")
+    await p.click(f'[data-bmat="{bid}"]'); m = f'[data-matpanel="{bid}"]'
+    png = bytes.fromhex("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c6360000002000154a24f5d0000000049454e44ae426082")
+    await p.set_input_files(f"{m} [data-rawfile]", files=[{"name": "photo.png", "mimeType": "image/png", "buffer": png}])
+    await p.click(f'[data-rawup="{bid}"]'); await p.wait_for_timeout(300)
+    no_pass = await p.evaluate("Object.keys(window.__blobs || {}).length") == 0
+    await p.fill("#vPass", "correct horse battery"); await p.click(f'[data-rawup="{bid}"]'); await p.wait_for_timeout(1500)
+    stored = await p.evaluate("Object.values(window.__blobs)[0] || ''")
+    sealed = stored.startswith("CLANSTACK-ENC1") and "IHDR" not in stored and "photo.png" not in stored.split("\n", 2)[2]
+    await p.fill("#vPass", "wrong passphrase!!"); await p.click(f"{m} [data-vopen]"); await p.wait_for_timeout(1500)
+    wrong_blocked = await p.locator(f"{m} [data-vview] img").count() == 0
+    await p.fill("#vPass", "correct horse battery"); await p.click(f"{m} [data-vopen]"); await p.wait_for_timeout(1500)
+    shown = await p.locator(f"{m} [data-vview] img").count() == 1
+    shared_leak = any("photo.png" in json.dumps(e) for e in st.events)
+    await p.select_option("#dGroup", "kind"); await p.select_option("#dAgg", "sum"); await p.click("#dSave"); await p.wait_for_timeout(300)
+    view = await p.evaluate("F.items.get('DASH-content')")
+    ok = (no_pass and sealed and wrong_blocked and shown and not shared_leak and view and view["private"] and '"group":"kind"' in view["value"] and not p.errors)
+    return ok, f"refused without passphrase={no_pass}, stored sealed={sealed}, wrong passphrase blocked={wrong_blocked}, opened with right one={shown}, name kept out of shared record={not shared_leak}, private view saved={bool(view and view['private'])}"
 
 
 SCENARIOS = [s01_tired_misclick, s02_undo, s03_stable_codes, s04_past_view_lock, s05_branch_awareness, s06_view_only_client,
              s07_names, s08_long_history, s09_ai_relay, s10_keyboard_list, s11_offline_capture, s12_member_rights,
              s13_two_people_at_once, s14_phone, s15_undo_old_status, s16_overwhelm, s17_disagreement, s18_clock_skew, s19_private_area,
              s20_addresses, s21_money_settings, s22_duplicate_id, s23_same_order_everywhere,
-             s24_hub_sync, s25_more_than_1000, s26_hub_not_connected, s27_read_on_open, s28_push_after_clean_runs, s29_runs_timeline, s30_builder_pipeline, s31_content_cycles]
+             s24_hub_sync, s25_more_than_1000, s26_hub_not_connected, s27_read_on_open, s28_push_after_clean_runs, s29_runs_timeline, s30_builder_pipeline, s31_content_cycles, s32_private_files_and_views]
 
 
 async def main():
