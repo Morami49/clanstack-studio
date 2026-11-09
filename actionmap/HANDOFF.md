@@ -154,6 +154,8 @@ modelling. Phase 1 (rails) is built; voice is next. Owner: Nowed.
 | D-141 | 2026-11-09 | **Drift becomes a Studio finding** (Q103 A): Studio wins, the run warns, and the executor writes DRIFT-<setting> to Studio through the hub, once per distinct drift (idempotency keys). | scripts/policy.py. |
 | D-142 | 2026-11-09 | **Hub writes are repeat-safe and checked** (Q104 A): write_event takes an idempotency_key (F-48) and warns when the target item is unknown or a create duplicates an id (F-47). Survives restarts. | Next: Q105. |
 | D-143 | 2026-11-09 | **Every run readable, in order** (Q105 A): 1) executors write run records into Studio (scripts/run_record.py → RUNS-<executor>); 2) deploys are an executor under SET-policy-hub-deploy (auto/ask/off, dispatch with a sha to roll back); 3) Studio's Runs view lists all runs with outcome, policy and undo. | Studio v0.6. |
+| D-144 | 2026-11-09 | **Undo: shown and linked now; one-click later only for reversible executors, behind the same policy** (Q106 A). | P-12. |
+| D-145 | 2026-11-09 | **Builder-interview pipeline built** (Q107 B, D-069, Q24): Studio v0.7 Builders view; builders are private (third parties); stages found → contacted → agreed → interviewed → drafted → published → followed up; publishing needs a recorded, revocable release (T-release); Next up favours later stages, idle time and kinds not yet interviewed; interview kit is the shared item KIT-builder-interview. | |
 
 ## State log (append-only)
 

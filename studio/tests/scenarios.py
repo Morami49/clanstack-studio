@@ -525,11 +525,36 @@ async def s29_runs_timeline(b):
     return ok, f"runs={len(items)}, newest first={first_sync}, failure marked={failed}, undo shown={undo}, filtered={len(only)}"
 
 
+async def s30_builder_pipeline(b):
+    """Nowed adds a builder, moves them along, and tries to publish. They stay private, publishing waits for a release, and Next up points at the right step."""
+    kit = ev("item.create", None, {"id": "KIT-builder-interview", "type": "asset", "title": "Kit", "status": "built",
+             "body": "## Outreach\nHi {name}, a {kind} chat?\n## Questions\n1. What do you build, {name}?"}, ts="2026-11-09T00:00:00.000Z")
+    st = Store([kit]); p = await open_page(b, st, {})
+    await p.click("#tabs button[data-v=builders]")
+    await p.fill("#bName", "Amina"); await p.select_option("#bKind", index=0); await p.click("#bAdd"); await p.wait_for_timeout(300)
+    await p.fill("#bName", "Joe"); await p.select_option("#bKind", index=2); await p.click("#bAdd"); await p.wait_for_timeout(300)
+    private_only = not any((e.get("body") or {}).get("title") in ("Amina", "Joe") for e in st.events)
+    in_vault = sum(1 for k, v in st.paths.items() if k.startswith("data/users/u_nowed/") for e in v if (e.get("body") or {}).get("title") in ("Amina", "Joe"))
+    bid = await p.evaluate("[...F.items.values()].find(i => i.title === 'Amina').id")
+    await p.select_option(f'[data-bstage="{bid}"]', "drafted"); await p.wait_for_timeout(300)
+    nxt = await p.inner_text("#bNext")
+    await p.select_option(f'[data-bstage="{bid}"]', "published"); await p.wait_for_timeout(300)
+    blocked = await p.evaluate(f"F.items.get('{bid}').status") == "drafted"
+    await p.click(f'[data-brel="{bid}"]'); await p.fill(f'[data-relform="{bid}"] [data-relparts]', "quotes only")
+    await p.click(f'[data-relsave="{bid}"]'); await p.wait_for_timeout(300)
+    await p.select_option(f'[data-bstage="{bid}"]', "published"); await p.wait_for_timeout(300)
+    published = await p.evaluate(f"F.items.get('{bid}').status") == "published"
+    await p.select_option("#bKitFor", bid); kit_txt = await p.inner_text("#bKit")
+    ok = (private_only and in_vault == 2 and nxt.strip().startswith("Amina") and "Confirm their release" in nxt and blocked and published
+          and "Hi Amina" in kit_txt and not p.errors)
+    return ok, f"private only={private_only} ({in_vault} in vault), next up first={nxt.split(chr(10))[0][:40]!r}, publish blocked without release={blocked}, published after={published}, kit personalised={'Hi Amina' in kit_txt}"
+
+
 SCENARIOS = [s01_tired_misclick, s02_undo, s03_stable_codes, s04_past_view_lock, s05_branch_awareness, s06_view_only_client,
              s07_names, s08_long_history, s09_ai_relay, s10_keyboard_list, s11_offline_capture, s12_member_rights,
              s13_two_people_at_once, s14_phone, s15_undo_old_status, s16_overwhelm, s17_disagreement, s18_clock_skew, s19_private_area,
              s20_addresses, s21_money_settings, s22_duplicate_id, s23_same_order_everywhere,
-             s24_hub_sync, s25_more_than_1000, s26_hub_not_connected, s27_read_on_open, s28_push_after_clean_runs, s29_runs_timeline]
+             s24_hub_sync, s25_more_than_1000, s26_hub_not_connected, s27_read_on_open, s28_push_after_clean_runs, s29_runs_timeline, s30_builder_pipeline]
 
 
 async def main():

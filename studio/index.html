@@ -110,7 +110,7 @@ pre.pack{white-space:pre-wrap;background:var(--raise);border:1px solid var(--lin
 </style>
 
 <header>
-  <div class="brand"><h1>Clanstack Studio</h1><span class="ver" id="ver">v0.6</span></div>
+  <div class="brand"><h1>Clanstack Studio</h1><span class="ver" id="ver">v0.7</span></div>
   <nav id="tabs" aria-label="Views">
     <button data-v="map" aria-current="true">Map</button>
     <button data-v="list">List</button>
@@ -121,6 +121,7 @@ pre.pack{white-space:pre-wrap;background:var(--raise);border:1px solid var(--lin
     <button data-v="money">Money</button>
     <button data-v="hub">Hub</button>
     <button data-v="runs">Runs</button>
+    <button data-v="builders">Builders</button>
   </nav>
   <form id="goForm" class="row" style="gap:4px" role="search"><input id="goAddr" class="mono" placeholder="Go to: D-063@2 · R-261105-2#3.1 · repo/sha:path#L10" aria-label="Go to an address" style="width:300px;max-width:100%"><button>Go</button></form>
   <span class="spacer"></span>
@@ -241,6 +242,27 @@ pre.pack{white-space:pre-wrap;background:var(--raise);border:1px solid var(--lin
     </div>
   </section>
 
+  <section class="view" id="v-builders" hidden>
+    <div class="stack" style="max-width:1000px">
+      <h2>Builder interviews</h2>
+      <p class="mute" style="margin:0">Find community builders, interview them, turn it into content, and use it to grow multi-capital (D-069). Every builder is a real person, so they live in <b>your private area</b>: nobody else can read them. Nothing is published without their recorded release (T-release).</p>
+      <div class="card"><h3>Next up</h3><ol class="log" id="bNext"></ol></div>
+      <div class="card"><h3>Pipeline</h3><div class="row" id="bStages" style="flex-wrap:wrap;gap:6px"></div><ul class="log" id="bList"></ul></div>
+      <div class="card"><h3>Add a builder</h3>
+        <div class="row" style="flex-wrap:wrap">
+          <input id="bName" placeholder="Name or handle" aria-label="Name or handle" style="width:180px">
+          <select id="bKind" aria-label="Kind of community builder"></select>
+          <select id="bWhere" aria-label="Where"><option>in person</option><option>online</option><option>both</option></select>
+          <input id="bVia" placeholder="How you found them" aria-label="How you found them" style="width:200px">
+        </div>
+        <textarea id="bNotes" rows="2" placeholder="What they build, who for, why them (your assumptions to test in the interview)"></textarea>
+        <div class="row"><button class="primary" id="bAdd">Add to my private pipeline</button><span class="mute" id="bNote"></span></div></div>
+      <div class="card"><h3>Interview kit</h3><p class="mute" style="margin:0">The method from building Clanstack: state your best assumptions about them, ask scoreboard questions they can answer in a few words, and chisel each claim into a real claim, impact and result. Edit the kit item to change it for everyone (KIT-builder-interview).</p>
+        <div class="row"><label for="bKitFor">For</label><select id="bKitFor"></select><button id="bCopyOut">Copy outreach</button><button id="bCopyQs">Copy questions</button><span class="mute" id="bKitNote"></span></div>
+        <pre class="pack" id="bKit" style="max-height:340px"></pre></div>
+    </div>
+  </section>
+
   <section class="view" id="v-pack" hidden>
     <div class="stack" style="max-width:860px">
       <h2>Context pack</h2>
@@ -329,14 +351,14 @@ function fold(){
     const h = {id:e._id, ts:e.ts, kind:e.kind, author:e.author, body:e.body, branch:e.branch, gone:gone.has(e._id), reverted:reverted.has(e._id)};
     if (e.kind==="item.create" && items.has(e.body.id)){ h.dup = true; items.get(e.body.id).history.push(h); continue; } // F-19: a second create never replaces an item
     if (e.kind==="item.create"){ items.set(e.body.id, {id:e.body.id, type:e.body.type, title:e.body.title, body:e.body.body||"", status:e.body.status||"open",
-      refs:e.body.refs||[], sketch:e.body.sketch||null, source:e.body.source||null, private:!!e._private, value:e.body.value, answers:[], comments:[], history:[h], by:e.author}); continue; }
+      refs:e.body.refs||[], sketch:e.body.sketch||null, source:e.body.source||null, private:!!e._private, value:e.body.value, meta:e.body.meta||null, answers:[], comments:[], history:[h], by:e.author}); continue; }
     const it = items.get(e.item); if (!it) continue;
     if (e.kind==="retract"){ it.history.push(h); continue; }
     it.history.push(h);
     if (h.gone) continue;
     if (e.kind==="answer") it.answers.push(h);
     if (e.kind==="comment") it.comments.push(h);
-    if (e.kind==="item.edit"){ if (e.body.title!=null) it.title=e.body.title; if (e.body.body!=null) it.body=e.body.body; if (e.body.value!=null) it.value=e.body.value; }
+    if (e.kind==="item.edit"){ if (e.body.title!=null) it.title=e.body.title; if (e.body.body!=null) it.body=e.body.body; if (e.body.value!=null) it.value=e.body.value; if (e.body.meta) it.meta={...(it.meta||{}), ...e.body.meta}; }
     if (e.kind==="status"){ h.prev = it.status; it.status = e.body.status; }
     if (e.kind==="link") it.refs = [...new Set([...it.refs, ...(e.body.refs||[])])];
   }
@@ -851,8 +873,78 @@ function renderRuns(){
 }
 $("#runExec").onchange = renderRuns; $("#runOutcome").onchange = renderRuns;
 
+/* ---------------------------------------------------------------- builder interviews (D-069, Q24, Q107 B) */
+const B_KINDS = ["mutual-aid or tenants' organiser","faith or cultural community lead","event or nightlife organiser","membership-community founder (club, gym, combat sport)",
+  "creator collective","co-op or social-enterprise founder","school or parent network","diaspora association","online community moderator","other"]; // Q29 A default list
+const B_STAGES = [["found","Found"],["contacted","Contacted"],["agreed","Agreed to talk"],["interviewed","Interviewed"],["drafted","Content drafted"],
+  ["published","Published"],["followed-up","Followed up"],["declined","Declined"]];
+const B_NEXT = {found:"Reach out (copy the outreach below)", contacted:"Follow up if there's no reply", agreed:"Book and run the interview",
+  interviewed:"Draft the content while it's fresh", drafted:"Confirm their release, then publish", published:"Introduce them to another builder"};
+const isBuilder = i => i.type === "lead" && i.meta?.builder;
+const builders = () => [...F.items.values()].filter(isBuilder);
+function releaseOf(it){ // latest release record wins; a revocation ends it (T-release)
+  let r = null; for (const c of it.comments){ if (c.body?.release) r = c.body.release; if (c.body?.release_revoked) r = null; } return r; }
+function lastChange(it){ return it.history.reduce((m, h) => h.ts > m ? h.ts : m, ""); }
+// "Studio suggests who to contact next" (D-069): later stages first (closest to value), then the longest idle, with a boost
+// for kinds of builder not yet interviewed, so the mix stays diverse (Q24: "as many as possible, for a diversified effect").
+function nextUp(now = Date.now()){
+  const done = {}; for (const b of builders()) if (["interviewed","drafted","published","followed-up"].includes(b.status)) done[b.meta.kind] = (done[b.meta.kind]||0) + 1;
+  return builders().filter(b => B_NEXT[b.status]).map(b => {
+    const stage = B_STAGES.findIndex(x => x[0]===b.status), idle = Math.max(0, (now - Date.parse(lastChange(b)||0)) / 864e5);
+    const fresh = !done[b.meta.kind], score = stage * 10 + Math.min(idle, 30) + (fresh ? 15 : 0);
+    const why = [B_NEXT[b.status], idle >= 1 ? `${Math.floor(idle)} day${idle>=2?"s":""} since the last step` : "moved today", fresh ? `no ${b.meta.kind} interviewed yet` : ""].filter(Boolean).join(" · ");
+    return {b, score, why}; }).sort((x, y) => y.score - x.score);
+}
+function kitText(b){
+  const k = F.items.get("KIT-builder-interview"), body = k ? k.body : "(The interview kit item KIT-builder-interview hasn't loaded yet.)";
+  return body.replaceAll("{name}", b?.title || "{name}").replaceAll("{kind}", b?.meta?.kind || "community builder");
+}
+function kitPart(text, head){ const i = text.indexOf(head); if (i < 0) return text; const rest = text.slice(i + head.length); const j = rest.search(/\n## /); return (j < 0 ? rest : rest.slice(0, j)).trim(); }
+function renderBuilders(){
+  if (!$("#bKind").options.length) $("#bKind").innerHTML = B_KINDS.map(k => `<option>${esc(k)}</option>`).join("");
+  const all = builders();
+  $("#bStages").innerHTML = B_STAGES.map(([k, l]) => `<span class="pill">${esc(l)} <b class="mono">${all.filter(b => b.status===k).length}</b></span>`).join("");
+  const N = $("#bNext"), nx = nextUp(); N.replaceChildren();
+  if (!nx.length){ const li = document.createElement("li"); li.textContent = all.length ? "Nothing waiting: everyone is published, followed up or declined." : "Add your first builder below."; N.append(li); }
+  for (const {b, why} of nx.slice(0, 5)){ const li = document.createElement("li"); li.innerHTML = `<span></span><span><b>${esc(b.title)}</b> <span class="mute">(${esc(b.meta.kind)})</span><br><span class="mute">${esc(why)}</span></span>`; N.append(li); }
+  const L = $("#bList"); L.innerHTML = all.length ? all.sort((a, b) => lastChange(b) > lastChange(a) ? 1 : -1).map(b => { const rel = releaseOf(b);
+    return `<li><span class="mono mute">${esc((lastChange(b)||"").slice(0,10))}</span><span><b>${esc(b.title)}</b> <span class="mute">${esc(b.meta.kind)} · ${esc(b.meta.where||"")}${b.meta.via ? " · found via " + esc(b.meta.via) : ""}</span>
+      <span class="row" style="margin-top:4px;flex-wrap:wrap"><select data-bstage="${esc(b.id)}" ${dis()} aria-label="Stage for ${esc(b.title)}">${B_STAGES.map(([k, l]) => `<option value="${k}" ${k===b.status?"selected":""}>${esc(l)}</option>`).join("")}</select>
+      <span class="pill" style="color:var(${rel?"--ok":"--warn"})">${rel ? "release: " + esc([rel.parts, rel.where, rel.until && "until " + rel.until].filter(Boolean).join(", ")) : "no release yet"}</span>
+      <button data-brel="${esc(b.id)}" ${dis()}>${rel ? "Revoke release" : "Record release"}</button><button data-bopen="${esc(b.id)}">Open</button></span>
+      <span class="row" data-relform="${esc(b.id)}" hidden style="margin-top:4px;flex-wrap:wrap"><input data-relparts placeholder="What may be published (e.g. quotes only)" style="width:220px">
+        <input data-relwhere placeholder="Where (e.g. LinkedIn)" style="width:150px"><input data-reluntil placeholder="Until (date, or blank)" style="width:130px"><button data-relsave="${esc(b.id)}">Save release</button></span></span></li>`; }).join("")
+    : `<li><span></span><span class="mute">No builders yet.</span></li>`;
+  L.querySelectorAll("[data-bstage]").forEach(sel => sel.onchange = async () => { const it = F.items.get(sel.dataset.bstage);
+    if (sel.value === "published" && !releaseOf(it)){ toast("Record their release first: nothing is published without it (T-release)."); sel.value = it.status; return; }
+    const id = await write("status", it.id, {status: sel.value}); if (id) toast(`${it.title} → ${sel.selectedOptions[0].text}`, [id]); });
+  L.querySelectorAll("[data-brel]").forEach(btn => btn.onclick = async () => { const it = F.items.get(btn.dataset.brel);
+    if (releaseOf(it)){ const id = await write("comment", it.id, {text:"Release revoked: not to be used in future content.", release_revoked:true}); if (id) toast("Release revoked", [id]); return; }
+    const f = L.querySelector(`[data-relform="${CSS.escape(it.id)}"]`); f.hidden = !f.hidden; if (!f.hidden) f.querySelector("[data-relparts]").focus(); });
+  L.querySelectorAll("[data-relsave]").forEach(btn => btn.onclick = async () => { const it = F.items.get(btn.dataset.relsave), f = btn.parentElement;
+    const parts = f.querySelector("[data-relparts]").value.trim(), where = f.querySelector("[data-relwhere]").value.trim(), until = f.querySelector("[data-reluntil]").value.trim();
+    if (!parts){ toast("Say what they agreed may be published."); return; }
+    const id = await write("comment", it.id, {text:`Release recorded: ${parts}${where?" on "+where:""}${until?" until "+until:""}.`, release:{parts, where, until, recorded:new Date().toISOString()}});
+    if (id) toast("Release recorded", [id]); });
+  L.querySelectorAll("[data-bopen]").forEach(btn => btn.onclick = () => select(btn.dataset.bopen));
+  const kf = $("#bKitFor"), keep = kf.value; kf.innerHTML = `<option value="">(any builder)</option>` + all.map(b => `<option value="${esc(b.id)}" ${b.id===keep?"selected":""}>${esc(b.title)}</option>`).join("");
+  $("#bKit").textContent = kitText(F.items.get(kf.value));
+}
+$("#bKitFor").onchange = renderBuilders;
+for (const [btn, head] of [["#bCopyOut","## Outreach"],["#bCopyQs","## Questions"]]) $(btn).onclick = async () => {
+  const t = kitPart(kitText(F.items.get($("#bKitFor").value)), head);
+  try { await navigator.clipboard.writeText(t); $("#bKitNote").textContent = "Copied."; } catch { $("#bKitNote").textContent = "Select the text in the kit and copy it."; } };
+$("#bAdd").onclick = async () => {
+  const name = $("#bName").value.trim(); if (!name){ $("#bNote").textContent = "Add a name or handle."; return; }
+  if (!privPath()){ $("#bNote").textContent = "Your private area isn't available in this view, so nothing was saved."; return; }
+  const id = "B-" + Date.now().toString(36);
+  const r = await write("item.create", null, {id, type:"lead", title:name, body:$("#bNotes").value.trim(), status:"found", refs:["D-069"], private:true,
+    meta:{builder:true, kind:$("#bKind").value, where:$("#bWhere").value, via:$("#bVia").value.trim()}}, {private:true});
+  if (r){ for (const k of ["#bName","#bVia","#bNotes"]) $(k).value = ""; $("#bNote").textContent = `Added ${name} privately.`; toast(`${name} added to your private pipeline`, [r]); }
+};
+
 /* ---------------------------------------------------------------- views + time */
-const VIEWS = ["map","list","ask","capture","tree","pack","money","hub","runs"];
+const VIEWS = ["map","list","ask","capture","tree","pack","money","hub","runs","builders"];
 function show(v){ if (!VIEWS.includes(v)) v = "map"; S.view=v; document.querySelectorAll("#tabs button").forEach(b=>b.setAttribute("aria-current", b.dataset.v===v));
   for (const x of VIEWS) $("#v-"+x).hidden = x!==v;
   if (v==="map" && cy) cy.resize(); if (v==="capture") sizePad(); refreshView(); store.set("view", v); }
@@ -862,7 +954,7 @@ $("#asof").oninput = e => { const evs=[...S.events].sort(byTsThenId); const v=+e
   S.asof = v>=evs.length ? null : (v===0 ? "0" : evs[v-1].ts); refresh(); };
 $("#theme").onclick = () => { const r=document.documentElement, dark=matchMedia("(prefers-color-scheme: dark)").matches;
   r.dataset.theme = (r.dataset.theme || (dark?"dark":"light"))==="dark" ? "light" : "dark"; renderMap(false); if (S.view==="tree") renderTree(); if (S.view==="capture") redraw(); };
-function refreshView(){ if (S.view==="map") renderMap(false); if (S.view==="list") renderList(); if (S.view==="ask") renderAsk(); if (S.view==="tree") renderTree(); if (S.view==="pack") renderPack(); if (S.view==="money") renderMoney(); if (S.view==="hub") renderHub(); if (S.view==="runs") renderRuns(); }
+function refreshView(){ if (S.view==="map") renderMap(false); if (S.view==="list") renderList(); if (S.view==="ask") renderAsk(); if (S.view==="tree") renderTree(); if (S.view==="pack") renderPack(); if (S.view==="money") renderMoney(); if (S.view==="hub") renderHub(); if (S.view==="runs") renderRuns(); if (S.view==="builders") renderBuilders(); }
 function refresh(){
   if (S.bulk) return;   // a bulk action redraws once at the end
   CODES = stableCodes(); F = fold();
