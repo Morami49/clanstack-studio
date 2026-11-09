@@ -151,6 +151,8 @@ modelling. Phase 1 (rails) is built; voice is next. Owner: Nowed.
 | D-138 | 2026-11-08 | **Studio ↔ hub sync built** (D-129, Q99 A): Studio Web's Hub view copies shared changes into the hub with their original authors (importer key vouches) and brings hub writes back; repeat-safe. | import_studio_events tool; Studio v0.4. |
 | D-139 | 2026-11-08 | **Studio is the source of truth for policies** (Q101 A): settings SET-policy-*; executors read them from the hub (scripts/policy.py), fall back to the platform copy when the hub can't answer, and flag drift. Branch cleanup first. | Q100 A: cleanup auto (30 branches deleted 23:33). |
 | D-140 | 2026-11-08 | **Sync on open** (Q102 A): Studio reads from the hub when it opens; copying up runs itself only after SET-policy-hub-push-clean-runs (default 5) clean recorded runs. Owner only. Every sync leaves a run record on RUNS-hub-sync (P-13). | Studio v0.5. |
+| D-141 | 2026-11-09 | **Drift becomes a Studio finding** (Q103 A): Studio wins, the run warns, and the executor writes DRIFT-<setting> to Studio through the hub, once per distinct drift (idempotency keys). | scripts/policy.py. |
+| D-142 | 2026-11-09 | **Hub writes are repeat-safe and checked** (Q104 A): write_event takes an idempotency_key (F-48) and warns when the target item is unknown or a create duplicates an id (F-47). Survives restarts. | Next: Q105. |
 
 ## State log (append-only)
 

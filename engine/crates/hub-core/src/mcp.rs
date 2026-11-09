@@ -62,6 +62,7 @@ fn tools() -> Value {
          "inputSchema": {"type": "object", "required": ["kind", "body"], "properties": {
              "kind": {"type": "string", "enum": WRITE_KINDS},
              "item": {"type": ["string", "null"], "description": "target item id, e.g. Q-duress; null for item.create"},
+             "idempotency_key": {"type": "string", "maxLength": 200, "description": "optional; repeating a write with the same key returns the first write instead of adding another (use one per intended change, e.g. R-261109-1/3)"},
              "body": {"type": "object", "description": "event body, e.g. {text} for a comment, {code,text} for an answer, {status} for a status, {id,type,title,body,status,refs} for item.create"}}},
          "annotations": {"readOnlyHint": false, "destructiveHint": false}}
     ])
@@ -128,11 +129,28 @@ fn call(hub: &mut Hub, login: &str, key: &KeyPair, name: &str, args: &Value, now
             if kind == "item.create" && body.get("id").and_then(Value::as_str).is_none() {
                 return text_result(json!({"error": "item.create needs body.id"}), true);
             }
-            let ev = json!({"ts": iso(now), "kind": kind, "item": item, "branch": "main", "body": body,
+            // F-48: a repeated write (a retry after a timeout, a re-run turn) returns the first one
+            let idem = args.get("idempotency_key").and_then(Value::as_str).filter(|k| !k.is_empty() && k.len() <= 200);
+            if let Some(doc) = idem.and_then(|k| hub.written_with(k)) {
+                return text_result(json!({"written": doc, "repeat": true, "note": "a write with this idempotency_key already exists; nothing was added"}), false);
+            }
+            // F-47: say when the target isn't known here, so a typo or an unsynced item doesn't pass silently
+            let warning = match (kind, item.as_str()) {
+                ("item.create", _) => body.get("id").and_then(Value::as_str).filter(|id| hub.knows_item(id))
+                    .map(|id| format!("{id} already exists here; Studio keeps the first and ignores this create (F-19). Use item.edit instead.")),
+                (_, Some(t)) if !hub.knows_item(t) => Some(format!("{t} isn't in the hub's copy of Studio. If it's new in Studio, sync Studio first; otherwise check the id.")),
+                _ => None,
+            };
+            let mut ev = json!({"ts": iso(now), "kind": kind, "item": item, "branch": "main", "body": body,
                             "author": {"id": format!("github:{login}"), "label": login, "role": "owner"},
                             "via": "claude-connector"});
+            if let Some(k) = idem { ev["idem"] = json!(k); }
             match hub.write(key, &format!("connector ({login})"), ev, now) {
-                Ok(made) => text_result(json!({"written": studio_doc_id(&made.last().map(|e| e.id.clone()).unwrap_or_default())}), false),
+                Ok(made) => {
+                    let mut r = json!({"written": studio_doc_id(&made.last().map(|e| e.id.clone()).unwrap_or_default())});
+                    if let Some(w) = warning { r["warning"] = json!(w); }
+                    text_result(r, false)
+                }
                 Err(e) => text_result(json!({"error": format!("{e:?}")}), true),
             }
         }

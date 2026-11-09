@@ -16,7 +16,7 @@ use foundation_core::event::{Event, Id, KeyPair, Realm};
 use foundation_core::store::{Reject, Store};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 pub mod mcp;
 pub mod oauth;
@@ -62,6 +62,10 @@ pub struct Hub {
     imported: HashSet<String>,
     /// Studio doc ids of this record's own `studio.write` facts: never re-imported (no loops).
     exported: HashSet<String>,
+    /// F-48: a write's idempotency key → the Studio doc id it produced, so a repeated write is a no-op.
+    idem: HashMap<String, String>,
+    /// F-47: item ids this record knows (created in Studio or through the hub), to warn on unknown targets.
+    items: HashSet<String>,
 }
 
 impl Hub {
@@ -90,18 +94,49 @@ impl Hub {
         }
         let (_, refused) = self.store.add_all(fresh);
         let added: Vec<Id> = self.store.order[before..].to_vec();
-        for id in &added {
-            let ev = &self.store.events[id];
-            if ev.u.kind == WRITE_KIND {
-                self.exported.insert(studio_doc_id(id));
+        for id in added.clone() {
+            self.index(&id);
+        }
+        PushResult { added, duplicates: dup, refused }
+    }
+
+    /// Keep the lookup sets in step with one stored fact (used on push, restore, import and write).
+    fn index(&mut self, id: &str) {
+        let ev = &self.store.events[id];
+        let studio = match ev.u.kind.as_str() {
+            k if k == WRITE_KIND => {
+                let doc = studio_doc_id(id);
+                if let Some(key) = ev.u.body.get("idem").and_then(Value::as_str) {
+                    self.idem.insert(key.to_string(), doc.clone());
+                }
+                self.exported.insert(doc);
+                Some(&ev.u.body)
             }
-            if ev.u.kind == IMPORT_KIND {
+            k if k == IMPORT_KIND => {
                 if let Some(d) = ev.u.body.get("doc_id").and_then(Value::as_str) {
                     self.imported.insert(d.to_string());
                 }
+                ev.u.body.get("event")
+            }
+            _ => None,
+        };
+        if let Some(se) = studio {
+            if se.get("kind").and_then(Value::as_str) == Some("item.create") {
+                if let Some(item) = se.pointer("/body/id").and_then(Value::as_str) {
+                    self.items.insert(item.to_string());
+                }
             }
         }
-        PushResult { added, duplicates: dup, refused }
+    }
+
+    /// Whether an item id is known to this record (F-47).
+    pub fn knows_item(&self, id: &str) -> bool {
+        self.items.contains(id)
+    }
+
+    /// The doc id an earlier write with this idempotency key produced, if any (F-48).
+    pub fn written_with(&self, key: &str) -> Option<&String> {
+        self.idem.get(key)
     }
 
     pub fn pull(&self, after: usize, limit: usize) -> Page {
@@ -170,7 +205,7 @@ impl Hub {
                 continue;
             }
             let e = self.store.fact(k, IMPORT_KIND, json!({ "doc_id": doc_id, "event": ev }), Realm::Real, None, ts, &[])?;
-            self.imported.insert(doc_id);
+            self.index(&e.id);
             out.push(e);
         }
         Ok(out)
@@ -185,7 +220,7 @@ impl Hub {
             out.push(g);
         }
         let e = self.store.fact(k, WRITE_KIND, studio_event, Realm::Real, None, ts, &[])?;
-        self.exported.insert(studio_doc_id(&e.id));
+        self.index(&e.id);
         out.push(e);
         Ok(out)
     }

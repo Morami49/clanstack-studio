@@ -3,7 +3,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
-from policy import fold, resolve  # noqa: E402
+from policy import drift_writes, fold, resolve  # noqa: E402
 
 K = "SET-policy-branch-cleanup"
 
@@ -28,6 +28,15 @@ def test_resolve_studio_wins_and_flags_drift():
     assert resolve(None, "auto", "ask") == {"effective": "auto", "studio": "unknown", "platform": "auto", "drift": "no"}
     assert resolve(None, "", "ask")["effective"] == "ask"
     assert resolve("auto", "", "ask")["drift"] == "yes"
+
+
+def test_drift_writes_once_per_drift():
+    first = drift_writes(K, "auto", "ask", set())
+    assert [w["kind"] for w in first] == ["item.create", "comment"]
+    assert first[0]["body"]["id"] == "DRIFT-" + K and first[0]["body"]["type"] == "finding"
+    later = drift_writes(K, "auto", "ask", {"DRIFT-" + K})
+    assert [w["kind"] for w in later] == ["comment"] and later[0]["idempotency_key"] == first[1]["idempotency_key"]
+    assert drift_writes(K, "off", "ask", {"DRIFT-" + K})[0]["idempotency_key"] != first[1]["idempotency_key"]
 
 
 if __name__ == "__main__":

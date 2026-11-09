@@ -246,3 +246,31 @@ fn import_docs_checks_input_and_import_keeps_authors() {
     assert_eq!(got["doc_id"], "claude-11082219-q01");
     assert_eq!(got["event"]["author"]["id"], "claude"); // Q99 A: original author kept
 }
+
+#[test]
+fn f48_repeat_writes_and_f47_unknown_items() {
+    let mut hub = Hub::new();
+    let key = KeyPair::from_seed([9u8; 32]);
+    let call = |hub: &mut Hub, args: Value| handle(hub, "Morami49", &key, &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": "write_event", "arguments": args}}), T0).unwrap()["result"]["structuredContent"].clone();
+    // F-47: an unknown target still writes, with a warning
+    let a = call(&mut hub, json!({"kind": "comment", "item": "Q-nope", "body": {"text": "x"}, "idempotency_key": "R-1/1"}));
+    assert!(a["warning"].as_str().unwrap().contains("Q-nope"));
+    let created = call(&mut hub, json!({"kind": "item.create", "item": null, "body": {"id": "Q-new", "type": "question", "title": "t"}}));
+    assert!(created.get("warning").is_none());
+    let b = call(&mut hub, json!({"kind": "comment", "item": "Q-new", "body": {"text": "y"}}));
+    assert!(b.get("warning").is_none());
+    let dup = call(&mut hub, json!({"kind": "item.create", "item": null, "body": {"id": "Q-new", "type": "question", "title": "again"}}));
+    assert!(dup["warning"].as_str().unwrap().contains("already exists"));
+    // F-48: same key → same doc, nothing added, also after a cold start
+    let before = hub.status().events;
+    let again = call(&mut hub, json!({"kind": "comment", "item": "Q-nope", "body": {"text": "x"}, "idempotency_key": "R-1/1"}));
+    assert_eq!(again["written"], a["written"]);
+    assert_eq!(again["repeat"], true);
+    assert_eq!(hub.status().events, before);
+    let all = hub.pull(0, usize::MAX).events;
+    let (mut cold, _) = Hub::restore(all);
+    let after_restart = call(&mut cold, json!({"kind": "comment", "item": "Q-nope", "body": {"text": "x"}, "idempotency_key": "R-1/1"}));
+    assert_eq!(after_restart["written"], a["written"]);
+    assert!(cold.knows_item("Q-new"));
+}
