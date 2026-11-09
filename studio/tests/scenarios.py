@@ -96,12 +96,20 @@ class Store:
         return [e for v in self.paths.values() for e in v]
 
     async def add(self, path, ev):
+        # F-64: two writes at once could deliver an older snapshot after a newer one, so a page kept only its own
+        # answer. Delivery is now one at a time, always the full current list (as the real store's snapshots are).
         self.paths.setdefault(path, []).append(ev)
+        if not hasattr(self, "_lock"):
+            self._lock = asyncio.Lock()
+        async with self._lock:
+            await self._deliver(path)
+
+    async def _deliver(self, path):
         for p in self.pages:
             if path.startswith("data/users/") and not path.startswith(f"data/users/{p.me}/"):
                 continue
             try:
-                await p.evaluate("([path, evs]) => window.__push(path, evs)", [path, self.paths[path]])
+                await p.evaluate("([path, evs]) => window.__push(path, evs)", [path, list(self.paths[path])])
             except Exception:
                 pass
 
