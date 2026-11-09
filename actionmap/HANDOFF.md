@@ -156,6 +156,7 @@ modelling. Phase 1 (rails) is built; voice is next. Owner: Nowed.
 | D-143 | 2026-11-09 | **Every run readable, in order** (Q105 A): 1) executors write run records into Studio (scripts/run_record.py → RUNS-<executor>); 2) deploys are an executor under SET-policy-hub-deploy (auto/ask/off, dispatch with a sha to roll back); 3) Studio's Runs view lists all runs with outcome, policy and undo. | Studio v0.6. |
 | D-144 | 2026-11-09 | **Undo: shown and linked now; one-click later only for reversible executors, behind the same policy** (Q106 A). | P-12. |
 | D-145 | 2026-11-09 | **Builder-interview pipeline built** (Q107 B, D-069, Q24): Studio v0.7 Builders view; builders are private (third parties); stages found → contacted → agreed → interviewed → drafted → published → followed up; publishing needs a recorded, revocable release (T-release); Next up favours later stages, idle time and kinds not yet interviewed; interview kit is the shared item KIT-builder-interview. | |
+| D-146 | 2026-11-09 | **Raw material → pieces in many formats → cycles and tests** (Q109): per builder, raw material (recordings, transcript, notes, photos: links only, private) and pieces (written, quotes, audio, video, photos, collage) per channel and monthly cycle; a piece can be published only in formats the guest's release covers; results per published piece feed Content tests by format, channel and cycle. Kit used as written (Q108 A). | Studio v0.8. |
 
 ## State log (append-only)
 

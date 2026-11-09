@@ -73,6 +73,9 @@ aside{border-left:1px solid var(--line);background:var(--surface);overflow:auto;
 h2{font:700 22px/1.2 var(--display);margin:4px 0 8px;text-wrap:balance}
 h3{font:600 15px/1.3 var(--body);margin:0}
 .body{white-space:pre-wrap;overflow-wrap:anywhere}
+.tbl{width:100%;border-collapse:collapse;margin-top:8px;font-size:13px}
+.tbl th,.tbl td{text-align:left;padding:4px 8px;border-bottom:1px solid var(--line)}
+.tbl th{font:600 11px var(--mono);color:var(--mute);text-transform:uppercase;letter-spacing:.04em}
 .pill{font:500 11px var(--mono);padding:1px 7px;border-radius:4px;border:1px solid currentColor}
 .stack{display:flex;flex-direction:column;gap:10px}
 .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
@@ -110,7 +113,7 @@ pre.pack{white-space:pre-wrap;background:var(--raise);border:1px solid var(--lin
 </style>
 
 <header>
-  <div class="brand"><h1>Clanstack Studio</h1><span class="ver" id="ver">v0.7</span></div>
+  <div class="brand"><h1>Clanstack Studio</h1><span class="ver" id="ver">v0.8</span></div>
   <nav id="tabs" aria-label="Views">
     <button data-v="map" aria-current="true">Map</button>
     <button data-v="list">List</button>
@@ -248,6 +251,8 @@ pre.pack{white-space:pre-wrap;background:var(--raise);border:1px solid var(--lin
       <p class="mute" style="margin:0">Find community builders, interview them, turn it into content, and use it to grow multi-capital (D-069). Every builder is a real person, so they live in <b>your private area</b>: nobody else can read them. Nothing is published without their recorded release (T-release).</p>
       <div class="card"><h3>Next up</h3><ol class="log" id="bNext"></ol></div>
       <div class="card"><h3>Pipeline</h3><div class="row" id="bStages" style="flex-wrap:wrap;gap:6px"></div><ul class="log" id="bList"></ul></div>
+      <div class="card"><h3>Content tests</h3><p class="mute" style="margin:0">Every interview's raw material (recordings, transcript, notes, photos) is cut into pieces in several formats, published in cycles, and compared (Q109). Enter a result for each published piece (reactions, replies, sign-ups: one number you choose per channel) to see which formats work.</p>
+        <div id="bTests"></div></div>
       <div class="card"><h3>Add a builder</h3>
         <div class="row" style="flex-wrap:wrap">
           <input id="bName" placeholder="Name or handle" aria-label="Name or handle" style="width:180px">
@@ -900,6 +905,40 @@ function kitText(b){
   return body.replaceAll("{name}", b?.title || "{name}").replaceAll("{kind}", b?.meta?.kind || "community builder");
 }
 function kitPart(text, head){ const i = text.indexOf(head); if (i < 0) return text; const rest = text.slice(i + head.length); const j = rest.search(/\n## /); return (j < 0 ? rest : rest.slice(0, j)).trim(); }
+const FORMATS = [["written","Written profile"],["quotes","Quote cards"],["audio","Audio"],["video","Video clip"],["photos","Photos"],["collage","Multimedia collage"]];
+const RAW_KINDS = ["audio recording","video recording","transcript","notes","photos","other"];
+const PIECE_STAGES = ["planned","drafted","published","dropped"];
+const fmtLabel = k => (FORMATS.find(f => f[0]===k)||[k,k])[1];
+const cycleNow = () => new Date().toISOString().slice(0,7);   // a cycle is a month by default, e.g. 2026-11
+// A piece is one cut of an interview in one format; its comments are folded in order, latest field wins.
+function pieces(it){ const m = new Map(); for (const c of it.comments){ const p = c.body?.piece; if (!p?.id) continue; m.set(p.id, {...(m.get(p.id)||{}), ...p}); } return [...m.values()]; }
+function raws(it){ return it.comments.filter(c => c.body?.raw).map(c => c.body.raw); }
+function materialsPanel(b){
+  const ps = pieces(b), rs = raws(b);
+  return `<span class="stack" data-matpanel="${esc(b.id)}" hidden style="margin-top:6px;padding:8px;border:1px solid var(--line);border-radius:6px">
+    <b>Raw material</b>${rs.length ? `<span class="mute">${rs.map(r => esc(r.kind + ": " + r.where)).join("<br>")}</span>` : `<span class="mute">None yet.</span>`}
+    <span class="row" style="flex-wrap:wrap"><select data-rawkind aria-label="Kind of material">${RAW_KINDS.map(k => `<option>${esc(k)}</option>`).join("")}</select>
+      <input data-rawwhere placeholder="Where it is (a link or a place)" style="width:240px"><button data-rawadd="${esc(b.id)}" ${dis()}>Add</button></span>
+    <b>Pieces</b>${ps.length ? ps.map(pc => `<span class="row" style="flex-wrap:wrap"><span class="mono">${esc(fmtLabel(pc.format))}</span><span class="mute">${esc(pc.channel||"")} · cycle ${esc(pc.cycle||"")}</span>
+      <select data-piecestat="${esc(b.id)}|${esc(pc.id)}" ${dis()} aria-label="Piece status">${PIECE_STAGES.map(k => `<option ${k===pc.status?"selected":""}>${k}</option>`).join("")}</select>
+      ${pc.status==="published" ? `<input type="number" min="0" value="${pc.result ?? ""}" placeholder="result" style="width:80px" aria-label="Result"><button data-pieceres="${esc(b.id)}|${esc(pc.id)}" ${dis()}>Save result</button>` : ""}</span>`).join("") : `<span class="mute">None yet.</span>`}
+    <span class="row" style="flex-wrap:wrap"><select data-piecefmt aria-label="Format">${FORMATS.map(([k, l]) => `<option value="${k}">${esc(l)}</option>`).join("")}</select>
+      <input data-piecech placeholder="Channel (e.g. LinkedIn)" style="width:150px"><input data-piececy placeholder="Cycle (${cycleNow()})" style="width:110px"><button data-pieceadd="${esc(b.id)}" ${dis()}>Plan piece</button></span></span>`;
+}
+// Content tests (Q109): which formats and channels work, per cycle, from the results entered on published pieces.
+function renderTests(){
+  const all = builders().flatMap(b => pieces(b).map(p => ({...p, who:b.title})));
+  const pub = all.filter(p => p.status === "published");
+  const T = $("#bTests");
+  if (!all.length){ T.innerHTML = `<p class="mute">No pieces yet. Open a builder's Materials to plan one.</p>`; return; }
+  const row = (label, xs) => { const scored = xs.filter(p => Number.isFinite(p.result)); const avg = scored.length ? (scored.reduce((a, p) => a + p.result, 0) / scored.length) : null;
+    return `<tr><td>${esc(label)}</td><td class="mono">${xs.length}</td><td class="mono">${scored.length}</td><td class="mono">${avg==null ? "–" : avg.toFixed(1)}</td></tr>`; };
+  const group = key => [...new Set(pub.map(p => p[key] || "–"))].sort().map(k => row(key==="format" ? fmtLabel(k) : k, pub.filter(p => (p[key]||"–") === k))).join("");
+  T.innerHTML = `<p class="mute" style="margin:0">${all.length} pieces planned or made · ${pub.length} published</p>
+    <table class="tbl"><thead><tr><th>Format</th><th>Published</th><th>With result</th><th>Average result</th></tr></thead><tbody>${group("format") || `<tr><td colspan="4" class="mute">Nothing published yet.</td></tr>`}</tbody></table>
+    <table class="tbl"><thead><tr><th>Channel</th><th>Published</th><th>With result</th><th>Average result</th></tr></thead><tbody>${group("channel")}</tbody></table>
+    <table class="tbl"><thead><tr><th>Cycle</th><th>Published</th><th>With result</th><th>Average result</th></tr></thead><tbody>${group("cycle")}</tbody></table>`;
+}
 function renderBuilders(){
   if (!$("#bKind").options.length) $("#bKind").innerHTML = B_KINDS.map(k => `<option>${esc(k)}</option>`).join("");
   const all = builders();
@@ -911,9 +950,12 @@ function renderBuilders(){
     return `<li><span class="mono mute">${esc((lastChange(b)||"").slice(0,10))}</span><span><b>${esc(b.title)}</b> <span class="mute">${esc(b.meta.kind)} · ${esc(b.meta.where||"")}${b.meta.via ? " · found via " + esc(b.meta.via) : ""}</span>
       <span class="row" style="margin-top:4px;flex-wrap:wrap"><select data-bstage="${esc(b.id)}" ${dis()} aria-label="Stage for ${esc(b.title)}">${B_STAGES.map(([k, l]) => `<option value="${k}" ${k===b.status?"selected":""}>${esc(l)}</option>`).join("")}</select>
       <span class="pill" style="color:var(${rel?"--ok":"--warn"})">${rel ? "release: " + esc([rel.parts, rel.where, rel.until && "until " + rel.until].filter(Boolean).join(", ")) : "no release yet"}</span>
-      <button data-brel="${esc(b.id)}" ${dis()}>${rel ? "Revoke release" : "Record release"}</button><button data-bopen="${esc(b.id)}">Open</button></span>
+      <button data-brel="${esc(b.id)}" ${dis()}>${rel ? "Revoke release" : "Record release"}</button><button data-bmat="${esc(b.id)}">Materials (${pieces(b).length})</button><button data-bopen="${esc(b.id)}">Open</button></span>
       <span class="row" data-relform="${esc(b.id)}" hidden style="margin-top:4px;flex-wrap:wrap"><input data-relparts placeholder="What may be published (e.g. quotes only)" style="width:220px">
-        <input data-relwhere placeholder="Where (e.g. LinkedIn)" style="width:150px"><input data-reluntil placeholder="Until (date, or blank)" style="width:130px"><button data-relsave="${esc(b.id)}">Save release</button></span></span></li>`; }).join("")
+        <input data-relwhere placeholder="Where (e.g. LinkedIn)" style="width:150px"><input data-reluntil placeholder="Until (date, or blank)" style="width:130px">
+        ${FORMATS.map(([k, l]) => `<label class="mono" style="font-size:12px"><input type="checkbox" data-relfmt="${k}"> ${esc(l)}</label>`).join("")}
+        <button data-relsave="${esc(b.id)}">Save release</button></span>
+      ${materialsPanel(b)}</span></li>`; }).join("")
     : `<li><span></span><span class="mute">No builders yet.</span></li>`;
   L.querySelectorAll("[data-bstage]").forEach(sel => sel.onchange = async () => { const it = F.items.get(sel.dataset.bstage);
     if (sel.value === "published" && !releaseOf(it)){ toast("Record their release first: nothing is published without it (T-release)."); sel.value = it.status; return; }
@@ -923,10 +965,32 @@ function renderBuilders(){
     const f = L.querySelector(`[data-relform="${CSS.escape(it.id)}"]`); f.hidden = !f.hidden; if (!f.hidden) f.querySelector("[data-relparts]").focus(); });
   L.querySelectorAll("[data-relsave]").forEach(btn => btn.onclick = async () => { const it = F.items.get(btn.dataset.relsave), f = btn.parentElement;
     const parts = f.querySelector("[data-relparts]").value.trim(), where = f.querySelector("[data-relwhere]").value.trim(), until = f.querySelector("[data-reluntil]").value.trim();
-    if (!parts){ toast("Say what they agreed may be published."); return; }
-    const id = await write("comment", it.id, {text:`Release recorded: ${parts}${where?" on "+where:""}${until?" until "+until:""}.`, release:{parts, where, until, recorded:new Date().toISOString()}});
+    const formats = [...f.querySelectorAll("[data-relfmt]:checked")].map(x => x.dataset.relfmt);
+    if (!parts || !formats.length){ toast("Say what they agreed may be published, and tick the formats."); return; }
+    const id = await write("comment", it.id, {text:`Release recorded: ${parts} (${formats.join(", ")})${where?" on "+where:""}${until?" until "+until:""}.`, release:{parts, formats, where, until, recorded:new Date().toISOString()}});
     if (id) toast("Release recorded", [id]); });
   L.querySelectorAll("[data-bopen]").forEach(btn => btn.onclick = () => select(btn.dataset.bopen));
+  L.querySelectorAll("[data-bmat]").forEach(btn => btn.onclick = () => { const m = L.querySelector(`[data-matpanel="${CSS.escape(btn.dataset.bmat)}"]`); m.hidden = !m.hidden; S.openMat = m.hidden ? null : btn.dataset.bmat; });
+  if (S.openMat){ const m = L.querySelector(`[data-matpanel="${CSS.escape(S.openMat)}"]`); if (m) m.hidden = false; }
+  L.querySelectorAll("[data-rawadd]").forEach(btn => btn.onclick = async () => { const it = F.items.get(btn.dataset.rawadd), f = btn.parentElement;
+    const kind = f.querySelector("[data-rawkind]").value, where = f.querySelector("[data-rawwhere]").value.trim();
+    if (!where){ toast("Say where the material is (a link or a place)."); return; }
+    const id = await write("comment", it.id, {text:`Raw material: ${kind} at ${where}.`, raw:{kind, where}}); if (id) toast("Raw material added", [id]); });
+  L.querySelectorAll("[data-pieceadd]").forEach(btn => btn.onclick = async () => { const it = F.items.get(btn.dataset.pieceadd), f = btn.parentElement;
+    const format = f.querySelector("[data-piecefmt]").value, channel = f.querySelector("[data-piecech]").value.trim(), cycle = f.querySelector("[data-piececy]").value.trim() || cycleNow();
+    const pid = "P-" + Date.now().toString(36);
+    const id = await write("comment", it.id, {text:`Piece planned: ${fmtLabel(format)}${channel?" for "+channel:""} (cycle ${cycle}).`, piece:{id:pid, format, channel, cycle, status:"planned"}});
+    if (id) toast("Piece planned", [id]); });
+  L.querySelectorAll("[data-piecestat]").forEach(sel => sel.onchange = async () => { const [bid, pid] = sel.dataset.piecestat.split("|"), it = F.items.get(bid), pc = pieces(it).find(x => x.id === pid);
+    if (sel.value === "published"){ const rel = releaseOf(it);
+      if (!rel){ toast("Record their release first (T-release)."); sel.value = pc.status; return; }
+      if (rel.formats && !rel.formats.includes(pc.format)){ toast(`Their release doesn't cover ${fmtLabel(pc.format)}. Ask them, then update the release.`); sel.value = pc.status; return; } }
+    const id = await write("comment", it.id, {text:`Piece ${fmtLabel(pc.format)} → ${sel.value}.`, piece:{id:pid, status:sel.value, ...(sel.value==="published" ? {published:new Date().toISOString().slice(0,10)} : {})}});
+    if (id) toast(`Piece ${sel.value}`, [id]); });
+  L.querySelectorAll("[data-pieceres]").forEach(btn => btn.onclick = async () => { const [bid, pid] = btn.dataset.pieceres.split("|"), it = F.items.get(bid);
+    const v = +btn.previousElementSibling.value; if (!Number.isFinite(v) || v < 0){ toast("Enter a number of 0 or more."); return; }
+    const id = await write("comment", it.id, {text:`Piece result: ${v}.`, piece:{id:pid, result:v}}); if (id) toast("Result saved", [id]); });
+  renderTests();
   const kf = $("#bKitFor"), keep = kf.value; kf.innerHTML = `<option value="">(any builder)</option>` + all.map(b => `<option value="${esc(b.id)}" ${b.id===keep?"selected":""}>${esc(b.title)}</option>`).join("");
   $("#bKit").textContent = kitText(F.items.get(kf.value));
 }

@@ -541,6 +541,7 @@ async def s30_builder_pipeline(b):
     await p.select_option(f'[data-bstage="{bid}"]', "published"); await p.wait_for_timeout(300)
     blocked = await p.evaluate(f"F.items.get('{bid}').status") == "drafted"
     await p.click(f'[data-brel="{bid}"]'); await p.fill(f'[data-relform="{bid}"] [data-relparts]', "quotes only")
+    await p.check(f'[data-relform="{bid}"] [data-relfmt="quotes"]')
     await p.click(f'[data-relsave="{bid}"]'); await p.wait_for_timeout(300)
     await p.select_option(f'[data-bstage="{bid}"]', "published"); await p.wait_for_timeout(300)
     published = await p.evaluate(f"F.items.get('{bid}').status") == "published"
@@ -550,11 +551,37 @@ async def s30_builder_pipeline(b):
     return ok, f"private only={private_only} ({in_vault} in vault), next up first={nxt.split(chr(10))[0][:40]!r}, publish blocked without release={blocked}, published after={published}, kit personalised={'Hi Amina' in kit_txt}"
 
 
+async def s31_content_cycles(b):
+    """Q109: one interview becomes pieces in several formats. Only formats the guest released can be published; results feed the content tests."""
+    kit = ev("item.create", None, {"id": "KIT-builder-interview", "type": "asset", "title": "Kit", "status": "built", "body": "## Outreach\nHi {name}"}, ts="2026-11-09T00:00:00.000Z")
+    st = Store([kit]); p = await open_page(b, st, {})
+    await p.click("#tabs button[data-v=builders]")
+    await p.fill("#bName", "Amina"); await p.click("#bAdd"); await p.wait_for_timeout(300)
+    bid = await p.evaluate("[...F.items.values()].find(i => i.title === 'Amina').id")
+    await p.click(f'[data-brel="{bid}"]'); f = f'[data-relform="{bid}"]'
+    await p.fill(f"{f} [data-relparts]", "quotes and a clip"); await p.check(f'{f} [data-relfmt="quotes"]'); await p.check(f'{f} [data-relfmt="video"]')
+    await p.click(f'[data-relsave="{bid}"]'); await p.wait_for_timeout(300)
+    await p.click(f'[data-bmat="{bid}"]'); m = f'[data-matpanel="{bid}"]'
+    await p.fill(f"{m} [data-rawwhere]", "drive/amina.m4a"); await p.click(f'[data-rawadd="{bid}"]'); await p.wait_for_timeout(300)
+    for fmt, ch in (("quotes", "LinkedIn"), ("audio", "Spotify")):
+        await p.select_option(f"{m} [data-piecefmt]", fmt); await p.fill(f"{m} [data-piecech]", ch); await p.click(f'[data-pieceadd="{bid}"]'); await p.wait_for_timeout(300)
+    ps = await p.evaluate(f"pieces(F.items.get('{bid}'))")
+    q = next(x for x in ps if x["format"] == "quotes"); a = next(x for x in ps if x["format"] == "audio")
+    await p.select_option(f'[data-piecestat="{bid}|{a["id"]}"]', "published"); await p.wait_for_timeout(300)
+    audio_blocked = (await p.evaluate(f"pieces(F.items.get('{bid}')).find(x => x.id === '{a['id']}').status")) == "planned"
+    await p.select_option(f'[data-piecestat="{bid}|{q["id"]}"]', "published"); await p.wait_for_timeout(300)
+    await p.fill(f'{m} [data-pieceres="{bid}|{q["id"]}"] >> xpath=preceding-sibling::input[1]', "42"); await p.click(f'[data-pieceres="{bid}|{q["id"]}"]'); await p.wait_for_timeout(300)
+    tests = await p.inner_text("#bTests")
+    raw = await p.inner_text(m)
+    ok = audio_blocked and "Quote cards" in tests and "42.0" in tests and "drive/amina.m4a" in raw and not p.errors
+    return ok, f"audio blocked by release={audio_blocked}, tests show quotes avg 42={'42.0' in tests}, raw listed={'drive/amina.m4a' in raw}"
+
+
 SCENARIOS = [s01_tired_misclick, s02_undo, s03_stable_codes, s04_past_view_lock, s05_branch_awareness, s06_view_only_client,
              s07_names, s08_long_history, s09_ai_relay, s10_keyboard_list, s11_offline_capture, s12_member_rights,
              s13_two_people_at_once, s14_phone, s15_undo_old_status, s16_overwhelm, s17_disagreement, s18_clock_skew, s19_private_area,
              s20_addresses, s21_money_settings, s22_duplicate_id, s23_same_order_everywhere,
-             s24_hub_sync, s25_more_than_1000, s26_hub_not_connected, s27_read_on_open, s28_push_after_clean_runs, s29_runs_timeline, s30_builder_pipeline]
+             s24_hub_sync, s25_more_than_1000, s26_hub_not_connected, s27_read_on_open, s28_push_after_clean_runs, s29_runs_timeline, s30_builder_pipeline, s31_content_cycles]
 
 
 async def main():
