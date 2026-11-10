@@ -169,6 +169,9 @@ modelling. Phase 1 (rails) is built; voice is next. Owner: Nowed.
 | D-156 | 2026-11-10 | **Change requests split by size** (Q117 C): small → cheap agent, medium/large → Claude, auditor reviews. | |
 | D-157 | 2026-11-10 | **Both tracks** (Q119 C): Studio Web gets the command map now (v1.1: voice or text → nodes; suggest/act/observe; irreversible always asks; private log; replay via time slider); the local Rust ActionMap app resumes in parallel for desktop capture, wake word and always-on voice. | |
 | D-158 | 2026-11-10 | **Self-hosted free models first** (Q120): premium agents and chatbots later; now free open models run on Nowed's own hardware (local runtime + an open coding model sized to it) for the cheap-agent and auditor roles. | Hardware: Q121. |
+| D-159 | 2026-11-10 | **Free compute stack** (Q121 B): Oracle VM (Always Free A1, now 2 OCPU / 12 GB since 15 Jun 2026) as the always-on node: ActionMap hub-vm, profiler, MCP connector, a small local model (Ollama); stacked free APIs through ActionMap's existing router (Groq, Gemini API, Ollama; later Cloudflare Workers AI, OpenRouter free models); laptop as temporary buffer; own hardware later, added as another hub. Tailscale links them privately. | W16. |
+| D-160 | 2026-11-10 | **Recorder = ActionMap v0.2, already built** (Q123 A; F-69): Python, Windows capture, voice (push-to-talk, wake word, always-on presets), map controls, router, laptop↔VM sync, MCP connector. Field-test it now and bridge its events into the hub; port to Rust piece by piece behind the same event shapes (the Rust rewrite stays the plan). | |
+| D-161 | 2026-11-10 | **Studio Web in any browser** (Q123 C): the same page served by the hub at its own address with GitHub sign-in, through a small adapter that gives it the db/user/hub calls claude.ai gives it today; Leptos interface later on the same API. | Next build. |
 
 ## State log (append-only)
 

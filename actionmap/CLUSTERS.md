@@ -42,6 +42,10 @@ for the IDs a task touches. Update the cluster a change belongs to in the same c
   always-on). Observe / suggest / act modes, combinable, human↔agent and agent↔agent. Live and replayable maps of
   human, screen and agent actions (whole Windows desktop capture, eye tracking dropped). Visual version tree with
   parallel sessions resumable from any point. Rust/WASM foundation (own DAG, iroh, Leptos), laptop + VM hubs in sync.
+- **Already built and easy to forget (F-69): ActionMap v0.2 in actionmap/ (Python)**: Windows capture with privacy defaults,
+  voice (right-Ctrl push-to-talk, wake word, always-on presets, local transcription), map UI at 127.0.0.1:8765, agents
+  (next-step, profiler, conversation), model router (Groq, Gemini, Ollama), laptop↔VM hash-verified sync, MCP connector.
+  Field-test it and bridge into the hub before rewriting (D-160).
 - Live mixed-media canvases (sketch, map, voice, text) commanding digital, physical, community, publishing and IoT systems;
   anyone can design and share experiences across canvases; change and re-template anything safely at any scope.
 
@@ -59,5 +63,6 @@ for the IDs a task touches. Update the cluster a change belongs to in the same c
 - CHAT-6186e508: merged method: claims with confidence/velocity, decisions flagged when claims move, findings as a regression suite, gate rule.
 
 ## C9 Open (next builds, by recorded choice)
+- Next: Studio Web in any browser via the hub (D-161); ActionMap v0.2 field test + hub bridge (D-160); Oracle stack (D-159, W16).
 - Q115 (pending): merged method into Studio / dashboards (D-150) / placement venture.
 - D-151 recovery key; D-131 sealed capture; D-123 Master Reference v2.0 merge; F-65 flaky s16.
