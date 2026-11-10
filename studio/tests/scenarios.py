@@ -621,11 +621,31 @@ async def s32_private_files_and_views(b):
     return ok, f"refused without passphrase={no_pass}, stored sealed={sealed}, wrong passphrase blocked={wrong_blocked}, opened with right one={shown}, name kept out of shared record={not shared_leak}, private view saved={bool(view and view['private'])}"
 
 
+async def s33_studio_edits_studio(b):
+    """D-152/153: Nowed adds an item type and changes the look from Studio's own Studio tab; both take effect live and are versions; a change request can be proposed and approved."""
+    st = Store([]); p = await open_page(b, st, {})
+    await p.click("#tabs button[data-v=self]")
+    await p.fill("#tyKey", "venue"); await p.fill("#tyLabel", "Venue"); await p.click("#tyAdd"); await p.wait_for_timeout(400)
+    in_capture = await p.evaluate("[...document.querySelectorAll('#capType option')].some(o => o.value === 'venue')")
+    in_filters = await p.evaluate("TYPES.venue === 'Venue'")
+    await p.evaluate("""() => { const i = document.querySelector('[data-tok="--accent"]'); i.value = '#aa0000'; i.dispatchEvent(new Event('input')); }""")
+    await p.click("#lkSave"); await p.wait_for_timeout(400)
+    accent = await p.evaluate("getComputedStyle(document.documentElement).getPropertyValue('--accent').trim()")
+    saved = await p.evaluate("F.items.get('SET-ui-theme')?.value || ''")
+    await p.fill("#crTitle", "Show a weekly digest"); await p.fill("#crTest", "Digest lists last week's decisions"); await p.click("#crAdd"); await p.wait_for_timeout(400)
+    cid = await p.evaluate("[...F.items.values()].find(i => i.type === 'change')?.id")
+    await p.select_option(f'[data-crstage="{cid}"]', "approved"); await p.wait_for_timeout(400)
+    status = await p.evaluate(f"F.items.get('{cid}').status")
+    q = await open_page(b, st, {}); fresh_accent = await q.evaluate("getComputedStyle(document.documentElement).getPropertyValue('--accent').trim()")
+    ok = in_capture and in_filters and accent == "#aa0000" and "#aa0000" in saved and status == "approved" and fresh_accent == "#aa0000" and not p.errors
+    return ok, f"type in capture={in_capture}, in types={in_filters}, accent live={accent}, saved={'#aa0000' in saved}, change approved={status}, other page sees look={fresh_accent}"
+
+
 SCENARIOS = [s01_tired_misclick, s02_undo, s03_stable_codes, s04_past_view_lock, s05_branch_awareness, s06_view_only_client,
              s07_names, s08_long_history, s09_ai_relay, s10_keyboard_list, s11_offline_capture, s12_member_rights,
              s13_two_people_at_once, s14_phone, s15_undo_old_status, s16_overwhelm, s17_disagreement, s18_clock_skew, s19_private_area,
              s20_addresses, s21_money_settings, s22_duplicate_id, s23_same_order_everywhere,
-             s24_hub_sync, s25_more_than_1000, s26_hub_not_connected, s27_read_on_open, s28_push_after_clean_runs, s29_runs_timeline, s30_builder_pipeline, s31_content_cycles, s32_private_files_and_views]
+             s24_hub_sync, s25_more_than_1000, s26_hub_not_connected, s27_read_on_open, s28_push_after_clean_runs, s29_runs_timeline, s30_builder_pipeline, s31_content_cycles, s32_private_files_and_views, s33_studio_edits_studio]
 
 
 async def main():

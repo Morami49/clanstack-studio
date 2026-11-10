@@ -162,6 +162,9 @@ modelling. Phase 1 (rails) is built; voice is next. Owner: Nowed.
 | D-149 | 2026-11-10 | **Split the AI load by role** (Nowed near his weekly Claude limit): builder (Claude: code and Studio), auditor (any other AI with actionmap/AUDITOR.md: checks facts, code, principles, regression ledger, questions), commander (deterministic GitHub Actions and scheduled tasks: no AI tokens unless a step needs judgement). The standing "any traced/untraced… enquiries" prompt moves to the auditor. | Q114–Q116. |
 | D-150 | 2026-11-10 | **Dashboards: one builder plus fixed area dashboards, all customisable inside Studio** (Q112 A+B). | Not yet built. |
 | D-151 | 2026-11-10 | **Recovery key offered only in particular flows and security set-ups** (Q113 A, scoped): not pushed on every user; offered when a compartment holds files or a security initiative starts. | Not yet built. |
+| D-152 | 2026-11-10 | **Studio develops Studio: config live, code by request** (from the Figma live-editing discussion): look (SET-ui-theme) and item types (SCHEMA-types) are edited in Studio's Studio tab and applied at runtime from the record, versioned; nothing edits history. | Studio v1.0. |
+| D-153 | 2026-11-10 | **Change requests → change intake → builder** : type `change` items with a test; when the owner approves, the change-intake executor (every 6 h or by hand, policy SET-policy-change-intake) opens a GitHub issue and moves it to building; the builder ships through CI and deploy. | scripts/change_intake.py. |
+| D-154 | 2026-11-10 | **Clusters for token efficiency**: actionmap/CLUSTERS.md is the 2-page map every agent reads first; updated in the same commit as the change. | |
 
 ## State log (append-only)
 

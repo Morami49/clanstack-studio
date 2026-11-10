@@ -1,0 +1,48 @@
+name: change-intake
+# Executor (D-153): approved Studio change requests become GitHub issues for the builder (scripts/change_intake.py).
+# Policy: Studio's SET-policy-change-intake (auto/ask/off); the GitHub variable POLICY_CHANGE_INTAKE is the fallback.
+# Runs every 6 hours (kept low to stay inside the free Actions minutes) or when started by hand.
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+permissions:
+  contents: read
+  issues: write
+concurrency: change-intake
+jobs:
+  intake:
+    runs-on: ubuntu-latest
+    env:
+      HUB_URL: https://clanstack-hub.ndab-utube.workers.dev
+      HUB_TOKEN: ${{ secrets.HUB_WRITE_TOKEN }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Resolve the policy (Studio first, D-139)
+        id: pol
+        env: {PLATFORM: "${{ vars.POLICY_CHANGE_INTAKE }}"}
+        run: python3 scripts/policy.py SET-policy-change-intake --platform "$PLATFORM" --default auto
+      - name: Decide
+        id: go
+        env: {EFFECTIVE: "${{ steps.pol.outputs.effective }}"}
+        run: |
+          if [ "$EFFECTIVE" = off ] || { [ "$GITHUB_EVENT_NAME" = schedule ] && [ "$EFFECTIVE" != auto ]; }; then
+            echo "run=no" >> "$GITHUB_OUTPUT"; echo "Policy is $EFFECTIVE: nothing sent." >> "$GITHUB_STEP_SUMMARY"
+          else echo "run=yes" >> "$GITHUB_OUTPUT"; fi
+      - name: Open issues for approved change requests
+        id: intake
+        if: steps.go.outputs.run == 'yes'
+        env: {GH_TOKEN: "${{ github.token }}"}
+        run: python3 scripts/change_intake.py
+      - name: Record the run in Studio (P-13)
+        if: always() && steps.go.outputs.run == 'yes' && (steps.intake.outputs.count != '0' || job.status != 'success')
+        env:
+          STATUS: ${{ job.status }}
+          POLICY: ${{ steps.pol.outputs.effective }}
+          LIST: ${{ steps.intake.outputs.list }}
+          COUNT: ${{ steps.intake.outputs.count }}
+        run: |
+          o=$([ "$STATUS" = success ] && echo success || echo failure)
+          python3 scripts/run_record.py change-intake --title "Change intake runs" --outcome "$o" \
+            --text "Sent ${COUNT:-0} approved change request(s) to the builder${LIST:+: $LIST}." --policy "$POLICY" \
+            --undo "Close the issue on GitHub and set the change back to proposed in Studio."

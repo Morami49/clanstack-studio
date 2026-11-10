@@ -8,7 +8,7 @@
 :root{
   --bg:#eef0ee; --surface:#f8f9f7; --raise:#ffffff; --ink:#18201f; --mute:#5c6966; --line:#d5dbd8;
   --accent:#1f5f8b; --accent-ink:#ffffff;
-  --t-decision:#1f5f8b; --t-question:#b5651d; --t-term:#2b7a6b; --t-story:#7b4b94; --t-asset:#4a5553; --t-idea:#3f7d2f; --t-finding:#a8332a; --t-lead:#8a6d00; --t-setting:#5b4fa8;
+  --t-decision:#1f5f8b; --t-question:#b5651d; --t-term:#2b7a6b; --t-story:#7b4b94; --t-asset:#4a5553; --t-idea:#3f7d2f; --t-finding:#a8332a; --t-lead:#8a6d00; --t-setting:#5b4fa8; --t-change:#0f766e;
   --ok:#2e7d4f; --warn:#9a5212; --bad:#b03a2e; --band:#fff4e0; --band-ink:#5b3a10;
   --display:"Bricolage Grotesque", "IBM Plex Sans", system-ui, sans-serif;
   --body:"IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -17,12 +17,12 @@
 @media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
   --bg:#111615; --surface:#171d1c; --raise:#1d2423; --ink:#e5ebe8; --mute:#93a19d; --line:#2b3533;
   --accent:#6fb0de; --accent-ink:#0d1517;
-  --t-decision:#6fb0de; --t-question:#e3a15f; --t-term:#5fc2ad; --t-story:#c39ad8; --t-asset:#a5b2af; --t-idea:#8fcf75; --t-finding:#ec7f72; --t-lead:#e2c45a; --t-setting:#a99cf0;
+  --t-decision:#6fb0de; --t-question:#e3a15f; --t-term:#5fc2ad; --t-story:#c39ad8; --t-asset:#a5b2af; --t-idea:#8fcf75; --t-finding:#ec7f72; --t-lead:#e2c45a; --t-setting:#a99cf0; --t-change:#4fd1c5;
   --ok:#6cc08d; --warn:#e3a15f; --bad:#ec7f72; --band:#2e2416; --band-ink:#f0d2a6; color-scheme:dark }}
 :root[data-theme="dark"]{
   --bg:#111615; --surface:#171d1c; --raise:#1d2423; --ink:#e5ebe8; --mute:#93a19d; --line:#2b3533;
   --accent:#6fb0de; --accent-ink:#0d1517;
-  --t-decision:#6fb0de; --t-question:#e3a15f; --t-term:#5fc2ad; --t-story:#c39ad8; --t-asset:#a5b2af; --t-idea:#8fcf75; --t-finding:#ec7f72; --t-lead:#e2c45a; --t-setting:#a99cf0;
+  --t-decision:#6fb0de; --t-question:#e3a15f; --t-term:#5fc2ad; --t-story:#c39ad8; --t-asset:#a5b2af; --t-idea:#8fcf75; --t-finding:#ec7f72; --t-lead:#e2c45a; --t-setting:#a99cf0; --t-change:#4fd1c5;
   --ok:#6cc08d; --warn:#e3a15f; --bad:#ec7f72; --band:#2e2416; --band-ink:#f0d2a6; color-scheme:dark }
 html,body{height:100%}
 body{background:var(--bg);color:var(--ink);font:14px/1.5 var(--body);margin:0;display:flex;flex-direction:column}
@@ -113,7 +113,7 @@ pre.pack{white-space:pre-wrap;background:var(--raise);border:1px solid var(--lin
 </style>
 
 <header>
-  <div class="brand"><h1>Clanstack Studio</h1><span class="ver" id="ver">v0.9</span></div>
+  <div class="brand"><h1>Clanstack Studio</h1><span class="ver" id="ver">v1.0</span></div>
   <nav id="tabs" aria-label="Views">
     <button data-v="map" aria-current="true">Map</button>
     <button data-v="list">List</button>
@@ -125,6 +125,7 @@ pre.pack{white-space:pre-wrap;background:var(--raise);border:1px solid var(--lin
     <button data-v="hub">Hub</button>
     <button data-v="runs">Runs</button>
     <button data-v="builders">Builders</button>
+    <button data-v="self">Studio</button>
   </nav>
   <form id="goForm" class="row" style="gap:4px" role="search"><input id="goAddr" class="mono" placeholder="Go to: D-063@2 · R-261105-2#3.1 · repo/sha:path#L10" aria-label="Go to an address" style="width:300px;max-width:100%"><button>Go</button></form>
   <span class="spacer"></span>
@@ -274,6 +275,28 @@ pre.pack{white-space:pre-wrap;background:var(--raise);border:1px solid var(--lin
     </div>
   </section>
 
+  <section class="view" id="v-self" hidden>
+    <div class="stack" style="max-width:1000px">
+      <h2>Develop Studio from Studio</h2>
+      <p class="mute" style="margin:0">Look and schema changes take effect the moment you save them, for everyone, and each one is a version you can go back to (D-152). Anything that needs new code becomes a <b>change request</b>: once you approve it, the change-intake job turns it into a GitHub issue for whichever AI or person is building, and the result comes back through tests and a deploy you can see in Runs (D-149, D-153). Nothing here can break the record: Studio only reads these settings, it never rewrites history.</p>
+      <div class="card"><h3>Change requests</h3>
+        <div class="stack"><input id="crTitle" placeholder="What should Studio do? (one line)" aria-label="Change title">
+          <div class="row" style="flex-wrap:wrap"><select id="crKind" aria-label="Kind of change"><option value="code">new feature or fix (code)</option><option value="flow">automation or executor (flow)</option><option value="schema">data or item types (schema)</option><option value="look">look and layout</option></select>
+            <select id="crSize" aria-label="Size"><option>small</option><option>medium</option><option>large</option></select></div>
+          <textarea id="crWhy" rows="2" placeholder="Why, and for whom (the story)"></textarea>
+          <textarea id="crTest" rows="2" placeholder="How we'll know it works (the test the builder must pass)"></textarea>
+          <div class="row"><button class="primary" id="crAdd">Propose change</button><span class="mute" id="crNote"></span></div></div>
+        <ul class="log" id="crList"></ul></div>
+      <div class="card"><h3>Look</h3><p class="mute" style="margin:0">Colours for the mode you're viewing now (<span id="lkMode"></span>). Save makes a new version of SET-ui-theme.</p>
+        <div class="row" id="lkTokens" style="flex-wrap:wrap;gap:10px"></div>
+        <div class="row"><button id="lkSave">Save look</button><button id="lkReset">Back to defaults</button><span class="mute" id="lkNote"></span></div></div>
+      <div class="card"><h3>Item types</h3><p class="mute" style="margin:0">Add the kinds of thing you track (a tracker row, a partner, a venue…). New types appear in capture, filters and the map at once. Built-in types can't be removed. Saved as versions of SCHEMA-types.</p>
+        <ul class="log" id="tyList"></ul>
+        <div class="row" style="flex-wrap:wrap"><input id="tyKey" placeholder="key, e.g. venue" style="width:130px" aria-label="Type key"><input id="tyLabel" placeholder="Label, e.g. Venue" style="width:150px" aria-label="Type label"><input id="tyColor" type="color" value="#7a5c3e" aria-label="Type colour"><button id="tyAdd">Add type</button><span class="mute" id="tyNote"></span></div></div>
+      <div class="card"><h3>Executors and their policies</h3><p class="mute" style="margin:0">The automations that act for Studio, the policy each follows, and their last run. Change a policy in Hub → Policies.</p><ul class="log" id="exList"></ul></div>
+    </div>
+  </section>
+
   <section class="view" id="v-pack" hidden>
     <div class="stack" style="max-width:860px">
       <h2>Context pack</h2>
@@ -290,7 +313,9 @@ pre.pack{white-space:pre-wrap;background:var(--raise);border:1px solid var(--lin
 </main>
 
 <script>
-const TYPES = {decision:"Decision", question:"Question", term:"Term", story:"Story", asset:"Asset", idea:"Idea", finding:"Finding", lead:"Lead", setting:"Setting"};
+const VERSION = "v1.0";
+const TYPES = {decision:"Decision", question:"Question", term:"Term", story:"Story", asset:"Asset", idea:"Idea", finding:"Finding", lead:"Lead", setting:"Setting", change:"Change"};
+const BUILTIN_TYPES = new Set(Object.keys(TYPES));
 const PLURAL = {story:"Stories"};
 const OPEN = new Set(["proposed","open","default","challenged"]);
 const S = { genesis:null, events:[], shared:[], priv:[], me:null, owner:false, canEdit:null, canWrite:null, names:{}, branch:"main", asof:null,
@@ -719,6 +744,8 @@ const POLICIES = {
     help:"auto: merged b-* branches are deleted after every change to main. Mirror: GitHub variable POLICY_BRANCH_CLEANUP."},
   "SET-policy-hub-deploy": {title:"Deploy the hub", choices:["auto","ask","off"], def:"auto",
     help:"auto: deploy after every green change to main. ask: only when a person starts it (Actions → hub-deploy). Mirror: GitHub variable POLICY_HUB_DEPLOY."},
+  "SET-policy-change-intake": {title:"Send approved change requests to the builder", choices:["auto","ask","off"], def:"auto",
+    help:"auto: every 6 hours (or when started in Actions → change-intake) each approved change request becomes a GitHub issue for the builder."},
   "SET-policy-hub-read": {title:"Read from the hub when Studio opens", choices:["auto","ask","off"], def:"auto",
     help:"Brings changes made through the hub into Studio on open (Q102 A)."},
   "SET-policy-hub-push": {title:"Copy Studio changes up to the hub", choices:["ask","auto-after-clean-runs","auto","off"], def:"auto-after-clean-runs",
@@ -1103,8 +1130,85 @@ $("#bAdd").onclick = async () => {
   if (r){ for (const k of ["#bName","#bVia","#bNotes"]) $(k).value = ""; $("#bNote").textContent = `Added ${name} privately.`; toast(`${name} added to your private pipeline`, [r]); }
 };
 
+/* ---------------------------------------------------------------- Studio develops Studio (D-152, D-153) */
+const LOOK_TOKENS = [["--bg","Background"],["--surface","Panels"],["--raise","Cards"],["--ink","Text"],["--mute","Quiet text"],["--line","Lines"],["--accent","Accent"],["--accent-ink","Text on accent"]];
+const isHex = v => /^#[0-9a-f]{6}$/i.test(v || "");
+const darkNow = () => document.documentElement.dataset.theme ? document.documentElement.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+function jsonValue(id, fallback){ const it = F.items.get(id); if (!it || it.value == null) return fallback; try { return typeof it.value === "string" ? JSON.parse(it.value) : it.value; } catch { return fallback; } }
+function applySelf(){
+  const r = document.documentElement, theme = jsonValue("SET-ui-theme", {}), mode = darkNow() ? "dark" : "light", t = theme[mode] || {};
+  for (const [k] of LOOK_TOKENS) isHex(t[k]) ? r.style.setProperty(k, t[k]) : r.style.removeProperty(k);
+  for (const ty of jsonValue("SCHEMA-types", [])){
+    if (!ty || !/^[a-z][a-z0-9-]{1,23}$/.test(ty.key) || BUILTIN_TYPES.has(ty.key)) continue;
+    const label = String(ty.label || ty.key).slice(0, 30);
+    if (!(ty.key in TYPES)){ TYPES[ty.key] = label; S.filters.add(ty.key);
+      const o = document.createElement("option"); o.value = ty.key; o.textContent = label.toLowerCase(); $("#capType").append(o); }
+    else TYPES[ty.key] = label;
+    if (isHex(ty.color)) r.style.setProperty("--t-" + ty.key, ty.color);
+  }
+}
+async function saveJsonSetting(id, title, body, value){
+  const v = JSON.stringify(value);
+  return F.items.has(id) ? write("item.edit", id, {value:v}) : write("item.create", null, {id, type:"setting", title, body, status:"agreed", refs:["D-152"], value:v});
+}
+const CR_STAGES = [["proposed","Proposed"],["approved","Approved: goes to the builder"],["building","Building"],["shipped","Shipped"],["declined","Declined"]];
+function renderSelf(){
+  // change requests
+  const crs = [...F.items.values()].filter(i => i.type === "change").sort((a, b) => lastChange(b) > lastChange(a) ? 1 : -1);
+  const L = $("#crList");
+  L.innerHTML = crs.length ? crs.map(c => { const issue = [...c.comments].reverse().find(x => x.body?.issue_url)?.body.issue_url;
+    return `<li><span class="mono mute">${esc(c.id)}</span><span><b>${esc(c.title)}</b> <span class="mute">${esc(c.meta?.kind||"")} · ${esc(c.meta?.size||"")}</span>
+      ${c.meta?.test ? `<br><span class="mute">Test: ${esc(c.meta.test)}</span>` : ""}
+      <span class="row" style="margin-top:4px;flex-wrap:wrap"><select data-crstage="${esc(c.id)}" ${S.owner ? "" : "disabled"} aria-label="Stage">${CR_STAGES.map(([k, l]) => `<option value="${k}" ${k===c.status?"selected":""}>${esc(l)}</option>`).join("")}</select>
+      ${issue ? `<a href="${esc(issue)}" target="_blank" rel="noopener">Issue ↗</a>` : c.status === "approved" ? `<span class="mute">waiting for change intake</span>` : ""}
+      <button data-bopen="${esc(c.id)}">Open</button></span></span></li>`; }).join("") : `<li><span></span><span class="mute">No change requests yet.</span></li>`;
+  L.querySelectorAll("[data-crstage]").forEach(sel => sel.onchange = async () => { const id = await write("status", sel.dataset.crstage, {status: sel.value}); if (id) toast(`Change ${sel.value}`, [id]); });
+  L.querySelectorAll("[data-bopen]").forEach(b => b.onclick = () => select(b.dataset.bopen));
+  // look
+  const mode = darkNow() ? "dark" : "light"; $("#lkMode").textContent = mode;
+  const T = $("#lkTokens"); if (!T.dataset.mode || T.dataset.mode !== mode || !T.children.length){ T.dataset.mode = mode;
+    T.innerHTML = LOOK_TOKENS.map(([k, l]) => { const v = getComputedStyle(document.documentElement).getPropertyValue(k).trim();
+      return `<label class="mono" style="font-size:12px">${esc(l)} <input type="color" data-tok="${k}" value="${isHex(v) ? v : "#000000"}"></label>`; }).join(""); }
+  T.querySelectorAll("[data-tok]").forEach(inp => inp.oninput = () => document.documentElement.style.setProperty(inp.dataset.tok, inp.value));
+  // types
+  const custom = jsonValue("SCHEMA-types", []);
+  $("#tyList").innerHTML = Object.entries(TYPES).map(([k, v]) => `<li><span class="mono mute">${esc(k)}</span><span><i class="dot" style="background:var(--t-${k})"></i> ${esc(v)} ${BUILTIN_TYPES.has(k) ? `<span class="mute">built in</span>` : `<span class="mute">added</span>`}</span></li>`).join("");
+  // executors
+  const ex = [["branch-cleanup","SET-policy-branch-cleanup"],["hub-deploy","SET-policy-hub-deploy"],["gitlab-mirror",null],["change-intake","SET-policy-change-intake"],["hub-sync","SET-policy-hub-push"]];
+  $("#exList").innerHTML = ex.map(([name, pol]) => { const it = F.items.get("RUNS-" + name), last = it ? it.comments[it.comments.length - 1] : null;
+    return `<li><span class="mono mute">${esc(name)}</span><span>policy <b class="mono">${pol ? esc(String(F.items.get(pol)?.value ?? (POLICIES[pol]?.def ?? "default"))) : "always"}</b>
+      · ${last ? `last run ${esc((last.ts||"").slice(0,16).replace("T"," "))}: ${esc((last.body?.text||"").slice(0,90))}` : "no runs recorded yet"}</span></li>`; }).join("");
+}
+$("#crAdd").onclick = async () => {
+  const title = $("#crTitle").value.trim(), test = $("#crTest").value.trim();
+  if (!title || !test){ $("#crNote").textContent = "Say what it should do and how we'll know it works."; return; }
+  const id = "CR-" + Date.now().toString(36);
+  const r = await write("item.create", null, {id, type:"change", title, body:$("#crWhy").value.trim(), status:"proposed", refs:["D-153"],
+    meta:{kind:$("#crKind").value, size:$("#crSize").value, test}});
+  if (r){ for (const k of ["#crTitle","#crWhy","#crTest"]) $(k).value = ""; $("#crNote").textContent = `Proposed ${id}. Approve it below to send it to the builder.`; toast("Change proposed", [r]); }
+};
+$("#lkSave").onclick = async () => {
+  const mode = darkNow() ? "dark" : "light", theme = jsonValue("SET-ui-theme", {}), t = {};
+  $("#lkTokens").querySelectorAll("[data-tok]").forEach(inp => t[inp.dataset.tok] = inp.value);
+  const id = await saveJsonSetting("SET-ui-theme", "Studio look", "Colours per mode (light, dark), edited in Studio → Studio → Look.", {...theme, [mode]: t});
+  if (id){ $("#lkNote").textContent = `Saved the ${mode} look.`; toast("Look saved", [id]); } };
+$("#lkReset").onclick = async () => {
+  const mode = darkNow() ? "dark" : "light", theme = jsonValue("SET-ui-theme", {}); delete theme[mode];
+  const id = await saveJsonSetting("SET-ui-theme", "Studio look", "Colours per mode (light, dark), edited in Studio → Studio → Look.", theme);
+  for (const [k] of LOOK_TOKENS) document.documentElement.style.removeProperty(k); $("#lkTokens").innerHTML = "";
+  if (id) toast("Back to the default look", [id]); };
+$("#tyAdd").onclick = async () => {
+  const key = $("#tyKey").value.trim().toLowerCase(), label = $("#tyLabel").value.trim(), color = $("#tyColor").value;
+  if (!/^[a-z][a-z0-9-]{1,23}$/.test(key)){ $("#tyNote").textContent = "Key: 2-24 lowercase letters, digits or dashes, starting with a letter."; return; }
+  if (key in TYPES){ $("#tyNote").textContent = `${key} already exists.`; return; }
+  if (!label){ $("#tyNote").textContent = "Give it a label."; return; }
+  const list = jsonValue("SCHEMA-types", []).filter(t => t.key !== key).concat([{key, label, color}]);
+  const id = F.items.has("SCHEMA-types") ? await write("item.edit", "SCHEMA-types", {value:JSON.stringify(list)})
+    : await write("item.create", null, {id:"SCHEMA-types", type:"setting", title:"Item types added in Studio", body:"Extra kinds of item, edited in Studio → Studio → Item types.", status:"agreed", refs:["D-152"], value:JSON.stringify(list)});
+  if (id){ for (const k of ["#tyKey","#tyLabel"]) $(k).value = ""; $("#tyNote").textContent = `Added ${label}.`; toast(`Type ${label} added`, [id]); } };
+
 /* ---------------------------------------------------------------- views + time */
-const VIEWS = ["map","list","ask","capture","tree","pack","money","hub","runs","builders"];
+const VIEWS = ["map","list","ask","capture","tree","pack","money","hub","runs","builders","self"];
 function show(v){ if (!VIEWS.includes(v)) v = "map"; S.view=v; document.querySelectorAll("#tabs button").forEach(b=>b.setAttribute("aria-current", b.dataset.v===v));
   for (const x of VIEWS) $("#v-"+x).hidden = x!==v;
   if (v==="map" && cy) cy.resize(); if (v==="capture") sizePad(); refreshView(); store.set("view", v); }
@@ -1114,14 +1218,15 @@ $("#asof").oninput = e => { const evs=[...S.events].sort(byTsThenId); const v=+e
   S.asof = v>=evs.length ? null : (v===0 ? "0" : evs[v-1].ts); refresh(); };
 $("#theme").onclick = () => { const r=document.documentElement, dark=matchMedia("(prefers-color-scheme: dark)").matches;
   r.dataset.theme = (r.dataset.theme || (dark?"dark":"light"))==="dark" ? "light" : "dark"; renderMap(false); if (S.view==="tree") renderTree(); if (S.view==="capture") redraw(); };
-function refreshView(){ if (S.view==="map") renderMap(false); if (S.view==="list") renderList(); if (S.view==="ask") renderAsk(); if (S.view==="tree") renderTree(); if (S.view==="pack") renderPack(); if (S.view==="money") renderMoney(); if (S.view==="hub") renderHub(); if (S.view==="runs") renderRuns(); if (S.view==="builders") renderBuilders(); }
+function refreshView(){ if (S.view==="map") renderMap(false); if (S.view==="list") renderList(); if (S.view==="ask") renderAsk(); if (S.view==="tree") renderTree(); if (S.view==="pack") renderPack(); if (S.view==="money") renderMoney(); if (S.view==="hub") renderHub(); if (S.view==="runs") renderRuns(); if (S.view==="builders") renderBuilders(); if (S.view==="self") renderSelf(); }
 function refresh(){
   if (S.bulk) return;   // a bulk action redraws once at the end
   CODES = stableCodes(); F = fold();
   const n = S.events.length, a = $("#asof"); a.max = n; if (!S.asof) a.value = n;
   $("#when").textContent = S.asof ? (S.asof==="0" ? "genesis" : "as of "+S.asof.slice(5,16).replace("T"," ")) : "live";
   $("#when").className = "status " + (S.asof ? "past" : "live");
-  $("#ver").textContent = `v0.3 · ${F.items.size} items · ${n} changes`;
+  applySelf();   // D-152: Studio's own look and schema come from its record, so edits made here take effect live
+  $("#ver").textContent = `${VERSION} · ${F.items.size} items · ${n} changes`;
   const bs = branches(), names = Object.keys(bs), sel = $("#branch");
   sel.innerHTML = names.map(x => `<option value="${esc(x)}">${esc(x)}${bs[x].merged?" (merged)":""}</option>`).join(""); if (!names.includes(S.branch)) S.branch = "main"; sel.value = S.branch;
   renderBanners(); buildFilters(); badge(); refreshView(); if (S.sel) renderInspector();
