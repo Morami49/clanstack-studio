@@ -113,9 +113,10 @@ pre.pack{white-space:pre-wrap;background:var(--raise);border:1px solid var(--lin
 </style>
 
 <header>
-  <div class="brand"><h1>Clanstack Studio</h1><span class="ver" id="ver">v1.0</span></div>
+  <div class="brand"><h1>Clanstack Studio</h1><span class="ver" id="ver">v1.1</span></div>
   <nav id="tabs" aria-label="Views">
     <button data-v="map" aria-current="true">Map</button>
+    <button data-v="command">Command</button>
     <button data-v="list">List</button>
     <button data-v="ask">Ask<span class="badge" id="askBadge" hidden></span></button>
     <button data-v="capture">Capture</button>
@@ -275,6 +276,23 @@ pre.pack{white-space:pre-wrap;background:var(--raise);border:1px solid var(--lin
     </div>
   </section>
 
+  <section class="view" id="v-command" hidden>
+    <div class="stack" style="max-width:1100px">
+      <h2>Command map</h2>
+      <p class="mute" style="margin:0">Say or type what you want. Each command becomes a node on the map below (D-155). In <b>suggest</b> mode nothing happens until you tap the node and confirm it; <b>act</b> runs reversible commands at once (P-12); <b>observe</b> only records. The time slider at the top replays the map.</p>
+      <div class="row" style="flex-wrap:wrap">
+        <button class="primary" id="cmdMic" aria-pressed="false">🎙 Hold to talk</button>
+        <label class="mono" style="font-size:12px"><input type="checkbox" id="cmdOpen"> listen while open</label>
+        <label class="mono" style="font-size:12px"><input type="checkbox" id="cmdSpeak"> speak results</label>
+        <select id="cmdMode" aria-label="Agent mode"><option value="suggest">suggest</option><option value="act">act</option><option value="observe">observe</option></select>
+        <span class="mute" id="cmdHear"></span></div>
+      <div class="row"><input id="cmdText" placeholder="e.g. propose change weekly digest · capture idea venue list · move Amina to interviewed · approve CR-… · show runs · sync" style="flex:1" aria-label="Command"><button id="cmdGo">Add</button></div>
+      <svg id="cmdMap" role="img" aria-label="Command map" style="width:100%;height:360px;background:var(--raise);border:1px solid var(--line);border-radius:8px"></svg>
+      <div class="card" id="cmdPanel" hidden></div>
+      <p class="mute" style="margin:0;font-size:12px">Commands are kept in your private area. Speech uses your browser's built-in recognition where it has one (Chrome and Edge do); otherwise type. Wake word and desktop-wide listening come with the local ActionMap app.</p>
+    </div>
+  </section>
+
   <section class="view" id="v-self" hidden>
     <div class="stack" style="max-width:1000px">
       <h2>Develop Studio from Studio</h2>
@@ -313,7 +331,7 @@ pre.pack{white-space:pre-wrap;background:var(--raise);border:1px solid var(--lin
 </main>
 
 <script>
-const VERSION = "v1.0";
+const VERSION = "v1.1";
 const TYPES = {decision:"Decision", question:"Question", term:"Term", story:"Story", asset:"Asset", idea:"Idea", finding:"Finding", lead:"Lead", setting:"Setting", change:"Change"};
 const BUILTIN_TYPES = new Set(Object.keys(TYPES));
 const PLURAL = {story:"Stories"};
@@ -1130,6 +1148,103 @@ $("#bAdd").onclick = async () => {
   if (r){ for (const k of ["#bName","#bVia","#bNotes"]) $(k).value = ""; $("#bNote").textContent = `Added ${name} privately.`; toast(`${name} added to your private pipeline`, [r]); }
 };
 
+/* ---------------------------------------------------------------- command map (D-155, Q119 C): voice or text → nodes → confirm */
+const CMD_ITEM = "CMD-log";
+// A small fixed grammar: free, offline, predictable. Anything it doesn't recognise is kept as an idea suggestion.
+function parseCommand(raw){
+  const t = raw.trim().replace(/\s+/g, " "), l = t.toLowerCase();
+  let m;
+  if ((m = l.match(/^(?:propose |request )?change (?:request )?(.+)$/))) return {intent:"change", args:{title:t.slice(t.length - m[1].length)}, reversible:true};
+  if ((m = l.match(/^approve (?:change )?(cr-[a-z0-9]+)$/))) return {intent:"approve", args:{id:m[1].toUpperCase()}, reversible:false};
+  if ((m = l.match(/^(?:capture |note |add )?(idea|question|story|term|finding|lead) (.+)$/))) return {intent:"capture", args:{type:m[1], title:t.slice(t.length - m[2].length)}, reversible:true};
+  if ((m = l.match(/^move (.+?) to (found|contacted|agreed|interviewed|drafted|published|followed-up|followed up|declined)$/))) return {intent:"stage", args:{name:t.slice(5, 5 + m[1].length), stage:m[2].replace(" ", "-")}, reversible:true};
+  if ((m = l.match(/^answer (q\d+|[a-z]+-[a-z0-9-]+) (.+)$/))) return {intent:"answer", args:{code:m[1].toUpperCase(), text:t.slice(t.length - m[2].length)}, reversible:false};
+  if ((m = l.match(/^(?:show|open|go to) (.+)$/))) { const v = m[1].replace(/^the /, "").replace(/ tab$/, ""); const hit = VIEWS.find(x => x === v || x.startsWith(v.slice(0, 4)));
+    if (hit) return {intent:"show", args:{view:hit}, reversible:true}; }
+  if (/^sync( now)?$/.test(l)) return {intent:"sync", args:{}, reversible:true};
+  return {intent:"capture", args:{type:"idea", title:t}, reversible:true, guess:true};
+}
+function describe(c){ const a = c.args || {};
+  return {change:`Propose change: ${a.title}`, approve:`Approve ${a.id}`, capture:`Capture ${a.type}: ${a.title}`, stage:`Move ${a.name} to ${a.stage}`,
+          answer:`Answer ${a.code}: ${a.text}`, show:`Show ${a.view}`, sync:"Sync with the hub"}[c.intent] || c.intent; }
+function commands(){ const it = F.items.get(CMD_ITEM); if (!it) return []; const m = new Map();
+  for (const c of it.comments){ const x = c.body?.cmd; if (!x?.id) continue; m.set(x.id, {...(m.get(x.id)||{}), ...x, ts: m.get(x.id)?.ts || c.ts}); } return [...m.values()]; }
+async function ensureCmdLog(){
+  if (F.items.has(CMD_ITEM)) return true;
+  return !!(await write("item.create", null, {id:CMD_ITEM, type:"asset", title:"My command log", body:"Every spoken or typed command, its node state and outcome (D-155).", status:"built", refs:["D-155"], private:true}, {private:true}));
+}
+async function addCommand(raw, via){
+  if (!raw.trim()) return;
+  if (!privPath()){ toast("Your private area isn't available here, so commands can't be kept."); return; }
+  if (!(await ensureCmdLog())) return;
+  const p = parseCommand(raw), mode = $("#cmdMode").value, id = "C-" + Date.now().toString(36);
+  await write("comment", CMD_ITEM, {text:`${via}: ${raw}`, cmd:{id, raw, via, intent:p.intent, args:p.args, reversible:p.reversible, guess:!!p.guess, mode, state:"suggested"}}, {private:true});
+  if (mode === "act" && p.reversible && !p.guess) await runCommand(id);
+  else if (mode === "observe") await setCmd(id, {state:"observed"});
+  S.cmdSel = id; renderCommands();
+}
+async function setCmd(id, patch){ return write("comment", CMD_ITEM, {text:`${id} → ${patch.state}${patch.result ? ": " + patch.result : ""}`, cmd:{id, ...patch}}, {private:true}); }
+const say = text => { if (!$("#cmdSpeak").checked || !window.speechSynthesis) return; try { speechSynthesis.speak(new SpeechSynthesisUtterance(text)); } catch {} };
+async function runCommand(id){
+  const c = commands().find(x => x.id === id); if (!c) return; const a = c.args || {}; let out = null, result = "";
+  try {
+    if (c.intent === "change"){ const cid = "CR-" + Date.now().toString(36);
+      out = await write("item.create", null, {id:cid, type:"change", title:a.title, body:"", status:"proposed", refs:["D-153"], meta:{kind:"code", size:"small", test:"(add the test in Studio → Studio)"}}); result = `proposed ${cid}`; }
+    else if (c.intent === "approve"){ if (!F.items.has(a.id)) throw new Error(`no ${a.id}`); out = await write("status", a.id, {status:"approved"}); result = `${a.id} approved`; }
+    else if (c.intent === "capture"){ const iid = (a.type[0].toUpperCase()) + "-" + Date.now().toString(36);
+      out = await write("item.create", null, {id:iid, type:a.type, title:a.title, body:"", status:a.type==="question" ? "open" : "proposed", refs:[]}); result = `captured ${iid}`; }
+    else if (c.intent === "stage"){ const b = builders().find(x => x.title.toLowerCase() === a.name.toLowerCase()); if (!b) throw new Error(`no builder called ${a.name}`);
+      if (a.stage === "published" && !releaseOf(b)) throw new Error("record their release first");
+      out = await write("status", b.id, {status:a.stage}); result = `${b.title} → ${a.stage}`; }
+    else if (c.intent === "answer"){ const it = [...F.items.values()].find(i => i.id.toUpperCase() === a.code || codeOf(i.id) === a.code); if (!it) throw new Error(`no ${a.code}`);
+      out = await write("answer", it.id, {code:codeOf(it.id), text:a.text}); result = `answered ${a.code}`; }
+    else if (c.intent === "show"){ show(a.view); out = "ok"; result = `showing ${a.view}`; }
+    else if (c.intent === "sync"){ hubSync("full", false); out = "ok"; result = "sync started"; }
+  } catch(e){ await setCmd(id, {state:"failed", result:e.message}); say("That didn't work: " + e.message); return; }
+  await setCmd(id, out ? {state:"done", result} : {state:"failed", result:"not saved"}); say(out ? result : "That didn't save.");
+}
+function renderCommands(){
+  const cs = commands().sort((a, b) => a.ts < b.ts ? -1 : 1), svg = $("#cmdMap"), W = svg.clientWidth || 1000, H = 360;
+  const col = {suggested:"var(--warn)", done:"var(--ok)", failed:"var(--bad)", dropped:"var(--mute)", observed:"var(--accent)"};
+  const n = cs.length, step = n > 1 ? Math.min(140, (W - 120) / (n - 1)) : 0, lanes = {change:0, approve:0, capture:1, answer:1, stage:2, show:3, sync:3};
+  const xy = (c, i) => [60 + i * step, 50 + (lanes[c.intent] ?? 1) * 85];
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  const lanesSvg = ["changes","record","people","studio"].map((l, i) => `<text x="8" y="${54 + i*85}" font-size="11" fill="var(--mute)" font-family="var(--mono)">${l}</text>`).join("");
+  const edges = cs.slice(1).map((c, i) => { const [x1, y1] = xy(cs[i], i), [x2, y2] = xy(c, i + 1); return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="var(--line)" stroke-width="1.5"/>`; }).join("");
+  const nodes = cs.map((c, i) => { const [x, y] = xy(c, i), sel = c.id === S.cmdSel;
+    return `<g data-cmd="${esc(c.id)}" tabindex="0" role="button" aria-label="${esc(describe(c))}, ${esc(c.state)}" style="cursor:pointer">
+      <circle cx="${x}" cy="${y}" r="${sel ? 15 : 12}" fill="var(--surface)" stroke="${col[c.state] || "var(--ink)"}" stroke-width="${sel ? 4 : 3}" ${c.state==="suggested" ? 'stroke-dasharray="4 3"' : ""}/>
+      <text x="${x}" y="${y + 30}" text-anchor="middle" font-size="11" fill="var(--ink)">${esc(describe(c).slice(0, 22))}</text></g>`; }).join("");
+  svg.innerHTML = lanesSvg + edges + (n ? nodes : `<text x="${W/2}" y="${H/2}" text-anchor="middle" fill="var(--mute)">Say or type a command to place the first node.</text>`);
+  svg.querySelectorAll("[data-cmd]").forEach(g => { g.onclick = () => { S.cmdSel = g.dataset.cmd; renderCommands(); }; g.onkeydown = e => { if (e.key === "Enter") g.onclick(); }; });
+  const P = $("#cmdPanel"), c = cs.find(x => x.id === S.cmdSel);
+  if (!c){ P.hidden = true; return; }
+  P.hidden = false;
+  P.innerHTML = `<h3>${esc(describe(c))}</h3><p class="mute" style="margin:0">${esc(c.via)} · “${esc(c.raw)}” · ${esc(c.state)}${c.result ? " · " + esc(c.result) : ""}${c.guess ? " · not a known command, so kept as an idea" : ""}${!c.reversible ? " · can't be undone automatically, so it always asks" : ""}</p>
+    ${c.state === "suggested" ? `<div class="row"><button class="primary" data-cmdgo>Confirm</button><input data-cmdedit value="${esc(c.raw)}" style="flex:1" aria-label="Edit command"><button data-cmdre>Edit and confirm</button><button data-cmddrop>Drop</button></div>` : ""}`;
+  P.querySelector("[data-cmdgo]")?.addEventListener("click", () => runCommand(c.id));
+  P.querySelector("[data-cmddrop]")?.addEventListener("click", () => setCmd(c.id, {state:"dropped"}));
+  P.querySelector("[data-cmdre]")?.addEventListener("click", async () => { const raw = P.querySelector("[data-cmdedit]").value, p = parseCommand(raw);
+    await write("comment", CMD_ITEM, {text:`edited: ${raw}`, cmd:{id:c.id, raw, intent:p.intent, args:p.args, reversible:p.reversible, guess:!!p.guess}}, {private:true}); await runCommand(c.id); });
+}
+$("#cmdGo").onclick = () => { const v = $("#cmdText").value; $("#cmdText").value = ""; addCommand(v, "typed"); };
+$("#cmdText").onkeydown = e => { if (e.key === "Enter") $("#cmdGo").onclick(); };
+// Voice: the browser's own speech recognition (free); push-to-talk, or keep listening while the page is open.
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let rec = null;
+function listen(continuous){
+  if (!SR){ $("#cmdHear").textContent = "This browser has no speech recognition: type instead (Chrome and Edge have it)."; return; }
+  if (rec) try { rec.stop(); } catch {}
+  rec = new SR(); rec.lang = "en-GB"; rec.interimResults = true; rec.continuous = continuous;
+  rec.onresult = e => { const r = e.results[e.results.length - 1]; $("#cmdHear").textContent = "“" + r[0].transcript + "”"; if (r.isFinal) addCommand(r[0].transcript, "spoken"); };
+  rec.onerror = e => { $("#cmdHear").textContent = e.error === "not-allowed" ? "Microphone not allowed: allow it for this page, or type." : `Listening stopped (${e.error}).`; };
+  rec.onend = () => { $("#cmdMic").setAttribute("aria-pressed", "false"); if ($("#cmdOpen").checked) setTimeout(() => listen(true), 300); };
+  try { rec.start(); $("#cmdMic").setAttribute("aria-pressed", "true"); $("#cmdHear").textContent = "Listening…"; } catch {}
+}
+$("#cmdMic").onpointerdown = () => listen(false);
+$("#cmdMic").onpointerup = () => { if (rec && !$("#cmdOpen").checked) try { rec.stop(); } catch {} };
+$("#cmdOpen").onchange = () => { if ($("#cmdOpen").checked) listen(true); else if (rec) try { rec.stop(); } catch {} };
+
 /* ---------------------------------------------------------------- Studio develops Studio (D-152, D-153) */
 const LOOK_TOKENS = [["--bg","Background"],["--surface","Panels"],["--raise","Cards"],["--ink","Text"],["--mute","Quiet text"],["--line","Lines"],["--accent","Accent"],["--accent-ink","Text on accent"]];
 const isHex = v => /^#[0-9a-f]{6}$/i.test(v || "");
@@ -1208,7 +1323,7 @@ $("#tyAdd").onclick = async () => {
   if (id){ for (const k of ["#tyKey","#tyLabel"]) $(k).value = ""; $("#tyNote").textContent = `Added ${label}.`; toast(`Type ${label} added`, [id]); } };
 
 /* ---------------------------------------------------------------- views + time */
-const VIEWS = ["map","list","ask","capture","tree","pack","money","hub","runs","builders","self"];
+const VIEWS = ["map","command","list","ask","capture","tree","pack","money","hub","runs","builders","self"];
 function show(v){ if (!VIEWS.includes(v)) v = "map"; S.view=v; document.querySelectorAll("#tabs button").forEach(b=>b.setAttribute("aria-current", b.dataset.v===v));
   for (const x of VIEWS) $("#v-"+x).hidden = x!==v;
   if (v==="map" && cy) cy.resize(); if (v==="capture") sizePad(); refreshView(); store.set("view", v); }
@@ -1218,7 +1333,7 @@ $("#asof").oninput = e => { const evs=[...S.events].sort(byTsThenId); const v=+e
   S.asof = v>=evs.length ? null : (v===0 ? "0" : evs[v-1].ts); refresh(); };
 $("#theme").onclick = () => { const r=document.documentElement, dark=matchMedia("(prefers-color-scheme: dark)").matches;
   r.dataset.theme = (r.dataset.theme || (dark?"dark":"light"))==="dark" ? "light" : "dark"; renderMap(false); if (S.view==="tree") renderTree(); if (S.view==="capture") redraw(); };
-function refreshView(){ if (S.view==="map") renderMap(false); if (S.view==="list") renderList(); if (S.view==="ask") renderAsk(); if (S.view==="tree") renderTree(); if (S.view==="pack") renderPack(); if (S.view==="money") renderMoney(); if (S.view==="hub") renderHub(); if (S.view==="runs") renderRuns(); if (S.view==="builders") renderBuilders(); if (S.view==="self") renderSelf(); }
+function refreshView(){ if (S.view==="map") renderMap(false); if (S.view==="list") renderList(); if (S.view==="ask") renderAsk(); if (S.view==="tree") renderTree(); if (S.view==="pack") renderPack(); if (S.view==="money") renderMoney(); if (S.view==="hub") renderHub(); if (S.view==="runs") renderRuns(); if (S.view==="builders") renderBuilders(); if (S.view==="self") renderSelf(); if (S.view==="command") renderCommands(); }
 function refresh(){
   if (S.bulk) return;   // a bulk action redraws once at the end
   CODES = stableCodes(); F = fold();

@@ -12,7 +12,8 @@ for the IDs a task touches. Update the cluster a change belongs to in the same c
 
 ## C2 Studio Web (the interface) — studio/index.html, artifact 4hTHTKeonKNHhjRY2iChni
 - Append-only events folded into items (D-101 order: ts, then doc id). Private area: data/users/<id>/vault/events.
-- Tabs: Map, List, Ask, Capture, Tree, Pack, Money, Hub, Runs, Builders, Studio.
+- Tabs: Map, Command, List, Ask, Capture, Tree, Pack, Money, Hub, Runs, Builders, Studio.
+- v1.1 Command map (D-157): voice (browser speech) or text → command nodes; suggest/act/observe; private CMD-log.
 - v1.0: Studio develops Studio (D-152/D-153): look (SET-ui-theme), item types (SCHEMA-types) live; code changes as
   change requests (type `change`) → change intake → GitHub issue → builder.
 - Tests: studio/tests/scenarios.py (Playwright, 33 scenarios). Harness store delivers one write at a time (F-64).
@@ -30,6 +31,7 @@ for the IDs a task touches. Update the cluster a change belongs to in the same c
 
 ## C5 AI roles (D-149)
 - Builder: Claude (code, Studio). Auditor: any other AI with actionmap/AUDITOR.md. Commander: GitHub Actions, no tokens.
+- Now: self-hosted free models for the cheap-agent and auditor roles (D-158); premium agents later. Small CRs → cheap agent (D-156).
 - Builder's usage is scarce: auditor carries the standing open-ended enquiry; builder answers specific questions.
 - **Reply format (never drop, F-66):** every line indexed (1, 1.1, 1.1.1) so it can be quoted; questions as scoreboards
   (option, score, evidence, trade-off) answerable in one line; complete walkthroughs in the reply; state stamp at the end.

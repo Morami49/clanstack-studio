@@ -646,11 +646,30 @@ async def s33_studio_edits_studio(b):
     return ok, f"type in capture={in_capture}, in types={in_filters}, accent live={accent}, saved={'#aa0000' in saved}, change approved={status}, other page sees look={fresh_accent}"
 
 
+async def s34_command_map(b):
+    """Q119 C: Nowed types commands; in suggest mode they wait as nodes until confirmed; act runs reversible ones at once; irreversible ones always ask; the log stays private."""
+    st = Store([]); p = await open_page(b, st, {})
+    await p.click("#tabs button[data-v=command]")
+    await p.fill("#cmdText", "propose change weekly digest"); await p.press("#cmdText", "Enter"); await p.wait_for_timeout(500)
+    waiting = await p.evaluate("commands()[0]?.state") == "suggested" and not await p.evaluate("[...F.items.values()].some(i => i.type === 'change')")
+    nodes = await p.locator("#cmdMap [data-cmd]").count()
+    await p.click("#cmdPanel [data-cmdgo]"); await p.wait_for_timeout(500)
+    cr = await p.evaluate("[...F.items.values()].find(i => i.type === 'change')?.id")
+    await p.select_option("#cmdMode", "act")
+    await p.fill("#cmdText", "capture idea venue list"); await p.press("#cmdText", "Enter"); await p.wait_for_timeout(600)
+    idea = await p.evaluate("[...F.items.values()].some(i => i.type === 'idea' && i.title === 'venue list')")
+    await p.fill("#cmdText", f"approve {cr}"); await p.press("#cmdText", "Enter"); await p.wait_for_timeout(500)
+    still_asks = await p.evaluate(f"F.items.get('{cr}').status") == "proposed"
+    log_private = not any((e.get("body") or {}).get("cmd") for e in st.events)
+    ok = waiting and nodes == 1 and bool(cr) and idea and still_asks and log_private and not p.errors
+    return ok, f"suggest waits={waiting}, node drawn={nodes}, confirmed → {cr}, act ran capture={idea}, approve still asks={still_asks}, log private={log_private}"
+
+
 SCENARIOS = [s01_tired_misclick, s02_undo, s03_stable_codes, s04_past_view_lock, s05_branch_awareness, s06_view_only_client,
              s07_names, s08_long_history, s09_ai_relay, s10_keyboard_list, s11_offline_capture, s12_member_rights,
              s13_two_people_at_once, s14_phone, s15_undo_old_status, s16_overwhelm, s17_disagreement, s18_clock_skew, s19_private_area,
              s20_addresses, s21_money_settings, s22_duplicate_id, s23_same_order_everywhere,
-             s24_hub_sync, s25_more_than_1000, s26_hub_not_connected, s27_read_on_open, s28_push_after_clean_runs, s29_runs_timeline, s30_builder_pipeline, s31_content_cycles, s32_private_files_and_views, s33_studio_edits_studio]
+             s24_hub_sync, s25_more_than_1000, s26_hub_not_connected, s27_read_on_open, s28_push_after_clean_runs, s29_runs_timeline, s30_builder_pipeline, s31_content_cycles, s32_private_files_and_views, s33_studio_edits_studio, s34_command_map]
 
 
 async def main():

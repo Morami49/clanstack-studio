@@ -165,6 +165,10 @@ modelling. Phase 1 (rails) is built; voice is next. Owner: Nowed.
 | D-152 | 2026-11-10 | **Studio develops Studio: config live, code by request** (from the Figma live-editing discussion): look (SET-ui-theme) and item types (SCHEMA-types) are edited in Studio's Studio tab and applied at runtime from the record, versioned; nothing edits history. | Studio v1.0. |
 | D-153 | 2026-11-10 | **Change requests → change intake → builder** : type `change` items with a test; when the owner approves, the change-intake executor (every 6 h or by hand, policy SET-policy-change-intake) opens a GitHub issue and moves it to building; the builder ships through CI and deploy. | scripts/change_intake.py. |
 | D-154 | 2026-11-10 | **Clusters for token efficiency**: actionmap/CLUSTERS.md is the 2-page map every agent reads first; updated in the same commit as the change. | |
+| D-155 | 2026-11-10 | **Re-centre on ActionMap** (F-67): CLUSTERS.md C0 is read before interface work. | |
+| D-156 | 2026-11-10 | **Change requests split by size** (Q117 C): small → cheap agent, medium/large → Claude, auditor reviews. | |
+| D-157 | 2026-11-10 | **Both tracks** (Q119 C): Studio Web gets the command map now (v1.1: voice or text → nodes; suggest/act/observe; irreversible always asks; private log; replay via time slider); the local Rust ActionMap app resumes in parallel for desktop capture, wake word and always-on voice. | |
+| D-158 | 2026-11-10 | **Self-hosted free models first** (Q120): premium agents and chatbots later; now free open models run on Nowed's own hardware (local runtime + an open coding model sized to it) for the cheap-agent and auditor roles. | Hardware: Q121. |
 
 ## State log (append-only)
 
