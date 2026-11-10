@@ -10,6 +10,11 @@ for the IDs a task touches. Update the cluster a change belongs to in the same c
   P-13 automate the doing, never the knowing (every run readable and replayable).
 - Neutral infrastructure, not "plausible deniability" (D-125). Third parties' data stays private (D-145).
 
+## C1b Names (D-159)
+- Clanstack Studio: the standalone web app (any browser). Clanstack Studio for Claude: the claude.ai artifact bridge (studio/index.html today).
+  Clanstack Studio Driver: the Rust desktop app (recorder, Leptos map UI, voice later). One hub record under all three.
+- Compute (D-160): Oracle A1 VM 2 OCPU/12 GB always-on node; laptop buffer; free tiers stacked; nodes pull jobs from the hub.
+
 ## C2 Studio Web (the interface) — studio/index.html, artifact 4hTHTKeonKNHhjRY2iChni
 - Append-only events folded into items (D-101 order: ts, then doc id). Private area: data/users/<id>/vault/events.
 - Tabs: Map, Command, List, Ask, Capture, Tree, Pack, Money, Hub, Runs, Builders, Studio.

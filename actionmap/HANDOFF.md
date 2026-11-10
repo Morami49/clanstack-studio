@@ -169,6 +169,8 @@ modelling. Phase 1 (rails) is built; voice is next. Owner: Nowed.
 | D-156 | 2026-11-10 | **Change requests split by size** (Q117 C): small → cheap agent, medium/large → Claude, auditor reviews. | |
 | D-157 | 2026-11-10 | **Both tracks** (Q119 C): Studio Web gets the command map now (v1.1: voice or text → nodes; suggest/act/observe; irreversible always asks; private log; replay via time slider); the local Rust ActionMap app resumes in parallel for desktop capture, wake word and always-on voice. | |
 | D-158 | 2026-11-10 | **Self-hosted free models first** (Q120): premium agents and chatbots later; now free open models run on Nowed's own hardware (local runtime + an open coding model sized to it) for the cheap-agent and auditor roles. | Hardware: Q121. |
+| D-159 | 2026-11-10 | **Three names** (Q123): **Clanstack Studio** = the web app in any browser, standalone; **Clanstack Studio for Claude** = the claude.ai artifact built so far, now the Claude bridge/extension; **Clanstack Studio Driver** = the desktop app (Rust), first pieces the recorder and the Leptos map interface (Q123 A + C). One record (the hub) under all three. | |
+| D-160 | 2026-11-10 | **Free compute stack, pulled not pushed** (Q121 B): Oracle Always Free Ampere VM (now 2 OCPU / 12 GB on free-only accounts, mid-2026 cut) as the always-on model node; laptop as a temporary buffer; own hardware later; other free tiers stacked behind (Cloudflare Workers AI, free API tiers) via a model router in the hub. Nodes pull jobs from the hub over outbound connections only; no model port is exposed. | W16 first. |
 
 ## State log (append-only)
 
