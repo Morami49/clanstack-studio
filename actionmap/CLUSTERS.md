@@ -31,6 +31,17 @@ for the IDs a task touches. Update the cluster a change belongs to in the same c
 ## C5 AI roles (D-149)
 - Builder: Claude (code, Studio). Auditor: any other AI with actionmap/AUDITOR.md. Commander: GitHub Actions, no tokens.
 - Builder's usage is scarce: auditor carries the standing open-ended enquiry; builder answers specific questions.
+- **Reply format (never drop, F-66):** every line indexed (1, 1.1, 1.1.1) so it can be quoted; questions as scoreboards
+  (option, score, evidence, trade-off) answerable in one line; complete walkthroughs in the reply; state stamp at the end.
+  Shorter replies mean fewer lines, never losing the index or the scores.
+
+## C0 The core the build drifted from (re-read before any interface work, D-155)
+- ActionMap: maps are the controls. Voice for controls, narration and full conversation (push-to-talk, wake word,
+  always-on). Observe / suggest / act modes, combinable, human↔agent and agent↔agent. Live and replayable maps of
+  human, screen and agent actions (whole Windows desktop capture, eye tracking dropped). Visual version tree with
+  parallel sessions resumable from any point. Rust/WASM foundation (own DAG, iroh, Leptos), laptop + VM hubs in sync.
+- Live mixed-media canvases (sketch, map, voice, text) commanding digital, physical, community, publishing and IoT systems;
+  anyone can design and share experiences across canvases; change and re-template anything safely at any scope.
 
 ## C6 Builder interviews and content (D-069, D-145…D-148)
 - Private pipeline: found → contacted → agreed → interviewed → drafted → published → followed up; release-gated (T-release, formats).
