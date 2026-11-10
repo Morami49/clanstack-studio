@@ -324,12 +324,17 @@ async def s16_overwhelm(b):
     await p.click("#tabs button[data-v=ask]")
     has_all = await exists(p, "[data-agreeall]")
     if has_all:
-        await p.click("[data-agreeall]"); await p.wait_for_timeout(2500)
+        await p.click("[data-agreeall]")
+        # F-65: 28 writes now travel one at a time (F-64), so wait for the result instead of a fixed 2.5 s
+        try: await p.wait_for_selector(".toast [data-undo]", timeout=20000)
+        except Exception: pass
     left = await p.evaluate("askable().filter(i=>i.type==='term').length")
     undo = await exists(p, ".toast [data-undo]")
     undone = None
     if undo:
-        await p.click(".toast [data-undo]"); await p.wait_for_timeout(2500)
+        await p.click(".toast [data-undo]")
+        try: await p.wait_for_function("askable().filter(i=>i.type==='term').length === 28", timeout=20000)
+        except Exception: pass
         undone = await p.evaluate("askable().filter(i=>i.type==='term').length")
     ok = badge.isdigit() and int(badge) <= 15 and has_all and left == 0 and undo and undone == 28
     return ok, f"badge={badge}, agree-all={has_all}, terms left={left}, undo offered={undo}, back after undo={undone}"
