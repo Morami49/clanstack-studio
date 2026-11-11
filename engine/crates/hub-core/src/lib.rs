@@ -21,6 +21,7 @@ use std::collections::{HashMap, HashSet};
 pub mod mcp;
 pub mod oauth;
 pub mod session;
+pub mod flows;
 
 pub const IMPORT_KIND: &str = "studio.event";
 /// A Studio-shaped write made on a node other than Studio Web (PC, phone, an AI via the hub).

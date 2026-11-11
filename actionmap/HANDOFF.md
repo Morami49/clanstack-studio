@@ -289,6 +289,12 @@ modelling. Phase 1 (rails) is built; voice is next. Owner: Nowed.
   and older pages skip them; history lines describe them in words. Where the bundle can't load (claude.ai), the classic map stays.
   F-73: the Command map's `describe()` had replaced the history one, so every history line read "undefined"; renamed, s35 guards it.
   Scenarios s35–s37 added (37/37); `STUDIO_CHROME` lets them run with an installed Chrome.
+- **2026-11-11 — C2: steps that run (D-174, Q30 A).** Steps on the canvas (fetch, filter, calc, ai, post) wired step to step;
+  `POST /studio/api/run {board, start}` makes the hub read the flow from its own record (`hub-core/src/flows.rs`, 10 tests),
+  plan it (no loops, ≤20 steps, ≤500 items) and run it: fetch (https only, never the hub's own hosts; sign-in from
+  `NODE_SECRET_<NAME>` only), filter/calc as data (no code), ai (Gemini, ≤20 items), post (comments on an item, created if
+  missing). Each run is recorded as `flow.run` by the flow runner's own key. "Shift Scout" template = Reed → filter → travel
+  estimate → ratio → Income lobby. Deploys copy NODE_SECRET_REED / GEMINI / ADZUNA_ID / ADZUNA_KEY from GitHub secrets.
 
 ## File map
 - `schema/event.schema.json` — the contract.

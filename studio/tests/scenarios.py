@@ -744,11 +744,33 @@ async def s37_classic_map_fallback(b):
     return (not canvas) and classic and not p.errors, f"canvas loaded={canvas}, classic map shown={classic}"
 
 
+async def s38_runnable_steps(b):
+    """D-174 C2: adds the Shift Scout template (5 steps, 4 wires), edits a filter in plain lines (saved as data), wires a new step, and a bad line is refused, not guessed."""
+    st = Store([]); p = await open_canvas_page(b, st, {})
+    await p.get_by_role("button", name="+ Step").click()
+    await p.get_by_role("button", name="Shift Scout (5 steps)").click(); await p.wait_for_timeout(1500)
+    nodes = [e for e in st.events if e["kind"] == "flow.node"]
+    wires = [e for e in st.events if e["kind"] == "flow.wire"]
+    shown = await p.locator(".react-flow__node-step").count()
+    filt = next(e["body"]["id"] for e in nodes if e["body"].get("step") == "filter")
+    await p.evaluate(f"selectStep('{filt}')"); await p.wait_for_timeout(300)
+    await p.fill("#stConds", "minimumSalary >= 12\nnot jobTitle contains driver"); await p.click("#stSave"); await p.wait_for_timeout(500)
+    saved = [e for e in st.events if e["kind"] == "flow.node" and e["body"].get("id") == filt and "config" in e["body"]][-1]["body"]["config"]
+    good = saved == {"all": [{"field": "minimumSalary", "op": ">=", "value": 12}], "none": [{"field": "jobTitle", "op": "contains", "value": "driver"}]}
+    before = len(st.events)
+    await p.fill("#stConds", "pay is more than twelve"); await p.click("#stSave"); await p.wait_for_timeout(400)
+    refused = len(st.events) == before
+    run_disabled = await p.locator("#stRun").is_disabled()   # no hub here, so Run can't be pressed
+    clean = all(e["item"] is None for e in st.events if e["kind"].startswith("flow."))
+    ok = len(nodes) == 5 and len(wires) == 4 and shown == 5 and good and refused and run_disabled and clean and not p.errors
+    return ok, f"steps={len(nodes)}, wires={len(wires)}, drawn={shown}, filter saved as data={good}, bad line refused={refused}, run off without hub={run_disabled}, items clean={clean}, errors={p.errors[:1]}"
+
+
 SCENARIOS = [s01_tired_misclick, s02_undo, s03_stable_codes, s04_past_view_lock, s05_branch_awareness, s06_view_only_client,
              s07_names, s08_long_history, s09_ai_relay, s10_keyboard_list, s11_offline_capture, s12_member_rights,
              s13_two_people_at_once, s14_phone, s15_undo_old_status, s16_overwhelm, s17_disagreement, s18_clock_skew, s19_private_area,
              s20_addresses, s21_money_settings, s22_duplicate_id, s23_same_order_everywhere,
-             s24_hub_sync, s25_more_than_1000, s26_hub_not_connected, s27_read_on_open, s28_push_after_clean_runs, s29_runs_timeline, s30_builder_pipeline, s31_content_cycles, s32_private_files_and_views, s33_studio_edits_studio, s34_command_map, s35_history_words, s36_canvas, s37_classic_map_fallback]
+             s24_hub_sync, s25_more_than_1000, s26_hub_not_connected, s27_read_on_open, s28_push_after_clean_runs, s29_runs_timeline, s30_builder_pipeline, s31_content_cycles, s32_private_files_and_views, s33_studio_edits_studio, s34_command_map, s35_history_words, s36_canvas, s37_classic_map_fallback, s38_runnable_steps]
 
 
 async def main():

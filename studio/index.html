@@ -77,6 +77,14 @@ main{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 380px}
 .nd-pick{position:absolute;left:50%;top:14px;transform:translateX(-50%);z-index:6;background:var(--raise);border:1px solid var(--line);border-radius:10px;padding:10px 12px;box-shadow:0 6px 24px rgba(0,0,0,.15);font-size:13px}
 .nd-pick .row{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
 .react-flow__node-frame{z-index:-1!important}
+.nd-step{width:200px;padding:6px 10px;border-radius:12px;border:2px solid var(--accent);background:var(--raise);color:var(--ink);font:12px/1.3 var(--sans,"IBM Plex Sans",system-ui);box-shadow:0 2px 6px rgba(0,0,0,.08)}
+.nd-step.sel{border-width:3px;box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 25%,transparent)}
+.nd-run{margin-top:4px;font:500 10px var(--mono,monospace);color:var(--mute)}.nd-run.ok{color:var(--ok)}.nd-run.bad{color:var(--bad)}
+.nd-menu{display:inline-flex;gap:4px;flex-wrap:wrap}
+.step-form label{display:block;margin:8px 0 2px;font-size:12px;color:var(--mute)}
+.step-form input,.step-form textarea,.step-form select{width:100%;box-sizing:border-box}
+.step-form textarea{min-height:70px;font:12px var(--mono,monospace)}
+.run-out{font:11px/1.4 var(--mono,monospace);white-space:pre-wrap;max-height:220px;overflow:auto;background:var(--raise);border:1px solid var(--line);border-radius:6px;padding:6px}
 .mapbar{position:absolute;left:12px;top:12px;z-index:2;display:flex;gap:6px;flex-wrap:wrap;max-width:calc(100% - 24px)}
 .chip{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:var(--raise);border-radius:999px;padding:3px 10px;font-size:12px;cursor:pointer;user-select:none}
 .chip[aria-pressed="false"]{opacity:.45}
@@ -585,10 +593,18 @@ function renderCanvas(relayout){
       style:{stroke: rel ? "var(--accent)" : "var(--mute)", strokeWidth: rel ? 1.5 : 1, strokeDasharray: rel==="blocks" ? "6 3" : rel==="part_of" ? "2 3" : undefined},
       labelStyle:{fontSize:10, fill:"var(--ink)"}, labelBgStyle:{fill:"var(--surface)"}});
   }
+  const FS = flowState();
+  for (const sn of FS.nodes) nodes.push({id:sn.id, type:"step", position:{x:+sn.x||0, y:+sn.y||0}, selected: sn.id===S.selStep,
+    data:{step:sn.step, title:sn.title, run:FS.lastRun[sn.id]}});
+  for (const w of FS.wires) edges.push({id:"w:"+w.id, source:w.from, target:w.to, animated:true, markerEnd:{type:"arrowclosed"}, style:{stroke:"var(--accent)", strokeWidth:2}});
   if (relayout) canvasFitKey++;
   window.NodachCanvas.render(el, {nodes, edges, sel:S.sel, can, dark: document.documentElement.dataset.theme==="dark",
     fit: !!relayout, fitKey: canvasFitKey, onSelect: id => { if (id) select(id); },
-    onMove: canvasMove, onConnect: canvasConnect, onFrame: canvasFrame});
+    onMove: canvasMove, onConnect: canvasConnect, onFrame: canvasFrame,
+    isStep, onWire: (a,b) => writable() && wireSteps(a,b), onMixed: () => toast("Steps wire to steps; items link to items."),
+    onStep: selectStep, onAddStep: async (k,x,y) => { if (!writable()) return; const id = await addStep(k,x,y); if (id) selectStep(id); },
+    onTemplate: (x,y) => writable() && addShiftScout(x,y),
+    onStepMove: (id,x,y) => writable() && write("flow.node", null, {board:BOARD, id, x, y})});
 }
 async function canvasMove(moves){ if (writable()) await write("canvas.layout", null, {board:BOARD, moves}); }
 async function canvasFrame(f){
@@ -603,6 +619,132 @@ async function canvasConnect(src, dst, rel){
   const id = await write("link", src, {refs:[dst], rel}); if (id) toast(`Linked ${src} ${REL_LABEL[rel]} ${dst}.`);
 }
 addEventListener("nodach-canvas-ready", () => { if (S.view==="map") renderMap(true); });
+/* ---------------------------------------------------------------- runnable steps (D-174 C2, Q30 A)
+ * flow.node / flow.wire events describe the flow; the hub reads them from its record and runs them (hub_core::flows).
+ * Filters and sums are written as plain lines and stored as data, never as code. */
+const STEP_DEFAULTS = {
+  fetch: {title:"Fetch", config:{url:"https://www.reed.co.uk/api/1.0/search?keywords=temp&locationName=London&distanceFromLocation=15&resultsToTake=50", list:"results", auth:{type:"basic", secret:"REED"}}},
+  filter:{title:"Filter", config:{all:[{field:"minimumSalary", op:"exists"}], none:[{field:"jobTitle", op:"contains", value:"driver"}, {field:"jobDescription", op:"contains", value:"licence"}]}},
+  calc:  {title:"Calculate", config:{sets:[{set:"ratio", a:"minimumSalary", op:"/", b:"travel"}]}},
+  ai:    {title:"Ask AI", config:{prompt:"Estimate the return public-transport fare in GBP from London E12 to {{locationName}}. Reply with a number only.", set:"travel", secret:"GEMINI", max_items:10}},
+  post:  {title:"Post to lobby", config:{item:"LOBBY-income", item_title:"Income lobby", text:"{{jobTitle}} · {{employerName}} · {{locationName}} · £{{minimumSalary}}–{{maximumSalary}} · ratio {{ratio}} · {{jobUrl}}", max_items:30}},
+};
+function flowState(){
+  const nodes = new Map(), wires = new Map(), runs = [];
+  for (const e of F.evs){
+    const b = e.body || {}; if ((b.board||BOARD)!==BOARD) continue;
+    if (e.kind==="flow.node" && b.id) nodes.set(b.id, {...(nodes.get(b.id)||{}), ...b});
+    if (e.kind==="flow.wire" && b.id) wires.set(b.id, {...(wires.get(b.id)||{}), ...b});
+    if (e.kind==="flow.run") runs.push(b);
+  }
+  const lastRun = {}; for (const r of runs) for (const st of r.steps||[]) lastRun[st.id] = st;
+  const live = [...nodes.values()].filter(n => !n.deleted);
+  const ids = new Set(live.map(n => n.id));
+  return {nodes: live, wires: [...wires.values()].filter(w => !w.deleted && ids.has(w.from) && ids.has(w.to)), lastRun, runs};
+}
+const isStep = id => typeof id === "string" && id.startsWith("S-");
+const newStepId = () => "S-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+async function addStep(step, x, y, extra){
+  const d = STEP_DEFAULTS[step]; const id = newStepId();
+  await write("flow.node", null, {board:BOARD, id, step, title:d.title, config:JSON.parse(JSON.stringify(d.config)), x, y, ...(extra||{})});
+  return id;
+}
+async function addShiftScout(x, y){
+  const order = ["fetch","filter","ai","calc","post"], ids = [];
+  for (let i=0; i<order.length; i++) ids.push(await addStep(order[i], x + i*260, y, i===0 ? {title:"Reed: London temp jobs"} : {}));
+  for (let i=1; i<ids.length; i++) await write("flow.wire", null, {board:BOARD, id:"W-"+ids[i-1]+"-"+ids[i], from:ids[i-1], to:ids[i]});
+  toast("Shift Scout added: Reed → filter → travel estimate → ratio → Income lobby. Select the first step to run it.");
+  selectStep(ids[0]);
+}
+async function wireSteps(a, b){
+  if (flowState().wires.some(w => w.from===a && w.to===b)) return toast("Those steps are already wired.");
+  await write("flow.wire", null, {board:BOARD, id:"W-"+a+"-"+b, from:a, to:b});
+}
+function selectStep(id){ S.sel = null; S.selStep = id; $("#inspector").classList.remove("closed"); renderStepInspector(); if (S.view==="map") renderMap(false); }
+
+const OPS = [">=","<=","!=","=",">","<","not_contains","contains","exists","missing"];
+function condLines(cfg){
+  const fmt = (c, neg) => `${neg?"not ":""}${c.field} ${c.op}${c.value!=null && c.value!=="" ? " "+c.value : ""}`;
+  return [...(cfg.all||[]).map(c=>fmt(c,false)), ...(cfg.none||[]).map(c=>fmt(c,true))].join("\n");
+}
+function parseConds(txt){
+  const all = [], none = [], bad = [];
+  for (const raw of txt.split("\n").map(l=>l.trim()).filter(Boolean)){
+    const m = raw.match(/^(not\s+)?([\w.]+)\s+(>=|<=|!=|=|>|<|not_contains|contains|exists|missing)\s*(.*)$/i);
+    if (!m){ bad.push(raw); continue; }
+    const v = m[4].trim().replace(/^["']|["']$/g, ""); const c = {field:m[2], op:m[3].toLowerCase()};
+    if (v !== "") c.value = /^-?\d+(\.\d+)?$/.test(v) ? +v : v;
+    (m[1] ? none : all).push(c);
+  }
+  return {cfg:{all, none}, bad};
+}
+const sumLines = cfg => (cfg.sets||[]).map(s => `${s.set} = ${s.a} ${s.op} ${s.b}`).join("\n");
+function parseSums(txt){
+  const sets = [], bad = [];
+  for (const raw of txt.split("\n").map(l=>l.trim()).filter(Boolean)){
+    const m = raw.match(/^([\w.]+)\s*=\s*([\w.]+|-?\d+(?:\.\d+)?)\s*([-+*/]|max|min)\s*([\w.]+|-?\d+(?:\.\d+)?)$/);
+    if (!m){ bad.push(raw); continue; }
+    const n = x => /^-?\d+(\.\d+)?$/.test(x) ? +x : x;
+    sets.push({set:m[1], a:n(m[2]), op:m[3], b:n(m[4])});
+  }
+  return {cfg:{sets}, bad};
+}
+function renderStepInspector(){
+  const st = flowState(); const n = st.nodes.find(x => x.id===S.selStep);
+  const box = $("#inspector");
+  if (!n){ box.innerHTML = '<p class="mute">That step was removed.</p>'; return; }
+  const c = n.config || {}, can = writable(), dis = can ? "" : "disabled";
+  const runs = st.runs.filter(r => (r.steps||[]).some(x => x.id===n.id)).slice(-1)[0];
+  const field = (id, label, val, area) => `<label for="${id}">${label}</label>` + (area ? `<textarea id="${id}" ${dis}>${esc(val??"")}</textarea>` : `<input id="${id}" value="${esc(val??"")}" ${dis}>`);
+  let form = field("stTitle", "Name", n.title);
+  if (n.step==="fetch"){ const a = Array.isArray(c.auth) ? (c.auth[0]||{}) : (c.auth||{});
+    form += field("stUrl", "Address (https)", c.url) + field("stList", "List inside the answer (e.g. results)", c.list) +
+      `<label for="stAuth">Sign-in</label><select id="stAuth" ${dis}>${["none","basic","bearer","header","query"].map(t=>`<option ${((a.type||"none")===t)?"selected":""}>${t}</option>`).join("")}</select>` +
+      field("stSecret", "Secret name (stored in the hub as NODE_SECRET_…)", a.secret) + field("stParam", "Header or query name (header/query sign-in)", a.header||a.param); }
+  if (n.step==="filter") form += field("stConds", "Keep items where every line holds; lines starting with “not” drop matches. e.g. <code>minimumSalary >= 12</code>, <code>not jobTitle contains driver</code>", condLines(c), true);
+  if (n.step==="calc") form += field("stSums", "One sum per line: <code>ratio = minimumSalary / travel</code> (+ − * / max min)", sumLines(c), true);
+  if (n.step==="ai") form += field("stPrompt", "Prompt, with {{field}} from each item", c.prompt, true) + field("stSet", "Save the answer as field", c.set) + field("stMax", "At most this many items (free tier: keep it small)", c.max_items) + field("stSecret", "Secret name (NODE_SECRET_…)", c.secret);
+  if (n.step==="post") form += field("stItem", "Post to item id (created if missing)", c.item) + field("stText", "Each line says", c.text, true) + field("stMax", "At most this many lines", c.max_items);
+  const standalone = !!window.__nodach?.standalone;
+  box.innerHTML = `<div class="stack step-form"><div class="mono mute">STEP · ${esc(n.step.toUpperCase())} · ${esc(n.id)}</div>${form}
+    <div class="row" style="margin-top:10px;gap:6px;display:flex;flex-wrap:wrap">
+      <button id="stSave" ${dis}>Save step</button>
+      <button id="stRun" ${can && standalone ? "" : "disabled"} title="${standalone ? "Run this step and everything wired after it" : "Runs from the Studio served by your hub"}">Run from here</button>
+      <button id="stDel" class="link" ${dis}>Remove step</button></div>
+    <div id="stOut">${runs ? runSummary(runs) : '<p class="mute">Not run yet.</p>'}</div></div>`;
+  $("#stSave").onclick = () => saveStep(n);
+  $("#stDel").onclick = async () => { await write("flow.node", null, {board:BOARD, id:n.id, deleted:true}); S.selStep = null; box.innerHTML = '<p class="mute">Step removed. Its history stays.</p>'; };
+  $("#stRun").onclick = () => runFrom(n.id);
+}
+async function saveStep(n){
+  const v = id => $("#"+id)?.value ?? "";
+  let cfg = {...(n.config||{})}, bad = [];
+  if (n.step==="fetch"){ const t = v("stAuth"); cfg = {url:v("stUrl").trim(), list:v("stList").trim(),
+      auth: t==="none" ? [] : {type:t, secret:v("stSecret").trim(), ...(t==="header" ? {header:v("stParam").trim()} : t==="query" ? {param:v("stParam").trim()} : {})}}; }
+  if (n.step==="filter"){ const r = parseConds(v("stConds")); cfg = r.cfg; bad = r.bad; }
+  if (n.step==="calc"){ const r = parseSums(v("stSums")); cfg = r.cfg; bad = r.bad; }
+  if (n.step==="ai") cfg = {...cfg, prompt:v("stPrompt"), set:v("stSet").trim()||"ai", max_items:+v("stMax")||10, secret:v("stSecret").trim()||"GEMINI"};
+  if (n.step==="post") cfg = {...cfg, item:v("stItem").trim(), text:v("stText"), max_items:+v("stMax")||30};
+  if (bad.length) return toast(`Not saved: couldn't read “${bad[0]}”.`);
+  const id = await write("flow.node", null, {board:BOARD, id:n.id, title:v("stTitle").trim()||n.title, config:cfg});
+  if (id) toast("Step saved.");
+}
+function runSummary(r){
+  const rows = (r.steps||[]).map(x => `${x.ok ? "✓" : x.skipped ? "·" : "✗"} ${x.step} ${x.id}: ${x.skipped ? "skipped" : x.ok ? x.count+" item(s)" : x.error}`);
+  const last = [...(r.steps||[])].reverse().find(x => x.ok && x.sample);
+  return `<p class="${r.ok ? "" : "bad"}" style="margin:10px 0 4px">${r.ok ? "Last run worked." : "Last run stopped" + (r.error ? ": "+esc(r.error) : ".")}</p>
+    <div class="run-out">${esc(rows.join("\n"))}${last ? "\n\nFirst items from the last step that ran:\n" + esc(JSON.stringify(last.sample, null, 1)) : ""}</div>`;
+}
+async function runFrom(id){
+  $("#stOut").innerHTML = '<p class="mute">Running…</p>';
+  try {
+    const r = await fetch("/studio/api/run", {method:"POST", credentials:"same-origin", headers:{"content-type":"application/json", "x-nodach-studio":"1"}, body:JSON.stringify({board:BOARD, start:id})});
+    const res = await r.json();
+    $("#stOut").innerHTML = runSummary(res);
+    window.__nodach?.pull?.();
+  } catch { $("#stOut").innerHTML = '<p class="bad">Couldn’t reach the hub. Nothing ran.</p>'; }
+}
+
 
 /* ---------------------------------------------------------------- list (keyboard, screen reader, phone) */
 function renderList(){
@@ -618,7 +760,7 @@ $("#listQ").oninput = renderList; $("#listT").onchange = renderList;
 
 /* ---------------------------------------------------------------- inspector */
 function select(id){
-  S.sel = id; $("#inspector").classList.remove("closed"); renderInspector();
+  S.sel = id; S.selStep = null; $("#inspector").classList.remove("closed"); renderInspector();
   if (cy){ cy.nodes().unselect(); const n=cy.getElementById(id); if (n.length) n.select(); }
   if (window.NodachCanvas && !S.classicMap && S.view==="map") renderMap(false);
 }
@@ -629,6 +771,9 @@ function describe(h){
     h.kind==="status" ? (b.revert_of ? `reverted status → ${esc(b.status)}` : `set status → ${esc(b.status)}`) : h.dup ? "tried to create this id again (ignored)" : h.kind==="item.edit" ? (b.value!=null ? (b.revert_of?`reverted value → ${esc(b.value)}`:`set value → ${esc(b.value)}`) : "edited") :
     h.kind==="item.create" ? "created"+src : h.kind==="retract" ? "took back an earlier entry" :
     h.kind==="link" ? `linked ${esc((b.refs||[]).join(", "))}${b.rel && REL_LABEL[b.rel] ? " ("+esc(REL_LABEL[b.rel])+")" : ""}` :
+    h.kind==="flow.node" ? (b.deleted ? `removed step ${esc(b.id)}` : `step ${esc(b.title||b.id)} ${b.step ? "added" : "changed"}`) :
+    h.kind==="flow.wire" ? (b.deleted ? `unwired ${esc(b.from||"")} → ${esc(b.to||"")}` : `wired ${esc(b.from)} → ${esc(b.to)}`) :
+    h.kind==="flow.run" ? `ran a flow from ${esc(b.start)}: ${b.ok ? "worked" : "stopped"}` :
     h.kind==="canvas.layout" ? `arranged ${Object.keys(b.moves||{}).length} item(s) on the canvas` :
     h.kind==="canvas.frame" ? (b.deleted ? `removed group “${esc(b.title||b.id)}”` : `group “${esc(b.title||b.id)}” placed or resized`) : h.kind==="genesis" ? "recorded from the chats (genesis)" : esc(h.kind);
 }
@@ -1569,7 +1714,17 @@ function FrameNode({ id, data, selected }) {
     h("div", { className: "nd-frame-title", onDoubleClick: () => { if (!data.can) return; const t = prompt("Group name", data.title); if (t != null) data.onFrame({ id, title: t }); } },
       data.title || "Group"));
 }
-const nodeTypes = { item: ItemNode, frame: FrameNode };
+const STEP_ICON = { fetch:"⇣", filter:"⧩", calc:"Σ", ai:"✦", post:"⇢" };
+function StepNode({ data, selected }) {
+  const r = data.run;
+  return h("div", { className: "nd-step" + (selected ? " sel" : ""), title: data.title },
+    h(Handle, { type: "target", position: Position.Left }),
+    h("div", { className: "nd-code" }, (STEP_ICON[data.step] || "•") + " " + data.step.toUpperCase()),
+    h("div", { className: "nd-title" }, data.title || data.step),
+    r ? h("div", { className: "nd-run " + (r.ok ? "ok" : r.skipped ? "" : "bad") }, r.skipped ? "skipped" : r.ok ? `${r.count} item(s)` : "failed") : null,
+    h(Handle, { type: "source", position: Position.Right }));
+}
+const nodeTypes = { item: ItemNode, frame: FrameNode, step: StepNode };
 
 function Inner(p) {
   const [nodes, setNodes] = useState(p.nodes);
@@ -1577,22 +1732,30 @@ function Inner(p) {
   const rf = useReactFlow();
   useEffect(() => { setNodes(prev => {
       const sel = new Set(prev.filter(n => n.selected).map(n => n.id));
-      return p.nodes.map(n => ({ ...n, selected: n.id === p.sel || sel.has(n.id) })); }); }, [p.nodes, p.sel]);
+      return p.nodes.map(n => ({ ...n, selected: n.selected || n.id === p.sel || sel.has(n.id) })); }); }, [p.nodes, p.sel]);
   useEffect(() => { if (p.fit) setTimeout(() => rf.fitView({ padding: .15 }), 30); }, [p.fitKey]);
   const onNodesChange = useCallback(ch => setNodes(ns => applyNodeChanges(ch, ns)), []);
   const onNodeDragStop = useCallback((_, __, dragged) => {
     if (!p.can) return;
     const moves = {}, frames = [];
-    for (const n of dragged) { if (n.type === "frame") frames.push(n); else moves[n.id] = [Math.round(n.position.x), Math.round(n.position.y)]; }
+    for (const n of dragged) { if (n.type === "frame") frames.push(n); else if (n.type === "item") moves[n.id] = [Math.round(n.position.x), Math.round(n.position.y)]; }
     if (Object.keys(moves).length) p.onMove(moves);
     for (const f of frames) p.onFrame({ id: f.id, x: Math.round(f.position.x), y: Math.round(f.position.y) });
+    for (const n of dragged) if (n.type === "step") p.onStepMove(n.id, Math.round(n.position.x), Math.round(n.position.y));
   }, [p.can, p.onMove, p.onFrame]);
-  const onConnect = useCallback(c => { if (p.can && c.source !== c.target) setPending(c); }, [p.can]);
+  const onConnect = useCallback(c => {
+    if (!p.can || c.source === c.target) return;
+    const a = p.isStep(c.source), b = p.isStep(c.target);
+    if (a && b) p.onWire(c.source, c.target);       // steps pass items along: no link type to choose
+    else if (!a && !b) setPending(c);
+    else p.onMixed();
+  }, [p.can, p.isStep, p.onWire, p.onMixed]);
+  const [menu, setMenu] = useState(false);
   const addGroup = () => { const c = rf.screenToFlowPosition({ x: innerWidth / 2 - 160, y: innerHeight / 2 - 100 });
     p.onFrame({ id: "FR-" + Date.now().toString(36), title: "Group", x: Math.round(c.x), y: Math.round(c.y), w: 320, h: 200, created: true }); };
   return h("div", { style: { position: "absolute", inset: 0 } },
     h(ReactFlow, { nodes, edges: p.edges, nodeTypes, onNodesChange, onNodeDragStop, onConnect,
-        onNodeClick: (_, n) => { if (n.type === "item") p.onSelect(n.id); },
+        onNodeClick: (_, n) => { if (n.type === "item") p.onSelect(n.id); if (n.type === "step") p.onStep(n.id); },
         onPaneClick: () => p.onSelect(null),
         nodesDraggable: true, nodesConnectable: p.can, elementsSelectable: true, selectionOnDrag: false, panOnScroll: false,
         minZoom: .1, maxZoom: 2.5, fitView: true, proOptions: { hideAttribution: false }, colorMode: p.dark ? "dark" : "light" },
@@ -1601,6 +1764,10 @@ function Inner(p) {
       h(Controls, { showInteractive: false })),
     h("div", { className: "nd-tools" },
       p.can ? h("button", { onClick: addGroup, title: "Draw a frame to group items" }, "+ Group") : null,
+      p.can ? h("button", { onClick: () => setMenu(!menu), title: "Add a step that runs", "aria-expanded": menu }, "+ Step") : null,
+      menu ? h("span", { className: "nd-menu" }, ...["fetch", "filter", "calc", "ai", "post"].map(k =>
+        h("button", { key: k, onClick: () => { setMenu(false); const c = rf.screenToFlowPosition({ x: innerWidth / 2 - 120, y: innerHeight / 2 }); p.onAddStep(k, Math.round(c.x), Math.round(c.y)); } }, (STEP_ICON[k] || "") + " " + k)),
+        h("button", { onClick: () => { setMenu(false); const c = rf.screenToFlowPosition({ x: innerWidth / 2 - 500, y: innerHeight / 2 }); p.onTemplate(Math.round(c.x), Math.round(c.y)); } }, "Shift Scout (5 steps)")) : null,
       h("span", { className: "mute" }, p.can ? "Drag to arrange · drag from a dot to link" : "View only")),
     pending ? h("div", { className: "nd-pick", role: "dialog", "aria-label": "Link type" },
       h("div", null, h("b", null, pending.source), " → ", h("b", null, pending.target)),

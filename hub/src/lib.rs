@@ -23,6 +23,7 @@
 //! GET  /studio              the Studio page (signed in) or a redirect to /studio/login
 //! GET  /studio/login        sends the person to GitHub; GitHub returns to the shared /callback with a studio- state
 //! GET  /studio/logout       clears the session
+//! POST /studio/api/run      {board, start}: run the canvas flow from that step (hub_core::flows; D-174 C2)
 //! GET  /studio/api/me       {login, id, owner}
 //! GET  /studio/api/genesis  the genesis seed
 //! GET  /studio/api/events   ?after=N&limit=M → {events:[{doc_id,event}], next, total} (same as the connector's read_events)
@@ -31,7 +32,8 @@
 
 use foundation_core::event::{Event, KeyPair};
 use hub_core::oauth::{self, Config, OAuthState};
-use hub_core::{mcp, session, Hub};
+use hub_core::{flows, mcp, session, Hub};
+use std::collections::HashMap;
 use serde::Deserialize;
 use std::cell::RefCell;
 use worker::*;
@@ -246,6 +248,158 @@ impl Record {
         user.get("login").and_then(|v| v.as_str()).map(String::from).ok_or_else(|| Error::RustError("GitHub returned no login".into()))
     }
 
+    fn runner_key(&self) -> Result<KeyPair> {
+        let s = self.env.secret("CONNECTOR_SEED")?.to_string();
+        Ok(KeyPair::from_seed(flows::runner_seed(&s)))
+    }
+
+    fn node_secret(&self, name: &str) -> std::result::Result<String, String> {
+        let var = flows::secret_var(name).ok_or_else(|| format!("{name:?} isn't a usable secret name"))?;
+        self.secret_opt(&var).ok_or_else(|| format!("the hub has no secret {var} yet (add it in GitHub → Settings → Secrets, then deploy)"))
+    }
+
+    /// Writes one Studio event as the flow runner, persists it, and returns its doc id.
+    fn runner_write(&self, kind: &str, item: Option<&str>, body: serde_json::Value, login: &str, now: i64) -> std::result::Result<String, String> {
+        let key = self.runner_key().map_err(|e| e.to_string())?;
+        let ev = serde_json::json!({"ts": mcp::iso(now), "kind": kind, "item": item, "branch": "main", "body": body,
+            "author": {"id": "flow:runner", "label": format!("Flow runner (for {login})"), "role": "agent"}, "via": "flow-runner"});
+        let made = self.hub.borrow_mut().as_mut().unwrap().write(&key, "flow runner", ev, now).map_err(|e| format!("{e:?}"))?;
+        self.persist(&made).map_err(|e| e.to_string())?;
+        Ok(hub_core::studio_doc_id(&made.last().map(|e| e.id.clone()).unwrap_or_default()))
+    }
+
+    async fn step_fetch(&self, cfg: &serde_json::Value) -> std::result::Result<Vec<serde_json::Value>, String> {
+        let mut url = cfg.get("url").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+        if !flows::url_allowed(&url) {
+            return Err("the address must start with https:// and can't be this hub".into());
+        }
+        let h = Headers::new();
+        let e = |x: worker::Error| x.to_string();
+        h.set("accept", "application/json").map_err(e)?;
+        h.set("user-agent", "nodach-hub").map_err(e)?;
+        let auths: Vec<serde_json::Value> = match cfg.get("auth") { Some(serde_json::Value::Array(a)) => a.clone(), Some(o) if o.is_object() => vec![o.clone()], _ => vec![] };
+        for a in auths {
+            let secret = self.node_secret(a.get("secret").and_then(|v| v.as_str()).unwrap_or(""))?;
+            match a.get("type").and_then(|v| v.as_str()).unwrap_or("bearer") {
+                "basic" => h.set("authorization", &format!("Basic {}", flows::base64(format!("{secret}:").as_bytes()))).map_err(e)?,
+                "bearer" => h.set("authorization", &format!("Bearer {secret}")).map_err(e)?,
+                "header" => h.set(a.get("header").and_then(|v| v.as_str()).unwrap_or("x-api-key"), &secret).map_err(e)?,
+                "query" => {
+                    let p = a.get("param").and_then(|v| v.as_str()).unwrap_or("key");
+                    url.push(if url.contains('?') { '&' } else { '?' });
+                    url.push_str(&format!("{}={}", oauth::enc(p), oauth::enc(&secret)));
+                }
+                t => return Err(format!("unknown sign-in type {t:?}")),
+            }
+        }
+        let mut init = RequestInit::new();
+        init.with_method(Method::Get).with_headers(h);
+        let req = Request::new_with_init(&url, &init).map_err(e)?;
+        let mut r = Fetch::Request(req).send().await.map_err(e)?;
+        let status = r.status_code();
+        if !(200..300).contains(&status) {
+            return Err(format!("the site answered {status}"));
+        }
+        let body: serde_json::Value = r.json().await.map_err(|_| "the site didn't answer with JSON".to_string())?;
+        Ok(flows::as_items(body, cfg.get("list").and_then(|v| v.as_str()).unwrap_or("")))
+    }
+
+    async fn step_ai(&self, cfg: &serde_json::Value, items: Vec<serde_json::Value>) -> std::result::Result<Vec<serde_json::Value>, String> {
+        let key = self.node_secret(cfg.get("secret").and_then(|v| v.as_str()).unwrap_or("GEMINI"))?;
+        let model = cfg.get("model").and_then(|v| v.as_str()).unwrap_or("gemini-flash-latest");
+        if !model.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'.') {
+            return Err("model names are letters, digits, '-' and '.'".into());
+        }
+        let prompt = cfg.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
+        let set = cfg.get("set").and_then(|v| v.as_str()).unwrap_or("ai").to_string();
+        let max = cfg.get("max_items").and_then(|v| v.as_u64()).unwrap_or(10).min(20) as usize;
+        let url = format!("https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent");
+        let e = |x: worker::Error| x.to_string();
+        let mut out = vec![];
+        for (i, mut it) in items.into_iter().enumerate() {
+            if i < max {
+                let h = Headers::new();
+                h.set("content-type", "application/json").map_err(e)?;
+                h.set("x-goog-api-key", &key).map_err(e)?;
+                let body = serde_json::json!({"contents": [{"parts": [{"text": flows::render(prompt, &it)}]}]}).to_string();
+                let mut init = RequestInit::new();
+                init.with_method(Method::Post).with_headers(h).with_body(Some(worker::wasm_bindgen::JsValue::from_str(&body)));
+                let mut r = Fetch::Request(Request::new_with_init(&url, &init).map_err(e)?).send().await.map_err(e)?;
+                let status = r.status_code();
+                let v: serde_json::Value = r.json().await.unwrap_or(serde_json::Value::Null);
+                if !(200..300).contains(&status) {
+                    return Err(format!("the AI answered {status}: {}", v.pointer("/error/message").and_then(|m| m.as_str()).unwrap_or("")));
+                }
+                let text = v.pointer("/candidates/0/content/parts/0/text").and_then(|t| t.as_str()).unwrap_or("").trim().to_string();
+                if let Some(m) = it.as_object_mut() { m.insert(set.clone(), serde_json::json!(text)); }
+            }
+            out.push(it);
+        }
+        Ok(out)
+    }
+
+    async fn step_post(&self, cfg: &serde_json::Value, items: Vec<serde_json::Value>, login: &str, now: i64) -> std::result::Result<Vec<serde_json::Value>, String> {
+        let item = cfg.get("item").and_then(|v| v.as_str()).unwrap_or("LOBBY-income").trim().to_string();
+        if item.is_empty() || item.len() > 80 || !item.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') {
+            return Err("post to an item id made of letters, digits, '-' and '_'".into());
+        }
+        let text = cfg.get("text").and_then(|v| v.as_str()).unwrap_or("{{title}}");
+        let max = cfg.get("max_items").and_then(|v| v.as_u64()).unwrap_or(30).min(50) as usize;
+        let known = self.hub.borrow().as_ref().unwrap().knows_item(&item);
+        if !known {
+            let title = cfg.get("item_title").and_then(|v| v.as_str()).unwrap_or("Income lobby");
+            self.runner_write("item.create", None, serde_json::json!({"id": item, "type": "asset", "title": title,
+                "body": "Where flows post what they find (D-174). Reply on each line: apply / skip / ?", "status": "open", "refs": ["D-174"]}), login, now)?;
+        }
+        for it in items.iter().take(max) {
+            self.runner_write("comment", Some(&item), serde_json::json!({"text": flows::render(text, it), "source": "flow"}), login, now)?;
+        }
+        Ok(items)
+    }
+
+    /// Runs the canvas flow on `board` from `start`, as the hub reads it from its own record.
+    async fn run_flow(&self, board: &str, start: &str, login: &str, now: i64) -> Result<serde_json::Value> {
+        let evs: Vec<serde_json::Value> = {
+            let hub = self.hub.borrow();
+            let (docs, _, _, _) = hub.as_ref().unwrap().studio_events(0, usize::MAX);
+            docs.into_iter().filter_map(|d| d.get("event").cloned()).collect()
+        };
+        let flow = flows::fold(&evs, board);
+        let order = match flows::plan(&flow, start) {
+            Ok(o) => o,
+            Err(e) => return Ok(serde_json::json!({"ok": false, "error": e, "steps": []})),
+        };
+        let mut outs: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
+        let (mut steps, mut failed) = (vec![], false);
+        for id in &order {
+            let node = flow.nodes[id].clone();
+            if failed {
+                steps.push(serde_json::json!({"id": id, "step": node.step, "skipped": true}));
+                continue;
+            }
+            let input: Vec<serde_json::Value> = flows::inputs_of(&flow, id).iter()
+                .flat_map(|i| outs.get(i).cloned().unwrap_or_default()).take(flows::MAX_ITEMS).collect();
+            let got = match node.step.as_str() {
+                "fetch" => self.step_fetch(&node.config).await,
+                "filter" => flows::filter(input, &node.config),
+                "calc" => flows::calc(input, &node.config),
+                "ai" => self.step_ai(&node.config, input).await,
+                "post" => self.step_post(&node.config, input, login, now).await,
+                other => Err(format!("unknown step {other}")),
+            };
+            match got {
+                Ok(items) => {
+                    steps.push(serde_json::json!({"id": id, "step": node.step, "ok": true, "count": items.len(), "sample": flows::sample(&items, 3)}));
+                    outs.insert(id.clone(), items);
+                }
+                Err(e) => { failed = true; steps.push(serde_json::json!({"id": id, "step": node.step, "ok": false, "error": e})); }
+            }
+        }
+        let summary = serde_json::json!({"board": board, "start": start, "ok": !failed, "by": login, "steps": steps});
+        let _ = self.runner_write("flow.run", None, summary.clone(), login, now);
+        Ok(summary)
+    }
+
     fn importer_key(&self) -> Result<KeyPair> {
         let seed_hex = self.env.secret("IMPORTER_SEED")?.to_string();
         let seed: [u8; 32] = hex::decode(seed_hex.trim()).ok().and_then(|v| v.try_into().ok())
@@ -347,6 +501,18 @@ impl Record {
                         let q = |k: &str| url.query_pairs().find(|(a, _)| a == k).and_then(|(_, v)| v.parse::<usize>().ok());
                         let (events, next, total, _) = self.hub.borrow().as_ref().unwrap().studio_events(q("after").unwrap_or(0), q("limit").unwrap_or(500).clamp(1, 2000));
                         json_status(&serde_json::json!({"events": events, "next": next, "total": total}), 200)?
+                    }
+                    (Method::Post, "/studio/api/run", Some(l)) => {
+                        if req.headers().get(session::CSRF_HEADER).ok().flatten().as_deref() != Some("1") {
+                            json_status(&serde_json::json!({"error": "missing x-nodach-studio header"}), 403)?
+                        } else {
+                            let body: serde_json::Value = req.json().await.unwrap_or(serde_json::Value::Null);
+                            let board = body.get("board").and_then(|v| v.as_str()).unwrap_or("main").to_string();
+                            let start = body.get("start").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                            let res = self.run_flow(&board, &start, &l, now).await?;
+                            self.log(now, "/studio/api/run", "run", if res.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) { "ok" } else { "failed" }, &l);
+                            json_status(&res, 200)?
+                        }
                     }
                     (Method::Post, "/studio/api/events", Some(l)) => {
                         if req.headers().get(session::CSRF_HEADER).ok().flatten().as_deref() != Some("1") {
@@ -530,7 +696,7 @@ impl DurableObject for Record {
         let method = req.method().to_string();
         if let Some((r, who)) = self.studio(&mut req, &url).await? {
             // writes log themselves (with the tool name); everything else here gets one line with the login
-            if !(path == "/studio/api/events" && method == "POST") {
+            if !((path == "/studio/api/events" || path == "/studio/api/run") && method == "POST") {
                 self.log(started, &path, &method, &format!("{}", r.status_code()), &who);
             }
             return Ok(r);

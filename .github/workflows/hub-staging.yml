@@ -57,6 +57,10 @@ jobs:
           GH_ID: ${{ secrets.GH_OAUTH_CLIENT_ID_STAGING }}
           GH_SECRET: ${{ secrets.GH_OAUTH_CLIENT_SECRET_STAGING }}
           TOKEN: ${{ secrets.HUB_STAGING_TOKEN }}
+          NODE_SECRET_REED: ${{ secrets.NODE_SECRET_REED }}
+          NODE_SECRET_GEMINI: ${{ secrets.NODE_SECRET_GEMINI }}
+          NODE_SECRET_ADZUNA_ID: ${{ secrets.NODE_SECRET_ADZUNA_ID }}
+          NODE_SECRET_ADZUNA_KEY: ${{ secrets.NODE_SECRET_ADZUNA_KEY }}
         run: |
           W="npx -y wrangler@4.158.0"
           have=$($W secret list --env staging)
@@ -65,6 +69,10 @@ jobs:
           [ -n "$GH_ID" ] && printf '%s' "$GH_ID" | $W secret put GH_OAUTH_CLIENT_ID --env staging || true
           [ -n "$GH_SECRET" ] && printf '%s' "$GH_SECRET" | $W secret put GH_OAUTH_CLIENT_SECRET --env staging || true
           [ -n "$TOKEN" ] && printf '%s' "$TOKEN" | $W secret put HUB_WRITE_TOKEN --env staging || true
+          # step secrets for runnable flows (D-174): same keys as production, so flows can be tried on staging first
+          for n in NODE_SECRET_REED NODE_SECRET_GEMINI NODE_SECRET_ADZUNA_ID NODE_SECRET_ADZUNA_KEY; do
+            v="${!n}"; [ -n "$v" ] && printf '%s' "$v" | $W secret put "$n" --env staging || true
+          done
       - if: steps.ready.outputs.go == 'yes'
         name: Smoke-test staging
         run: |
