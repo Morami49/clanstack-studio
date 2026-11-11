@@ -665,17 +665,97 @@ async def s34_command_map(b):
     return ok, f"suggest waits={waiting}, node drawn={nodes}, confirmed → {cr}, act ran capture={idea}, approve still asks={still_asks}, log private={log_private}"
 
 
+async def s35_history_words(b):
+    """Opens an item's history. Every line must say what happened in words; no line may read 'undefined' (F-73)."""
+    st = Store([ev("comment", "D-001", {"text": "looks right"}), ev("link", "D-001", {"refs": ["D-002"], "rel": "depends_on"}, ts="2026-11-01T15:01:00.000Z")])
+    p = await open_page(b, st, {})
+    await p.evaluate("select('D-001')"); await p.wait_for_timeout(300)
+    txt = await p.locator("#inspector").inner_text()
+    ok = "undefined" not in txt and "recorded from the chats" in txt and "(depends on)" in txt and not p.errors
+    return ok, f"undefined shown={'undefined' in txt}, genesis line={'recorded from the chats' in txt}, typed link line={'(depends on)' in txt}"
+
+
+VENDOR = HERE.parent / "vendor"
+
+
+async def open_canvas_page(browser, store: Store, cfg: dict):
+    """Like open_page, but over http so the page can load the canvas bundle the hub serves (/studio/vendor/...)."""
+    ctx = await browser.new_context(viewport={"width": 1400, "height": 900})
+    async def serve(route):
+        path = route.request.url.split("studio.test", 1)[1].split("?")[0]
+        if path == "/page.html":
+            return await route.fulfill(body=WRAPPED.read_text(), content_type="text/html")
+        f = VENDOR / path.rsplit("/", 1)[-1]
+        if path.startswith("/studio/vendor/") and f.exists():
+            return await route.fulfill(body=f.read_bytes(), content_type="text/javascript" if f.suffix == ".js" else "text/css")
+        return await route.fulfill(status=404, body="")
+    await ctx.route("http://studio.test/**", serve)
+    page = await ctx.new_page()
+    errors = []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    full = {"genesis": GENESIS, "me": "u_nowed", "owner": True, "canEdit": True, "canWrite": True,
+            "names": {"u_nowed": "Nowed"}, **cfg, "paths": store.paths}
+    await page.expose_function("__bridgeAdd", store.add)
+    await page.add_init_script("window.__cfg = " + json.dumps(full) + ";" + MOCK)
+    await page.goto("http://studio.test/page.html")
+    await page.wait_for_selector(".react-flow__node-item", timeout=20000)
+    await page.wait_for_timeout(800)
+    page.me = full["me"]; store.pages.append(page); page.errors = errors
+    return page
+
+
+async def s36_canvas(b):
+    """D-172 C1: the map is a canvas. Dragging saves a position; dragging from one item's dot to another asks the link type and saves it; a group can be added; positions survive a reload."""
+    st = Store([]); p = await open_canvas_page(b, st, {})
+    nodes = await p.locator(".react-flow__node-item").count()
+    n = p.locator('.react-flow__node[data-id="D-001"]')
+    for _ in range(8):
+        bb = await n.bounding_box(); await p.mouse.move(bb["x"] + 5, bb["y"] + 5); await p.mouse.wheel(0, -300); await p.wait_for_timeout(120)
+    await p.wait_for_timeout(300)
+    bb = await n.bounding_box()
+    await p.mouse.move(bb["x"] + 60, bb["y"] + 15); await p.mouse.down(); await p.mouse.move(bb["x"] + 160, bb["y"] + 115, steps=10); await p.mouse.up()
+    await p.wait_for_timeout(600)
+    moved = [e for e in st.events if e["kind"] == "canvas.layout" and "D-001" in e["body"].get("moves", {})]
+    sb = await p.locator('.react-flow__node[data-id="D-001"] .react-flow__handle.source').bounding_box()
+    db = await p.locator('.react-flow__node[data-id="D-002"] .react-flow__handle.target').bounding_box()
+    await p.mouse.move(sb["x"] + sb["width"] / 2, sb["y"] + sb["height"] / 2); await p.mouse.down()
+    await p.mouse.move(db["x"] + db["width"] / 2, db["y"] + db["height"] / 2, steps=12); await p.mouse.up()
+    await p.wait_for_selector(".nd-pick", timeout=4000)
+    await p.get_by_role("button", name="depends on").click(); await p.wait_for_timeout(600)
+    linked = [e for e in st.events if e["kind"] == "link" and e["item"] == "D-001" and e["body"].get("rel") == "depends_on"]
+    label = await p.locator(".react-flow__edge-text").all_text_contents()
+    await p.get_by_role("button", name="+ Group").click(); await p.wait_for_timeout(600)
+    grouped = [e for e in st.events if e["kind"] == "canvas.frame"]
+    q = await open_canvas_page(b, st, {})
+    style = await q.locator('.react-flow__node[data-id="D-001"]').get_attribute("style") or ""
+    x, y = moved[-1]["body"]["moves"]["D-001"] if moved else (None, None)
+    kept = moved and f"translate({x}px, {y}px)" in style
+    clean_items = all(e["item"] is None for e in st.events if e["kind"].startswith("canvas."))
+    ok = nodes > 100 and bool(moved) and bool(linked) and "depends on" in label and len(grouped) == 1 and kept and clean_items and not p.errors and not q.errors
+    return ok, f"nodes={nodes}, drag saved={bool(moved)}, typed link saved={bool(linked)}, label={label[:1]}, group={len(grouped)}, position kept after reload={bool(kept)}, canvas events keep items clean={clean_items}, errors={(p.errors + q.errors)[:1]}"
+
+
+async def s37_classic_map_fallback(b):
+    """Where the canvas bundle can't load (e.g. inside claude.ai), the classic map still shows everything."""
+    st = Store([]); p = await open_page(b, st, {})
+    await p.wait_for_timeout(600)
+    canvas = await p.evaluate("!!window.NodachCanvas")
+    classic = await p.evaluate("!!(window.cy || (typeof cy !== 'undefined' && cy)) && !document.getElementById('cy').hidden")
+    return (not canvas) and classic and not p.errors, f"canvas loaded={canvas}, classic map shown={classic}"
+
+
 SCENARIOS = [s01_tired_misclick, s02_undo, s03_stable_codes, s04_past_view_lock, s05_branch_awareness, s06_view_only_client,
              s07_names, s08_long_history, s09_ai_relay, s10_keyboard_list, s11_offline_capture, s12_member_rights,
              s13_two_people_at_once, s14_phone, s15_undo_old_status, s16_overwhelm, s17_disagreement, s18_clock_skew, s19_private_area,
              s20_addresses, s21_money_settings, s22_duplicate_id, s23_same_order_everywhere,
-             s24_hub_sync, s25_more_than_1000, s26_hub_not_connected, s27_read_on_open, s28_push_after_clean_runs, s29_runs_timeline, s30_builder_pipeline, s31_content_cycles, s32_private_files_and_views, s33_studio_edits_studio, s34_command_map]
+             s24_hub_sync, s25_more_than_1000, s26_hub_not_connected, s27_read_on_open, s28_push_after_clean_runs, s29_runs_timeline, s30_builder_pipeline, s31_content_cycles, s32_private_files_and_views, s33_studio_edits_studio, s34_command_map, s35_history_words, s36_canvas, s37_classic_map_fallback]
 
 
 async def main():
     results = []
     async with async_playwright() as pw:
-        b = await pw.chromium.launch()
+        # STUDIO_CHROME: use an installed Chrome instead of Playwright's (e.g. where its download is blocked)
+        b = await pw.chromium.launch(executable_path=os.environ["STUDIO_CHROME"]) if os.environ.get("STUDIO_CHROME") else await pw.chromium.launch()
         for sc in SCENARIOS:
             try:
                 ok, note = await sc(b)

@@ -3,6 +3,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/cytoscape@3.30.2/dist/cytoscape.min.js"></script>
+<link rel="stylesheet" href="/studio/vendor/xyflow.css">
 <style>
 /* Layout: a drafting table. Top rail (branch, time, views) · banners · work surface · inspector on the right (sheet on phones). */
 :root{
@@ -63,6 +64,19 @@ main{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 380px}
 .view{min-height:0;overflow:auto;padding-block:16px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:16px}
 #v-map{padding:0;position:relative;overflow:hidden}
 #cy{position:absolute;inset:0}
+/* canvas (D-172 C1) */
+#canvas{position:absolute;inset:0}
+.nd-item{width:210px;padding:6px 10px;border-radius:8px;border-style:solid;font:12px/1.3 var(--sans,"IBM Plex Sans",system-ui);box-shadow:0 1px 2px rgba(0,0,0,.06)}
+.nd-item.nd-dim{opacity:.15!important}
+.nd-code{font:500 10px var(--mono,"IBM Plex Mono",monospace);opacity:.85}
+.nd-title{margin-top:2px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.nd-frame{width:100%;height:100%;border:1.5px dashed var(--mute);border-radius:12px;background:color-mix(in srgb,var(--accent) 6%,transparent)}
+.nd-frame.sel{border-color:var(--accent)}
+.nd-frame-title{position:absolute;top:-22px;left:4px;font:600 12px var(--sans,system-ui);color:var(--mute);cursor:text;white-space:nowrap}
+.nd-tools{position:absolute;left:56px;bottom:14px;z-index:5;background:var(--surface);padding:4px 8px;border-radius:8px;border:1px solid var(--line);display:flex;gap:10px;align-items:center;font-size:12px}
+.nd-pick{position:absolute;left:50%;top:14px;transform:translateX(-50%);z-index:6;background:var(--raise);border:1px solid var(--line);border-radius:10px;padding:10px 12px;box-shadow:0 6px 24px rgba(0,0,0,.15);font-size:13px}
+.nd-pick .row{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.react-flow__node-frame{z-index:-1!important}
 .mapbar{position:absolute;left:12px;top:12px;z-index:2;display:flex;gap:6px;flex-wrap:wrap;max-width:calc(100% - 24px)}
 .chip{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:var(--raise);border-radius:999px;padding:3px 10px;font-size:12px;cursor:pointer;user-select:none}
 .chip[aria-pressed="false"]{opacity:.45}
@@ -145,6 +159,7 @@ pre.pack{white-space:pre-wrap;background:var(--raise);border:1px solid var(--lin
 <main>
   <section class="view" id="v-map">
     <div class="mapbar" id="filters"></div>
+    <div id="canvas" hidden aria-label="Canvas of decisions, questions and other items. Drag to arrange, drag from a dot to link. The List view has the same items for keyboard and screen readers."></div>
     <div id="cy" aria-label="Map of decisions, questions, terms, stories, assets and findings. The List view has the same items for keyboard and screen readers."></div>
   </section>
 
@@ -488,10 +503,12 @@ function buildFilters(){
     + `<input id="search" placeholder="Find…" style="padding:3px 10px;border-radius:999px;font-size:12px;width:130px" aria-label="Find on the map">`;
   $("#filters").querySelectorAll("[data-f]").forEach(c => c.onclick = c.onkeydown = ev => { if (ev.type==="keydown" && ev.key!=="Enter" && ev.key!==" ") return; ev.preventDefault?.();
     const f=c.dataset.f; S.filters.has(f)?S.filters.delete(f):S.filters.add(f); renderMap(true); buildFilters(); });
-  $("#search").oninput = e => { const q=e.target.value.toLowerCase(); if (!cy) return;
+  $("#search").oninput = e => { const q=e.target.value.toLowerCase(); S.mapQ = q; if (window.NodachCanvas){ renderMap(false); return; } if (!cy) return;
     cy.nodes().forEach(n => n.style("opacity", !q || (n.data("label")+" "+n.id()).toLowerCase().includes(q) ? 1 : .15)); };
 }
 function renderMap(relayout){
+  if (window.NodachCanvas && !S.classicMap) return renderCanvas(relayout);
+  $("#canvas").hidden = true; $("#cy").hidden = false;
   if (!window.cytoscape){ $("#cy").innerHTML = '<p class="empty" style="padding:60px 16px">The map couldn\'t load. Use the List view; everything is there.</p>'; return; }
   const cols = ["lead","decision","question","finding","story","term","asset","idea"];
   const shown = [...F.items.values()].filter(i => S.filters.has(typeKey(i.type)));
@@ -525,6 +542,68 @@ function renderMap(relayout){
   if (S.sel){ const n = cy.getElementById(S.sel); if (n.length) n.select(); }
 }
 
+
+/* ---------------------------------------------------------------- canvas data and writes (D-172 C1, Q28 A)
+ * Positions, groups and link types are events like everything else, so they have history, branches and as-of views.
+ * Items keep their own history clean: canvas events carry item null, and older pages skip them. */
+const BOARD = "main";
+const REL_LABEL = {depends_on:"depends on", answers:"answers", blocks:"blocks", part_of:"part of", relates:"relates to"};
+function canvasLayout(){
+  const pos = {}, frames = new Map(), rels = {};
+  for (const e of F.evs){
+    const b = e.body || {};
+    if (e.kind==="canvas.layout" && (b.board||BOARD)===BOARD)
+      for (const [id, xy] of Object.entries(b.moves||{})) if (Array.isArray(xy) && isFinite(xy[0]) && isFinite(xy[1])) pos[id] = {x:+xy[0], y:+xy[1]};
+    if (e.kind==="canvas.frame" && (b.board||BOARD)===BOARD && b.id) frames.set(b.id, {...(frames.get(b.id)||{}), ...b});
+    if (e.kind==="link" && e.item && b.rel && REL_LABEL[b.rel]) for (const r of b.refs||[]) rels[e.item+">"+r] = b.rel;
+  }
+  return {pos, frames:[...frames.values()].filter(f => !f.deleted), rels};
+}
+let canvasFitKey = 0;
+function renderCanvas(relayout){
+  const el = $("#canvas"); el.hidden = false; $("#cy").hidden = true;
+  const L = canvasLayout(), can = writable(), q = S.mapQ || "";
+  // Items without a saved position: each type gets a block of columns (10 per column), blocks side by side.
+  const order = ["lead","decision","question","finding","story","term","asset","idea","setting","change"], perCol = {}, ROWS = 10;
+  const counts = {}; for (const i of F.items.values()) { const t = typeKey(i.type); counts[t] = (counts[t]||0)+1; }
+  const blockX = {}; let x0 = 0; for (const t of order) { blockX[t] = x0; x0 += Math.max(1, Math.ceil((counts[t]||0)/ROWS))*240 + 120; }
+  const shown = [...F.items.values()].filter(i => S.filters.has(typeKey(i.type)));
+  const ids = new Set(shown.map(i => i.id));
+  const nodes = L.frames.map(f => ({id:f.id, type:"frame", position:{x:+f.x||0, y:+f.y||0}, style:{width:+f.w||320, height:+f.h||200}, zIndex:-1,
+    data:{title:f.title||"Group", can, onFrame:canvasFrame}}));
+  for (const i of shown){
+    const t = typeKey(i.type), k = perCol[t] = (perCol[t]||0)+1, c = codeOf(i.id);
+    const label = c && c!==i.id ? c+" · "+i.id : i.id;
+    nodes.push({id:i.id, type:"item", position: L.pos[i.id] || {x: (blockX[t] ?? x0) + Math.floor((k-1)/ROWS)*240, y: ((k-1)%ROWS)*80},
+      data:{type:t, label, title:(i.title||"").slice(0,90), n:i.answers.length+i.comments.length, open:OPEN.has(i.status),
+            closed:["withdrawn","closed"].includes(i.status), priv:!!i.private, dim: !!q && !`${label} ${i.title}`.toLowerCase().includes(q)}});
+  }
+  const edges = [];
+  for (const i of shown) for (const r of i.refs||[]) if (ids.has(r)){
+    const rel = L.rels[i.id+">"+r];
+    edges.push({id:i.id+">"+r, source:i.id, target:r, label: rel ? REL_LABEL[rel] : undefined, markerEnd:{type:"arrowclosed"},
+      style:{stroke: rel ? "var(--accent)" : "var(--mute)", strokeWidth: rel ? 1.5 : 1, strokeDasharray: rel==="blocks" ? "6 3" : rel==="part_of" ? "2 3" : undefined},
+      labelStyle:{fontSize:10, fill:"var(--ink)"}, labelBgStyle:{fill:"var(--surface)"}});
+  }
+  if (relayout) canvasFitKey++;
+  window.NodachCanvas.render(el, {nodes, edges, sel:S.sel, can, dark: document.documentElement.dataset.theme==="dark",
+    fit: !!relayout, fitKey: canvasFitKey, onSelect: id => { if (id) select(id); },
+    onMove: canvasMove, onConnect: canvasConnect, onFrame: canvasFrame});
+}
+async function canvasMove(moves){ if (writable()) await write("canvas.layout", null, {board:BOARD, moves}); }
+async function canvasFrame(f){
+  if (!writable()) return;
+  const prev = canvasLayout().frames.find(x => x.id===f.id) || {};
+  const {created, ...rest} = f;
+  await write("canvas.frame", null, {board:BOARD, ...prev, ...rest});
+}
+async function canvasConnect(src, dst, rel){
+  if (!writable()) return;
+  if ((F.items.get(src)?.refs||[]).includes(dst) && canvasLayout().rels[src+">"+dst]===rel){ toast("That link is already there."); return; }
+  const id = await write("link", src, {refs:[dst], rel}); if (id) toast(`Linked ${src} ${REL_LABEL[rel]} ${dst}.`);
+}
+addEventListener("nodach-canvas-ready", () => { if (S.view==="map") renderMap(true); });
+
 /* ---------------------------------------------------------------- list (keyboard, screen reader, phone) */
 function renderList(){
   const sel = $("#listT"); if (sel.options.length < 2) sel.innerHTML += Object.entries(TYPES).map(([k,v]) => `<option value="${k}">${PLURAL[k]||v+"s"}</option>`).join("");
@@ -541,6 +620,7 @@ $("#listQ").oninput = renderList; $("#listT").onchange = renderList;
 function select(id){
   S.sel = id; $("#inspector").classList.remove("closed"); renderInspector();
   if (cy){ cy.nodes().unselect(); const n=cy.getElementById(id); if (n.length) n.select(); }
+  if (window.NodachCanvas && !S.classicMap && S.view==="map") renderMap(false);
 }
 function describe(h){
   const b = h.body || {};
@@ -548,7 +628,9 @@ function describe(h){
   return h.kind==="answer" ? `answered <b>${esc(b.code||"")}</b> ${esc(b.text||"")}${src}` : h.kind==="comment" ? esc(b.text)+src :
     h.kind==="status" ? (b.revert_of ? `reverted status → ${esc(b.status)}` : `set status → ${esc(b.status)}`) : h.dup ? "tried to create this id again (ignored)" : h.kind==="item.edit" ? (b.value!=null ? (b.revert_of?`reverted value → ${esc(b.value)}`:`set value → ${esc(b.value)}`) : "edited") :
     h.kind==="item.create" ? "created"+src : h.kind==="retract" ? "took back an earlier entry" :
-    h.kind==="link" ? `linked ${esc((b.refs||[]).join(", "))}` : h.kind==="genesis" ? "recorded from the chats (genesis)" : esc(h.kind);
+    h.kind==="link" ? `linked ${esc((b.refs||[]).join(", "))}${b.rel && REL_LABEL[b.rel] ? " ("+esc(REL_LABEL[b.rel])+")" : ""}` :
+    h.kind==="canvas.layout" ? `arranged ${Object.keys(b.moves||{}).length} item(s) on the canvas` :
+    h.kind==="canvas.frame" ? (b.deleted ? `removed group “${esc(b.title||b.id)}”` : `group “${esc(b.title||b.id)}” placed or resized`) : h.kind==="genesis" ? "recorded from the chats (genesis)" : esc(h.kind);
 }
 function line(n, h, withUndo){
   const can = withUndo && writable() && h.id && !h.gone && !h.reverted && h.kind!=="retract" && !h.body?.revert_of &&
@@ -1164,7 +1246,7 @@ function parseCommand(raw){
   if (/^sync( now)?$/.test(l)) return {intent:"sync", args:{}, reversible:true};
   return {intent:"capture", args:{type:"idea", title:t}, reversible:true, guess:true};
 }
-function describe(c){ const a = c.args || {};
+function describeCmd(c){ const a = c.args || {};
   return {change:`Propose change: ${a.title}`, approve:`Approve ${a.id}`, capture:`Capture ${a.type}: ${a.title}`, stage:`Move ${a.name} to ${a.stage}`,
           answer:`Answer ${a.code}: ${a.text}`, show:`Show ${a.view}`, sync:"Sync with the hub"}[c.intent] || c.intent; }
 function commands(){ const it = F.items.get(CMD_ITEM); if (!it) return []; const m = new Map();
@@ -1212,15 +1294,15 @@ function renderCommands(){
   const lanesSvg = ["changes","record","people","studio"].map((l, i) => `<text x="8" y="${54 + i*85}" font-size="11" fill="var(--mute)" font-family="var(--mono)">${l}</text>`).join("");
   const edges = cs.slice(1).map((c, i) => { const [x1, y1] = xy(cs[i], i), [x2, y2] = xy(c, i + 1); return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="var(--line)" stroke-width="1.5"/>`; }).join("");
   const nodes = cs.map((c, i) => { const [x, y] = xy(c, i), sel = c.id === S.cmdSel;
-    return `<g data-cmd="${esc(c.id)}" tabindex="0" role="button" aria-label="${esc(describe(c))}, ${esc(c.state)}" style="cursor:pointer">
+    return `<g data-cmd="${esc(c.id)}" tabindex="0" role="button" aria-label="${esc(describeCmd(c))}, ${esc(c.state)}" style="cursor:pointer">
       <circle cx="${x}" cy="${y}" r="${sel ? 15 : 12}" fill="var(--surface)" stroke="${col[c.state] || "var(--ink)"}" stroke-width="${sel ? 4 : 3}" ${c.state==="suggested" ? 'stroke-dasharray="4 3"' : ""}/>
-      <text x="${x}" y="${y + 30}" text-anchor="middle" font-size="11" fill="var(--ink)">${esc(describe(c).slice(0, 22))}</text></g>`; }).join("");
+      <text x="${x}" y="${y + 30}" text-anchor="middle" font-size="11" fill="var(--ink)">${esc(describeCmd(c).slice(0, 22))}</text></g>`; }).join("");
   svg.innerHTML = lanesSvg + edges + (n ? nodes : `<text x="${W/2}" y="${H/2}" text-anchor="middle" fill="var(--mute)">Say or type a command to place the first node.</text>`);
   svg.querySelectorAll("[data-cmd]").forEach(g => { g.onclick = () => { S.cmdSel = g.dataset.cmd; renderCommands(); }; g.onkeydown = e => { if (e.key === "Enter") g.onclick(); }; });
   const P = $("#cmdPanel"), c = cs.find(x => x.id === S.cmdSel);
   if (!c){ P.hidden = true; return; }
   P.hidden = false;
-  P.innerHTML = `<h3>${esc(describe(c))}</h3><p class="mute" style="margin:0">${esc(c.via)} · “${esc(c.raw)}” · ${esc(c.state)}${c.result ? " · " + esc(c.result) : ""}${c.guess ? " · not a known command, so kept as an idea" : ""}${!c.reversible ? " · can't be undone automatically, so it always asks" : ""}</p>
+  P.innerHTML = `<h3>${esc(describeCmd(c))}</h3><p class="mute" style="margin:0">${esc(c.via)} · “${esc(c.raw)}” · ${esc(c.state)}${c.result ? " · " + esc(c.result) : ""}${c.guess ? " · not a known command, so kept as an idea" : ""}${!c.reversible ? " · can't be undone automatically, so it always asks" : ""}</p>
     ${c.state === "suggested" ? `<div class="row"><button class="primary" data-cmdgo>Confirm</button><input data-cmdedit value="${esc(c.raw)}" style="flex:1" aria-label="Edit command"><button data-cmdre>Edit and confirm</button><button data-cmddrop>Drop</button></div>` : ""}`;
   P.querySelector("[data-cmdgo]")?.addEventListener("click", () => runCommand(c.id));
   P.querySelector("[data-cmddrop]")?.addEventListener("click", () => setCmd(c.id, {state:"dropped"}));
@@ -1451,4 +1533,89 @@ for (const id of ["calcAmt","calcSales","calcClass"]) $("#"+id).oninput = render
   else { $("#capPrivate").disabled = true; $("#capPrivate").checked = false; }
 })();
 addEventListener("resize", () => { if (S.view==="capture") sizePad(); });
+</script>
+<script type="module">
+/* ---------------------------------------------------------------- canvas (D-172 C1, Q25 A, Q28 A)
+ * React Flow, bundled once (studio/vendor) and served by the hub. Where it can't load (e.g. inside claude.ai), the classic map stays.
+ * The canvas never writes by itself: it calls back into the page (move, connect, frame), and the page appends events:
+ *   canvas.layout  {board, moves:{id:[x,y]}}           positions, kept out of item history (item is null)
+ *   canvas.frame   {board, id, title, x, y, w, h, deleted?}  groups drawn as frames; the latest event per id wins
+ *   link           {refs:[target], rel}                existing link kind, now with a type; older pages still read the refs
+ */
+import { React, createRoot, ReactFlow, ReactFlowProvider, MiniMap, Controls, Background, Handle, Position, NodeResizer, applyNodeChanges, useReactFlow }
+  from "/studio/vendor/canvas-lib.js";   // one pinned copy of React + React Flow, served by the hub (studio/vendor)
+const h = React.createElement;
+const { useState, useEffect, useCallback, useMemo } = React;
+
+export const RELS = { depends_on:"depends on", answers:"answers", blocks:"blocks", part_of:"part of", relates:"relates to" };
+const REL_DASH = { depends_on:"", answers:"", blocks:"6 3", part_of:"2 3", relates:"" };
+
+function ItemNode({ data, selected }) {
+  const col = `var(--t-${data.type})`, filled = data.n > 0;
+  return h("div", { className: "nd-item" + (data.dim ? " nd-dim" : ""), title: data.title,
+      style: { borderColor: selected ? "var(--accent)" : col, borderWidth: selected ? 3 : 2,
+               borderStyle: data.open ? "dashed" : "solid", background: filled ? col : "var(--raise)",
+               color: filled ? "var(--surface)" : "var(--ink)", opacity: data.closed ? .45 : 1 } },
+    h(Handle, { type: "target", position: Position.Left }),
+    h("div", { className: "nd-code" }, (data.priv ? "🔒 " : "") + data.label),
+    h("div", { className: "nd-title" }, data.title),
+    h(Handle, { type: "source", position: Position.Right }));
+}
+
+function FrameNode({ id, data, selected }) {
+  return h("div", { className: "nd-frame" + (selected ? " sel" : "") },
+    h(NodeResizer, { isVisible: selected && data.can, minWidth: 160, minHeight: 100,
+      onResizeEnd: (_, p) => data.onFrame({ id, x: p.x, y: p.y, w: p.width, h: p.height }) }),
+    h("div", { className: "nd-frame-title", onDoubleClick: () => { if (!data.can) return; const t = prompt("Group name", data.title); if (t != null) data.onFrame({ id, title: t }); } },
+      data.title || "Group"));
+}
+const nodeTypes = { item: ItemNode, frame: FrameNode };
+
+function Inner(p) {
+  const [nodes, setNodes] = useState(p.nodes);
+  const [pending, setPending] = useState(null); // a connection waiting for its link type
+  const rf = useReactFlow();
+  useEffect(() => { setNodes(prev => {
+      const sel = new Set(prev.filter(n => n.selected).map(n => n.id));
+      return p.nodes.map(n => ({ ...n, selected: n.id === p.sel || sel.has(n.id) })); }); }, [p.nodes, p.sel]);
+  useEffect(() => { if (p.fit) setTimeout(() => rf.fitView({ padding: .15 }), 30); }, [p.fitKey]);
+  const onNodesChange = useCallback(ch => setNodes(ns => applyNodeChanges(ch, ns)), []);
+  const onNodeDragStop = useCallback((_, __, dragged) => {
+    if (!p.can) return;
+    const moves = {}, frames = [];
+    for (const n of dragged) { if (n.type === "frame") frames.push(n); else moves[n.id] = [Math.round(n.position.x), Math.round(n.position.y)]; }
+    if (Object.keys(moves).length) p.onMove(moves);
+    for (const f of frames) p.onFrame({ id: f.id, x: Math.round(f.position.x), y: Math.round(f.position.y) });
+  }, [p.can, p.onMove, p.onFrame]);
+  const onConnect = useCallback(c => { if (p.can && c.source !== c.target) setPending(c); }, [p.can]);
+  const addGroup = () => { const c = rf.screenToFlowPosition({ x: innerWidth / 2 - 160, y: innerHeight / 2 - 100 });
+    p.onFrame({ id: "FR-" + Date.now().toString(36), title: "Group", x: Math.round(c.x), y: Math.round(c.y), w: 320, h: 200, created: true }); };
+  return h("div", { style: { position: "absolute", inset: 0 } },
+    h(ReactFlow, { nodes, edges: p.edges, nodeTypes, onNodesChange, onNodeDragStop, onConnect,
+        onNodeClick: (_, n) => { if (n.type === "item") p.onSelect(n.id); },
+        onPaneClick: () => p.onSelect(null),
+        nodesDraggable: true, nodesConnectable: p.can, elementsSelectable: true, selectionOnDrag: false, panOnScroll: false,
+        minZoom: .1, maxZoom: 2.5, fitView: true, proOptions: { hideAttribution: false }, colorMode: p.dark ? "dark" : "light" },
+      h(Background, { gap: 24, size: 1 }),
+      h(MiniMap, { pannable: true, zoomable: true, nodeColor: n => n.type === "frame" ? "transparent" : getComputedStyle(document.documentElement).getPropertyValue("--t-" + n.data.type).trim(), nodeStrokeWidth: 2 }),
+      h(Controls, { showInteractive: false })),
+    h("div", { className: "nd-tools" },
+      p.can ? h("button", { onClick: addGroup, title: "Draw a frame to group items" }, "+ Group") : null,
+      h("span", { className: "mute" }, p.can ? "Drag to arrange · drag from a dot to link" : "View only")),
+    pending ? h("div", { className: "nd-pick", role: "dialog", "aria-label": "Link type" },
+      h("div", null, h("b", null, pending.source), " → ", h("b", null, pending.target)),
+      h("div", { className: "row" }, ...Object.entries(RELS).map(([k, v]) =>
+        h("button", { key: k, onClick: () => { p.onConnect(pending.source, pending.target, k); setPending(null); } }, v)),
+        h("button", { className: "link", onClick: () => setPending(null) }, "Cancel"))) : null);
+}
+
+let root = null;
+window.NodachCanvas = {
+  RELS,
+  render(el, props) {
+    if (!root) root = createRoot(el);
+    root.render(h(ReactFlowProvider, null, h(Inner, props)));
+  },
+};
+window.dispatchEvent(new Event("nodach-canvas-ready"));
 </script>

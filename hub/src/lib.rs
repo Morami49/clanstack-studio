@@ -40,6 +40,9 @@ use worker::*;
 const STUDIO_HTML: &str = include_str!("../../studio/index.html");
 const STUDIO_SHIM: &str = include_str!("../../studio/standalone.js");
 const STUDIO_GENESIS: &str = include_str!("../../studio/tests/genesis.json");
+/// React + React Flow for the canvas (D-172), one pinned bundle (studio/vendor/package.json), so no CDN can mix versions.
+const CANVAS_LIB: &str = include_str!("../../studio/vendor/canvas-lib.js");
+const CANVAS_CSS: &str = include_str!("../../studio/vendor/xyflow.css");
 
 #[event(fetch)]
 async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
@@ -309,6 +312,15 @@ impl Record {
                     oauth::enc(&gh_id), oauth::enc(&format!("{}/callback", cfg.issuer)), state);
                 let r = Response::redirect(Url::parse(&to)?)?;
                 Ok(Some((with_cookies(r, &[session::state_set_cookie(Some(&state))])?, "-".into())))
+            }
+            // Open-source libraries, no record data: served without sign-in so the page can load them before anything else.
+            (Method::Get, "/studio/vendor/canvas-lib.js" | "/studio/vendor/xyflow.css") => {
+                let (body, ct) = if path.ends_with(".js") { (CANVAS_LIB, "text/javascript; charset=utf-8") } else { (CANVAS_CSS, "text/css; charset=utf-8") };
+                let h = Headers::new();
+                h.set("content-type", ct)?;
+                h.set("cache-control", "public, max-age=3600")?;
+                h.set("x-content-type-options", "nosniff")?;
+                Ok(Some((Response::ok(body)?.with_headers(h), "-".into())))
             }
             (Method::Get, "/studio/logout") => {
                 let r = page("Signed out", "You are signed out of Nodach Studio on this browser.", 200)?;

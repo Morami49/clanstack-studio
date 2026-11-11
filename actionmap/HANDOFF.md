@@ -282,6 +282,13 @@ modelling. Phase 1 (rails) is built; voice is next. Owner: Nowed.
   Object = own test record) gets every branch that passes ci; production only from main. Studio pages get their build and
   environment from the hub, wear a ribbon on staging, and show a reload banner when the hub runs a newer build (no forced
   reloads). Studio routes now log the signed-in login. Per-community feature switches come later (Q26 C).
+- **2026-11-11 — C1: the map is a canvas (D-172, Q25 A, Q28 A).** React Flow 12.12.1 + React 19.3.1, bundled once in
+  `studio/vendor` (pinned; `npm ci && npm run build`) and served by the hub at `/studio/vendor/*`, because jsdelivr's ESM
+  builds mixed three React versions. Drag (→ `canvas.layout`), drag from a dot to link with a type (→ `link` with `rel`),
+  groups as frames (→ `canvas.frame`), mini-map, search dimming. Canvas events carry item null, so items' histories stay clean
+  and older pages skip them; history lines describe them in words. Where the bundle can't load (claude.ai), the classic map stays.
+  F-73: the Command map's `describe()` had replaced the history one, so every history line read "undefined"; renamed, s35 guards it.
+  Scenarios s35–s37 added (37/37); `STUDIO_CHROME` lets them run with an installed Chrome.
 
 ## File map
 - `schema/event.schema.json` — the contract.

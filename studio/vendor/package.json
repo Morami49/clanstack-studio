@@ -1,0 +1,14 @@
+{
+  "name": "nodach-studio-canvas-lib",
+  "private": true,
+  "description": "React + React Flow for the Studio canvas (D-172), bundled once and served by the hub, so no CDN can mix React versions. Rebuild: npm ci && npm run build",
+  "scripts": {
+    "build": "esbuild entry.mjs --bundle --format=esm --minify --legal-comments=linked --define:process.env.NODE_ENV='\"production\"' --outfile=canvas-lib.js && cp node_modules/@xyflow/react/dist/style.css xyflow.css"
+  },
+  "devDependencies": {
+    "@xyflow/react": "12.12.1",
+    "esbuild": "0.25.12",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  }
+}
