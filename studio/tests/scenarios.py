@@ -748,12 +748,17 @@ async def s38_runnable_steps(b):
     """D-174 C2: adds the Shift Scout template (5 steps, 4 wires), edits a filter in plain lines (saved as data), wires a new step, and a bad line is refused, not guessed."""
     st = Store([]); p = await open_canvas_page(b, st, {})
     await p.get_by_role("button", name="+ Step").click()
-    await p.get_by_role("button", name="Shift Scout (5 steps)").click(); await p.wait_for_timeout(1500)
+    await p.get_by_role("button", name="Shift Scout (5 steps)").click()
+    for _ in range(100):   # the template writes 9 events one after another; slow machines need longer
+        if sum(e["kind"] == "flow.wire" for e in st.events) >= 4: break
+        await p.wait_for_timeout(150)
+    await p.wait_for_timeout(500)
     nodes = [e for e in st.events if e["kind"] == "flow.node"]
     wires = [e for e in st.events if e["kind"] == "flow.wire"]
     shown = await p.locator(".react-flow__node-step").count()
     filt = next(e["body"]["id"] for e in nodes if e["body"].get("step") == "filter")
-    await p.evaluate(f"selectStep('{filt}')"); await p.wait_for_timeout(300)
+    await p.evaluate(f"selectStep('{filt}')")
+    await p.wait_for_selector("#stConds", timeout=10000)
     await p.fill("#stConds", "minimumSalary >= 12\nnot jobTitle contains driver"); await p.click("#stSave"); await p.wait_for_timeout(500)
     saved = [e for e in st.events if e["kind"] == "flow.node" and e["body"].get("id") == filt and "config" in e["body"]][-1]["body"]["config"]
     good = saved == {"all": [{"field": "minimumSalary", "op": ">=", "value": 12}], "none": [{"field": "jobTitle", "op": "contains", "value": "driver"}]}
