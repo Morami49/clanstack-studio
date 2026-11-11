@@ -278,6 +278,10 @@ modelling. Phase 1 (rails) is built; voice is next. Owner: Nowed.
   sign-in and a signed session cookie (`hub-core/src/session.rs`, tests in `tests/session.rs` incl. RFC 4231 vectors).
   Shared writes go through `/studio/api/events` (importer key, same as Studio Web's sync); private items stay in the browser.
   Checked locally with `wrangler dev`: redirects, 401s, forged cookie refused, missing header refused, write + dedupe + read-back.
+- **2026-11-11 — Staging hub and release rules (Q24 B, Q26 C).** `clanstack-hub-staging` (Wrangler env `staging`, own Durable
+  Object = own test record) gets every branch that passes ci; production only from main. Studio pages get their build and
+  environment from the hub, wear a ribbon on staging, and show a reload banner when the hub runs a newer build (no forced
+  reloads). Studio routes now log the signed-in login. Per-community feature switches come later (Q26 C).
 
 ## File map
 - `schema/event.schema.json` — the contract.

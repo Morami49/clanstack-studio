@@ -12,6 +12,7 @@ function fakeHub({ signedIn = true, docs = [] } = {}) {
   H.fetch = async (url, opts = {}) => {
     const u = new URL(url, "https://hub.test");
     const json = (v, status = 200) => ({ ok: status < 400, status, json: async () => v, text: async () => JSON.stringify(v) });
+    if (u.pathname === "/health") return { ok: true, status: 200, text: async () => "ok " + (H.live || "dev") };
     if (!signedIn) return json({ error: "sign in" }, 401);
     if (opts.credentials !== "same-origin") return json({ error: "no cookie sent" }, 401);
     if (u.pathname === "/studio/api/me") return json({ login: "Morami49", id: "github:Morami49", owner: true });
@@ -125,6 +126,51 @@ test("a refused write surfaces as invalid_argument, as the page expects", async 
   const ctx = boot(H);
   const db = await ctx.window.claude.use("db");
   await assert.rejects(db.collection("events").add({ ts: "x", kind: "comment" }), e => e.code === "invalid_argument");
+});
+
+function fakeDom() {
+  const els = [];
+  const mk = tag => ({ tag, id: "", style: {}, children: [], textContent: "", setAttribute() {}, append(c) { this.children.push(c); }, onclick: null });
+  return {
+    els, hidden: false, addEventListener() {},
+    body: { append: e => els.push(e) },
+    createElement: mk,
+    getElementById: id => els.find(e => e.id === id) || null,
+  };
+}
+
+test("a newer build on the hub shows a reload banner, and never reloads by itself", async () => {
+  const H = fakeHub(); H.live = "bbbbbbb";
+  const dom = fakeDom(); let reloads = 0;
+  const ctx = boot(H, { __nodachBuild: "aaaaaaa", document: dom });
+  ctx.window.location.reload = () => reloads++;
+  const v = await ctx.window.__nodach.checkVersion();
+  assert.deepEqual({ ...v }, { current: "aaaaaaa", live: "bbbbbbb", stale: true });
+  const b = dom.getElementById("nodach-update");
+  assert.ok(b, "banner shown");
+  assert.match(b.textContent, /Save what you're writing/);
+  assert.equal(reloads, 0, "no reload until the person clicks");
+  b.children[0].onclick(); assert.equal(reloads, 1);
+  await ctx.window.__nodach.checkVersion();
+  assert.equal(dom.els.filter(e => e.id === "nodach-update").length, 1, "one banner, not one per check");
+});
+
+test("same build: no banner", async () => {
+  const H = fakeHub(); H.live = "aaaaaaa";
+  const dom = fakeDom();
+  const ctx = boot(H, { __nodachBuild: "aaaaaaa", document: dom });
+  assert.equal((await ctx.window.__nodach.checkVersion()).stale, false);
+  assert.equal(dom.getElementById("nodach-update"), null);
+});
+
+test("staging always wears a ribbon; production never does", async () => {
+  const dom = fakeDom();
+  const ctx = boot(fakeHub(), { __nodachBuild: "aaaaaaa", __nodachEnv: "staging", document: dom });
+  assert.equal(ctx.window.__nodach.env, "staging");
+  assert.match(dom.getElementById("nodach-staging").textContent, /Staging · test record/);
+  const dom2 = fakeDom();
+  boot(fakeHub(), { __nodachBuild: "aaaaaaa", __nodachEnv: "production", document: dom2 });
+  assert.equal(dom2.getElementById("nodach-staging"), null);
 });
 
 let failed = 0;

@@ -104,11 +104,14 @@ fn valid_doc_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 100 && !id.starts_with("hub-") && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
-fn studio_page() -> Result<Response> {
+/// `env` is "production" or "staging"; the page uses it and the build to show a staging ribbon and a reload banner.
+fn studio_page(env: &str) -> Result<Response> {
+    let env = if env == "staging" { "staging" } else { "production" };
+    let build = mcp::BUILD;
     let html = format!(
         "<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1,viewport-fit=cover\">\
          <style>:root{{color-scheme:light}}body{{margin:0;font:14px system-ui}}img{{max-width:100%}}[hidden]{{display:none!important}}</style>\
-         <script>{STUDIO_SHIM}</script></head><body>{STUDIO_HTML}</body></html>");
+         <script>window.__nodachBuild=\"{build}\";window.__nodachEnv=\"{env}\";</script><script>{STUDIO_SHIM}</script></head><body>{STUDIO_HTML}</body></html>");
     let h = Headers::new();
     h.set("content-type", "text/html; charset=utf-8")?;
     h.set("cache-control", "no-store")?;
@@ -267,7 +270,7 @@ impl Record {
     }
 
     /// Nodach Studio routes; None = not a Studio route (the shared /callback falls through for the connector).
-    async fn studio(&self, req: &mut Request, url: &Url) -> Result<Option<Response>> {
+    async fn studio(&self, req: &mut Request, url: &Url) -> Result<Option<(Response, String)>> {
         let path = req.path();
         let cfg = self.cfg(url);
         let now = Date::now().as_millis() as i64;
@@ -276,46 +279,48 @@ impl Record {
             let Some(state) = q.get("state").filter(|s| s.starts_with(session::STATE_PREFIX)) else { return Ok(None) };
             let cookie = req.headers().get("cookie").ok().flatten().and_then(|h| session::cookie_value(&h, session::STATE_COOKIE));
             if !session::state_matches(state, cookie.as_deref()) {
-                return Ok(Some(page("Sign-in expired", "Open /studio and sign in again.", 400)?));
+                return Ok(Some((page("Sign-in expired", "Open /studio and sign in again.", 400)?, "-".into())));
             }
             let Some(code) = q.get("code") else {
-                return Ok(Some(page("Sign-in cancelled", "GitHub didn't return a sign-in code. Open /studio to try again.", 400)?));
+                return Ok(Some((page("Sign-in cancelled", "GitHub didn't return a sign-in code. Open /studio to try again.", 400)?, "-".into())));
             };
             let login = match self.github_login(code, &format!("{}/callback", cfg.issuer)).await {
                 Ok(l) => l,
-                Err(e) => return Ok(Some(page("Sign-in failed", &e.to_string(), 502)?)),
+                Err(e) => return Ok(Some((page("Sign-in failed", &e.to_string(), 502)?, "-".into()))),
             };
             if !session::allowed(&login, &cfg.allowed_logins) {
                 let r = page("Not allowed", &format!("{login} is not allowed to use this Studio yet."), 403)?;
-                return Ok(Some(with_cookies(r, &[session::state_set_cookie(None)])?));
+                return Ok(Some((with_cookies(r, &[session::state_set_cookie(None)])?, login)));
             }
             let Some(value) = self.session_key().and_then(|k| session::mint(&k, &login, now)) else {
-                return Ok(Some(page("Not set up yet", "The hub has no signing seed yet; deploy once more.", 503)?));
+                return Ok(Some((page("Not set up yet", "The hub has no signing seed yet; deploy once more.", 503)?, "-".into())));
             };
             let r = Response::redirect(Url::parse(&format!("{}/studio", cfg.issuer))?)?;
-            return Ok(Some(with_cookies(r, &[session::session_set_cookie(Some(&value)), session::state_set_cookie(None)])?));
+            return Ok(Some((with_cookies(r, &[session::session_set_cookie(Some(&value)), session::state_set_cookie(None)])?, login)));
         }
         let method = req.method();
         match (method.clone(), path.as_str()) {
             (Method::Get, "/studio/login") => {
                 let Some(gh_id) = self.secret_opt("GH_OAUTH_CLIENT_ID") else {
-                    return Ok(Some(page("Not set up yet", "The hub's GitHub sign-in isn't configured yet (D-128).", 503)?));
+                    return Ok(Some((page("Not set up yet", "The hub's GitHub sign-in isn't configured yet (D-128).", 503)?, "-".into())));
                 };
                 let state = format!("{}{}", session::STATE_PREFIX, random_hex(16)?);
                 let to = format!("https://github.com/login/oauth/authorize?client_id={}&redirect_uri={}&state={}&scope=read:user&allow_signup=false",
                     oauth::enc(&gh_id), oauth::enc(&format!("{}/callback", cfg.issuer)), state);
                 let r = Response::redirect(Url::parse(&to)?)?;
-                Ok(Some(with_cookies(r, &[session::state_set_cookie(Some(&state))])?))
+                Ok(Some((with_cookies(r, &[session::state_set_cookie(Some(&state))])?, "-".into())))
             }
             (Method::Get, "/studio/logout") => {
                 let r = page("Signed out", "You are signed out of Nodach Studio on this browser.", 200)?;
-                Ok(Some(with_cookies(r, &[session::session_set_cookie(None)])?))
+                Ok(Some((with_cookies(r, &[session::session_set_cookie(None)])?, "-".into())))
             }
             (_, p) if p == "/studio" || p == "/studio/" || p.starts_with("/studio/api/") => {
                 let login = self.signed_in(req, &cfg, now);
+                let who = login.clone().unwrap_or_else(|| "-".into());
+                let env = self.env.var("NODACH_ENV").map(|v| v.to_string()).unwrap_or_default();
                 let r = match (method, p, login) {
                     (Method::Get, "/studio" | "/studio/", None) => Response::redirect(Url::parse(&format!("{}/studio/login", cfg.issuer))?)?,
-                    (Method::Get, "/studio" | "/studio/", Some(_)) => studio_page()?,
+                    (Method::Get, "/studio" | "/studio/", Some(_)) => studio_page(&env)?,
                     (_, _, None) => json_status(&serde_json::json!({"error": "sign in at /studio/login"}), 401)?,
                     (Method::Get, "/studio/api/me", Some(l)) => json_status(&serde_json::json!({
                         // owner-only allow-list for now (F-44), so everyone signed in is the owner
@@ -354,7 +359,7 @@ impl Record {
                     }
                     _ => Response::error("not found", 404)?,
                 };
-                Ok(Some(r))
+                Ok(Some((r, who)))
             }
             _ => Ok(None),
         }
@@ -511,9 +516,10 @@ impl DurableObject for Record {
         let started = Date::now().as_millis() as i64;
         let path = req.path();
         let method = req.method().to_string();
-        if let Some(r) = self.studio(&mut req, &url).await? {
-            if path != "/studio/api/events" {
-                self.log(started, &path, &method, &format!("{}", r.status_code()), "-");
+        if let Some((r, who)) = self.studio(&mut req, &url).await? {
+            // writes log themselves (with the tool name); everything else here gets one line with the login
+            if !(path == "/studio/api/events" && method == "POST") {
+                self.log(started, &path, &method, &format!("{}", r.status_code()), &who);
             }
             return Ok(r);
         }

@@ -1,0 +1,95 @@
+name: hub-staging
+# Staging hub (Q24 B, Q26 C): every branch that passes ci is deployed to a second Worker with its own Durable
+# Object, so its own test record. Production (hub-deploy) still deploys only from main. Open
+# https://clanstack-hub-staging.ndab-utube.workers.dev/studio to try a branch before it reaches anyone.
+#
+# Owner setup (GitHub → Settings → Secrets and variables → Actions → Secrets), all optional:
+#   GH_OAUTH_CLIENT_ID_STAGING / GH_OAUTH_CLIENT_SECRET_STAGING  a second GitHub OAuth App whose callback is
+#       https://clanstack-hub-staging.ndab-utube.workers.dev/callback (GitHub allows one callback per app).
+#       Without it, staging works but /studio/login says sign-in isn't set up.
+#   HUB_STAGING_TOKEN  a random string for staging's /push and /import (never reuse the production token)
+# Staging's IMPORTER_SEED and CONNECTOR_SEED are generated here on first deploy and live only in Cloudflare.
+# Uses the same CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID as hub-deploy. Every run is recorded in Studio
+# (RUNS-hub-staging).
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches-ignore: [main]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "commit to put on staging (blank = this branch's latest)"
+        required: false
+permissions: {contents: read}
+concurrency: hub-staging
+jobs:
+  staging:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    defaults: {run: {working-directory: hub}}
+    env:
+      SHA: ${{ inputs.sha || github.event.workflow_run.head_sha || github.sha }}
+      BRANCH: ${{ github.event.workflow_run.head_branch || github.ref_name }}
+      URL: https://clanstack-hub-staging.ndab-utube.workers.dev
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - name: Skip until Cloudflare is set up
+        id: ready
+        working-directory: .
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then echo "Cloudflare not set up yet: skipping."; echo "go=no" >> "$GITHUB_OUTPUT"; else echo "go=yes" >> "$GITHUB_OUTPUT"; fi
+      - if: steps.ready.outputs.go == 'yes'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with: {ref: "${{ env.SHA }}"}
+      - if: steps.ready.outputs.go == 'yes'
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with: {toolchain: stable, targets: wasm32-unknown-unknown}
+      - if: steps.ready.outputs.go == 'yes'
+        name: Deploy to staging
+        run: |
+          export BUILD_SHA=$(echo "$SHA" | cut -c1-7)
+          npx -y wrangler@4.158.0 deploy --env staging
+      - if: steps.ready.outputs.go == 'yes'
+        name: Staging secrets (generated once; OAuth and token only when provided)
+        env:
+          GH_ID: ${{ secrets.GH_OAUTH_CLIENT_ID_STAGING }}
+          GH_SECRET: ${{ secrets.GH_OAUTH_CLIENT_SECRET_STAGING }}
+          TOKEN: ${{ secrets.HUB_STAGING_TOKEN }}
+        run: |
+          W="npx -y wrangler@4.158.0"
+          have=$($W secret list --env staging)
+          echo "$have" | grep -q IMPORTER_SEED || openssl rand -hex 32 | $W secret put IMPORTER_SEED --env staging
+          echo "$have" | grep -q CONNECTOR_SEED || openssl rand -hex 32 | $W secret put CONNECTOR_SEED --env staging
+          [ -n "$GH_ID" ] && printf '%s' "$GH_ID" | $W secret put GH_OAUTH_CLIENT_ID --env staging || true
+          [ -n "$GH_SECRET" ] && printf '%s' "$GH_SECRET" | $W secret put GH_OAUTH_CLIENT_SECRET --env staging || true
+          [ -n "$TOKEN" ] && printf '%s' "$TOKEN" | $W secret put HUB_WRITE_TOKEN --env staging || true
+      - if: steps.ready.outputs.go == 'yes'
+        name: Smoke-test staging
+        run: |
+          set -e
+          short=$(echo "$SHA" | cut -c1-7)
+          for i in $(seq 1 18); do curl -fsS "$URL/health" | grep -q "ok $short" && break; echo "not live yet ($i/18)"; sleep 10; done
+          curl -fsS "$URL/health" | grep -q "ok $short"
+          # Studio needs sign-in; its API refuses anyone who isn't signed in
+          test "$(curl -s -o /dev/null -w '%{http_code}' "$URL/studio")" = 302
+          test "$(curl -s -o /dev/null -w '%{http_code}' "$URL/studio/api/me")" = 401
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$URL/studio/api/events" -d '{}')" = 401
+          # the connector still starts sign-in
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$URL/mcp" -d '{}')" = 401
+          echo "staging smoke test passed for $short ($BRANCH)"
+      - name: Record the run in Studio
+        if: always() && steps.ready.outputs.go == 'yes'
+        working-directory: .
+        env:
+          HUB_URL: https://clanstack-hub.ndab-utube.workers.dev
+          HUB_TOKEN: ${{ secrets.HUB_WRITE_TOKEN }}
+          STATUS: ${{ job.status }}
+        run: |
+          short=$(echo "$SHA" | cut -c1-7)
+          if [ "$STATUS" = success ]; then text="Staging now runs $short from $BRANCH; smoke test passed. Try it: $URL/studio"; outcome=success
+          else text="Staging deploy of $short from $BRANCH $STATUS; production is unaffected."; outcome=failure; fi
+          RUN_SHA="$SHA" python3 scripts/run_record.py hub-staging --title "Staging deploys" --outcome "$outcome" --text "$text" \
+            --policy auto --undo "Nothing to undo: staging has its own test record; production only changes from main." \
+            --field "build=$short" --field "branch=$BRANCH" || echo "could not record the run (hub unreachable or no token)"

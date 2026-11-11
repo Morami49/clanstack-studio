@@ -158,7 +158,53 @@
     profiles: async ids => { const m = await me(); return Object.fromEntries(ids.map(i => [i, { id: i, name: i === m.id ? m.login : "" }])); },
   };
 
-  window.__nodach = { pull, shared, standalone: true };
+  /* ---------------------------------------------------------------- release rules (Q26 C)
+   * The hub tells the page its build and whether it is staging. The page never reloads itself: when the hub
+   * is running a newer build it shows a banner, and the person reloads when they're ready (nothing half-typed
+   * is lost). Staging always wears a ribbon, so a test record is never mistaken for the real one. */
+  const BUILD = window.__nodachBuild || null;
+  const ENV = window.__nodachEnv === "staging" ? "staging" : "production";
+  const VERSION_MS = window.__nodachVersionMs ?? 60000;
+  let staleShown = false;
+
+  function whenBody(f) {
+    if (typeof document.createElement !== "function") return;
+    if (document.body) f(); else document.addEventListener("DOMContentLoaded", f);
+  }
+  function bar(id, text, css, button) {
+    whenBody(() => {
+      if (document.getElementById(id)) return;
+      const d = document.createElement("div");
+      d.id = id; d.setAttribute("role", "status");
+      d.style.cssText = "position:fixed;left:0;right:0;z-index:9999;padding:6px 12px;font:13px system-ui;text-align:center;" + css;
+      d.textContent = text;
+      if (button) {
+        const b = document.createElement("button");
+        b.textContent = button.label; b.style.cssText = "margin-left:10px;font:inherit;padding:2px 10px;cursor:pointer";
+        b.onclick = button.onclick; d.append(b);
+      }
+      document.body.append(d);
+    });
+  }
+  if (ENV === "staging") bar("nodach-staging", `Staging · test record, not your real one · build ${BUILD || "?"}`, "top:0;background:#7a3e00;color:#fff");
+
+  async function checkVersion() {
+    let live = null;
+    try { const r = await fetch("/health", { cache: "no-store" }); live = (await r.text()).trim().split(/\s+/)[1] || null; } catch {}
+    const stale = !!(BUILD && live && live !== BUILD);
+    if (stale && !staleShown) {
+      staleShown = true;
+      bar("nodach-update", `A new version of Nodach Studio is live (${live}). Save what you're writing, then reload.`,
+        "bottom:0;background:#1f3a5f;color:#fff", { label: "Reload now", onclick: () => location.reload() });
+    }
+    return { current: BUILD, live, stale };
+  }
+  if (VERSION_MS && BUILD) {
+    setInterval(() => { if (!document.hidden) checkVersion(); }, VERSION_MS);
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) checkVersion(); });
+  }
+
+  window.__nodach = { pull, shared, standalone: true, checkVersion, env: ENV, build: BUILD };
   window.claude = {
     use: async n => {
       if (n === "db") { try { await me(); return db; } catch { return null; } }
