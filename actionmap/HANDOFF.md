@@ -273,6 +273,11 @@ modelling. Phase 1 (rails) is built; voice is next. Owner: Nowed.
 - **2026-11-08 — W10 ran three previews, deleted nothing (F-61).** The workflow's default was preview and the run looked green.
   Now runs are named by mode, preview warns loudly, and POLICY_BRANCH_CLEANUP=auto lets it run itself after each push to main.
   F-62: Studio Web only subscribed to its newest 1,000 changes (≈810 used); it now reads older pages once. D-129 sync built (D-138).
+- **2026-11-11 — Nodach Studio served by the hub (D-171 S1, Q21 A, Q22 A).** Clanstack is now Nodach (D-161, D-169).
+  `/studio` on the hub serves the Studio page with a host shim (`studio/standalone.js`) in place of claude.ai's, behind GitHub
+  sign-in and a signed session cookie (`hub-core/src/session.rs`, tests in `tests/session.rs` incl. RFC 4231 vectors).
+  Shared writes go through `/studio/api/events` (importer key, same as Studio Web's sync); private items stay in the browser.
+  Checked locally with `wrangler dev`: redirects, 401s, forged cookie refused, missing header refused, write + dedupe + read-back.
 
 ## File map
 - `schema/event.schema.json` — the contract.

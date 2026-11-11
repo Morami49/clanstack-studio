@@ -3,6 +3,11 @@ The always-on node of the free ladder (D-089). Logic lives in `engine/crates/hub
 this crate only connects it to Cloudflare Workers and a SQLite-backed Durable Object.
 
 - Endpoints: `GET /health` (public); `GET /status`, `GET /pull?after=N&limit=M` (read or write token); `POST /push`, `POST /import` (write token). The record is never public (F-23).
+- Nodach Studio (D-171 S1): `GET /studio` serves `studio/index.html` with `studio/standalone.js` as its host, behind GitHub
+  sign-in (same OAuth App and `/callback` as the connector; Studio sign-ins carry a `studio-` state). The session is a signed
+  cookie (`hub_core::session`, key derived from `CONNECTOR_SEED`), checked against `ALLOWED_GITHUB_LOGINS` on every request.
+  `GET/POST /studio/api/events` read and write the same record as the connector; writes need the `x-nodach-studio` header.
+  Private items stay in the browser. Sign out: `/studio/logout`.
 - Local run: `npx wrangler@4 dev --local` with a `.dev.vars` file holding `HUB_WRITE_TOKEN` and `IMPORTER_SEED` (never committed).
 - Deploy: automatic after green CI on main (`.github/workflows/hub-deploy.yml`), once the owner adds the Cloudflare secrets.
 - Tested locally 2026-11-06: 24 Studio events imported as 25 signed facts (importer identity + 24), re-import added 0,

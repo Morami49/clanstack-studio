@@ -42,6 +42,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with: {python-version: "3.12"}
+      - run: node studio/tests/standalone.test.mjs   # D-171 S1: the host shim when the hub serves Studio
       - run: pip install playwright && python -m playwright install --with-deps chromium
       - run: python studio/tests/scenarios.py studio/index.html
         env: {STUDIO_TEST_OUT: studio/tests/out}

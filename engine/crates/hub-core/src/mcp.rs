@@ -9,7 +9,7 @@
 //!   write_event  add a Studio-shaped event (answer, comment, status, item.create, item.edit, link),
 //!                signed by the connector key; it reaches Studio Web through /studio-export (D-101)
 
-use crate::{Hub, IMPORT_KIND, WRITE_KIND, studio_doc_id};
+use crate::{Hub, studio_doc_id};
 use foundation_core::event::KeyPair;
 use serde_json::{json, Value};
 
@@ -105,15 +105,9 @@ fn call(hub: &mut Hub, login: &str, key: &KeyPair, name: &str, args: &Value, now
         "read_events" => {
             let after = args.get("after").and_then(Value::as_u64).unwrap_or(0) as usize;
             let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(100).clamp(1, 200) as usize;
-            let page = hub.pull(after, limit);
-            let events: Vec<Value> = page.events.iter().filter_map(|e| match e.u.kind.as_str() {
-                k if k == IMPORT_KIND => Some(json!({"doc_id": e.u.body.get("doc_id"), "event": e.u.body.get("event")})),
-                k if k == WRITE_KIND => Some(json!({"doc_id": studio_doc_id(&e.id), "event": e.u.body})),
-                _ => None,
-            }).collect();
-            let skipped = page.events.len() - events.len();
+            let (events, next, total, skipped) = hub.studio_events(after, limit);
             // F-55: say what was skipped, so nobody guesses (a key's first fact is its identity, not a Studio event)
-            text_result(json!({"events": events, "next": page.next, "total": page.total, "skipped_non_studio": skipped,
+            text_result(json!({"events": events, "next": next, "total": total, "skipped_non_studio": skipped,
                 "note": "Events that are not Studio events (e.g. a key's identity fact) are skipped and counted in skipped_non_studio. Nothing private is ever stored in the hub."}), false)
         }
         "write_event" => {

@@ -20,6 +20,7 @@ use std::collections::{HashMap, HashSet};
 
 pub mod mcp;
 pub mod oauth;
+pub mod session;
 
 pub const IMPORT_KIND: &str = "studio.event";
 /// A Studio-shaped write made on a node other than Studio Web (PC, phone, an AI via the hub).
@@ -163,6 +164,21 @@ impl Hub {
             (studio_doc_id(&e.id), v)
         }).collect();
         (docs, page.next)
+    }
+
+    /// Studio-shaped events after the cursor, as `{doc_id, event}` objects: imported Studio Web events plus
+    /// writes made on other nodes. Returns (docs, next cursor, total, facts skipped because they are not
+    /// Studio events, e.g. a key's identity fact). Serves the connector's `read_events` and Studio served
+    /// by the hub (D-171), so both see exactly the same record.
+    pub fn studio_events(&self, after: usize, limit: usize) -> (Vec<Value>, usize, usize, usize) {
+        let page = self.pull(after, limit);
+        let docs: Vec<Value> = page.events.iter().filter_map(|e| match e.u.kind.as_str() {
+            k if k == IMPORT_KIND => Some(json!({"doc_id": e.u.body.get("doc_id"), "event": e.u.body.get("event")})),
+            k if k == WRITE_KIND => Some(json!({"doc_id": studio_doc_id(&e.id), "event": e.u.body})),
+            _ => None,
+        }).collect();
+        let skipped = page.events.len() - docs.len();
+        (docs, page.next, page.total, skipped)
     }
 
     pub fn has_imported(&self, doc_id: &str) -> bool {
