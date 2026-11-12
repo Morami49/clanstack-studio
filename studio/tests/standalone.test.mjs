@@ -133,7 +133,7 @@ function fakeDom() {
   const mk = tag => ({ tag, id: "", style: {}, children: [], textContent: "", setAttribute() {}, append(c) { this.children.push(c); }, onclick: null });
   return {
     els, hidden: false, addEventListener() {},
-    body: { append: e => els.push(e) },
+    body: { append: e => els.push(e), prepend: e => els.unshift(e) },
     createElement: mk,
     getElementById: id => els.find(e => e.id === id) || null,
   };

@@ -171,22 +171,23 @@
     if (typeof document.createElement !== "function") return;
     if (document.body) f(); else document.addEventListener("DOMContentLoaded", f);
   }
-  function bar(id, text, css, button) {
+  function bar(id, text, css, button, top = false) {
     whenBody(() => {
       if (document.getElementById(id)) return;
       const d = document.createElement("div");
       d.id = id; d.setAttribute("role", "status");
-      d.style.cssText = "position:fixed;left:0;right:0;z-index:9999;padding:6px 12px;font:13px system-ui;text-align:center;" + css;
+      // In the page's own column (flex:none), not floating over it, so the bar pushes the header down and covers nothing.
+      d.style.cssText = "flex:none;position:relative;z-index:30;padding:6px 12px;font:13px system-ui;text-align:center;" + css;
       d.textContent = text;
       if (button) {
         const b = document.createElement("button");
         b.textContent = button.label; b.style.cssText = "margin-left:10px;font:inherit;padding:2px 10px;cursor:pointer";
         b.onclick = button.onclick; d.append(b);
       }
-      document.body.append(d);
+      if (top) document.body.prepend(d); else document.body.append(d);
     });
   }
-  if (ENV === "staging") bar("nodach-staging", `Staging · test record, not your real one · build ${BUILD || "?"}`, "top:0;background:#7a3e00;color:#fff");
+  if (ENV === "staging") bar("nodach-staging", `Staging · test record, not your real one · build ${BUILD || "?"}`, "background:#7a3e00;color:#fff", null, true);
 
   async function checkVersion() {
     let live = null;
@@ -195,7 +196,7 @@
     if (stale && !staleShown) {
       staleShown = true;
       bar("nodach-update", `A new version of Nodach Studio is live (${live}). Save what you're writing, then reload.`,
-        "bottom:0;background:#1f3a5f;color:#fff", { label: "Reload now", onclick: () => location.reload() });
+        "background:#1f3a5f;color:#fff", { label: "Reload now", onclick: () => location.reload() });
     }
     return { current: BUILD, live, stale };
   }
