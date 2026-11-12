@@ -298,7 +298,13 @@ impl Record {
         let mut r = Fetch::Request(req).send().await.map_err(e)?;
         let status = r.status_code();
         if !(200..300).contains(&status) {
-            return Err(format!("the site answered {status}"));
+            let text = r.text().await.unwrap_or_default();
+            let why = serde_json::from_str::<serde_json::Value>(&text).ok()
+                .and_then(|v| ["/message", "/error/message", "/error", "/detail"].iter()
+                    .find_map(|p| v.pointer(p).and_then(|m| m.as_str()).map(str::to_string)))
+                .unwrap_or_else(|| text.split_whitespace().collect::<Vec<_>>().join(" "));
+            let why: String = why.chars().take(160).collect();
+            return Err(if why.is_empty() { format!("the site answered {status}") } else { format!("the site answered {status}: {why}") });
         }
         let body: serde_json::Value = r.json().await.map_err(|_| "the site didn't answer with JSON".to_string())?;
         Ok(flows::as_items(body, cfg.get("list").and_then(|v| v.as_str()).unwrap_or("")))
