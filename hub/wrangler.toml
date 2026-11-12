@@ -3,7 +3,8 @@ main = "build/worker/shim.mjs"
 compatibility_date = "2026-10-01"
 
 [build]
-command = "cargo install -q worker-build && worker-build --release"
+# Pinned: worker-build 0.9 (Nov 2026) refuses worker 0.8. Move both together, on a branch, through staging.
+command = "cargo install -q worker-build@^0.8 && worker-build --release"
 
 [[durable_objects.bindings]]
 name = "RECORD"
