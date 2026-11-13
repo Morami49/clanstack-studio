@@ -319,29 +319,52 @@ impl Record {
         let prompt = cfg.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
         let set = cfg.get("set").and_then(|v| v.as_str()).unwrap_or("ai").to_string();
         let max = cfg.get("max_items").and_then(|v| v.as_u64()).unwrap_or(10).min(20) as usize;
-        let url = format!("https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent");
-        let e = |x: worker::Error| x.to_string();
+        // Busy models (429/500/503) are retried after a pause, then the lighter model is tried (F-75): Gemini's
+        // free tier answers "high demand" often enough that one refusal shouldn't stop a whole flow.
+        let mut models = vec![model.to_string()];
+        if model != "gemini-flash-lite-latest" { models.push("gemini-flash-lite-latest".into()); }
         let mut out = vec![];
+        let mut used: Option<String> = None;
         for (i, mut it) in items.into_iter().enumerate() {
             if i < max {
-                let h = Headers::new();
-                h.set("content-type", "application/json").map_err(e)?;
-                h.set("x-goog-api-key", &key).map_err(e)?;
                 let body = serde_json::json!({"contents": [{"parts": [{"text": flows::render(prompt, &it)}]}]}).to_string();
-                let mut init = RequestInit::new();
-                init.with_method(Method::Post).with_headers(h).with_body(Some(worker::wasm_bindgen::JsValue::from_str(&body)));
-                let mut r = Fetch::Request(Request::new_with_init(&url, &init).map_err(e)?).send().await.map_err(e)?;
-                let status = r.status_code();
-                let v: serde_json::Value = r.json().await.unwrap_or(serde_json::Value::Null);
-                if !(200..300).contains(&status) {
-                    return Err(format!("the AI answered {status}: {}", v.pointer("/error/message").and_then(|m| m.as_str()).unwrap_or("")));
+                let mut last = String::new();
+                let mut text = None;
+                'models: for m in models.iter().skip_while(|m| used.as_ref().is_some_and(|u| u != *m)) {
+                    for attempt in 0..2 {
+                        if attempt > 0 { worker::Delay::from(std::time::Duration::from_millis(1500)).await; }
+                        match self.ai_call(m, &key, &body).await {
+                            Ok(t) => { text = Some(t); used = Some(m.clone()); break 'models; }
+                            Err((status, msg)) => {
+                                last = format!("the AI ({m}) answered {status}: {msg}");
+                                if !matches!(status, 429 | 500 | 502 | 503 | 504) { return Err(last); }
+                            }
+                        }
+                    }
                 }
-                let text = v.pointer("/candidates/0/content/parts/0/text").and_then(|t| t.as_str()).unwrap_or("").trim().to_string();
+                let text = text.ok_or(format!("{last} (tried again and with the lighter model; try later)"))?;
                 if let Some(m) = it.as_object_mut() { m.insert(set.clone(), serde_json::json!(text)); }
             }
             out.push(it);
         }
         Ok(out)
+    }
+
+    async fn ai_call(&self, model: &str, key: &str, body: &str) -> std::result::Result<String, (u16, String)> {
+        let url = format!("https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent");
+        let e = |x: worker::Error| (0u16, x.to_string());
+        let h = Headers::new();
+        h.set("content-type", "application/json").map_err(e)?;
+        h.set("x-goog-api-key", key).map_err(e)?;
+        let mut init = RequestInit::new();
+        init.with_method(Method::Post).with_headers(h).with_body(Some(worker::wasm_bindgen::JsValue::from_str(body)));
+        let mut r = Fetch::Request(Request::new_with_init(&url, &init).map_err(e)?).send().await.map_err(e)?;
+        let status = r.status_code();
+        let v: serde_json::Value = r.json().await.unwrap_or(serde_json::Value::Null);
+        if !(200..300).contains(&status) {
+            return Err((status, v.pointer("/error/message").and_then(|m| m.as_str()).unwrap_or("").to_string()));
+        }
+        Ok(v.pointer("/candidates/0/content/parts/0/text").and_then(|t| t.as_str()).unwrap_or("").trim().to_string())
     }
 
     async fn step_post(&self, cfg: &serde_json::Value, items: Vec<serde_json::Value>, login: &str, now: i64) -> std::result::Result<Vec<serde_json::Value>, String> {
