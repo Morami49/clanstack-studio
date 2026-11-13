@@ -781,15 +781,31 @@ async def s39_scheduled_steps(b):
     for _ in range(100):
         if sum(e["kind"] == "flow.wire" for e in st.events) >= 4: break
         await p.wait_for_timeout(150)
+    for _ in range(100):   # wait until the canvas has drawn all five steps (slow CI browsers)
+        if await p.locator(".react-flow__node-step").count() >= 5: break
+        await p.wait_for_timeout(150)
     await p.wait_for_timeout(500)
+
+    async def pick(step_id, sel):   # select a step and wait for its panel; retried, as a late redraw can replace it
+        for _ in range(4):
+            await p.evaluate(f"selectStep('{step_id}')")
+            try:
+                await p.wait_for_selector(f"#inspector .step-form", timeout=5000)
+                if sel is None or await p.locator(sel).count(): return True
+            except Exception:
+                pass
+            await p.wait_for_timeout(500)
+        return False
     nodes = [e for e in st.events if e["kind"] == "flow.node"]
     fetch = next(e["body"]["id"] for e in nodes if e["body"].get("step") == "fetch")
     filt = next(e["body"]["id"] for e in nodes if e["body"].get("step") == "filter")
     post = next(e["body"] for e in nodes if e["body"].get("step") == "post")
     only_new = post["config"].get("once") == "{{jobId}}"
-    await p.evaluate(f"selectStep('{filt}')"); await p.wait_for_selector("#stConds", timeout=10000)
+    await pick(filt, "#stConds")
     no_sched_mid = await p.locator("#stSched").count() == 0
-    await p.evaluate(f"selectStep('{fetch}')"); await p.wait_for_selector("#stSched", timeout=10000)
+    if not await pick(fetch, "#stSched"):
+        panel = (await p.locator('#inspector').inner_text())[:120]
+        return False, f"fetch panel had no schedule field; panel={panel!r}"
     await p.fill("#stSched", "18, 7"); await p.click("#stSave"); await p.wait_for_timeout(500)
     saved = [e for e in st.events if e["kind"] == "flow.node" and e["body"].get("id") == fetch and "config" in e["body"]][-1]["body"]["config"]
     hours = saved.get("schedule") == [7, 18] and saved.get("url", "").startswith("https://www.reed.co.uk")
