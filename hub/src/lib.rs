@@ -380,19 +380,44 @@ impl Record {
             self.runner_write("item.create", None, serde_json::json!({"id": item, "type": "asset", "title": title,
                 "body": "Where flows post what they find (D-174). Reply on each line: apply / skip / ?", "status": "open", "refs": ["D-174"]}), login, now)?;
         }
-        for it in items.iter().take(max) {
-            self.runner_write("comment", Some(&item), serde_json::json!({"text": flows::render(text, it), "source": "flow"}), login, now)?;
+        // "Only new" (S3): with `once` set (e.g. {{jobId}}), an item whose key was already posted here is skipped,
+        // read from this item's own comments, so the record shows exactly what was posted when.
+        let once = cfg.get("once").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+        let mut seen = if once.is_empty() { Default::default() } else { flows::posted_keys(&self.all_events(), &item) };
+        let mut posted = vec![];
+        for it in items.into_iter() {
+            if posted.len() >= max { break; }
+            let mut body = serde_json::json!({"text": flows::render(text, &it), "source": "flow"});
+            if !once.is_empty() {
+                let k = flows::render(&once, &it);
+                if k.is_empty() || !seen.insert(k.clone()) { continue; }
+                body["key"] = serde_json::json!(k);
+            }
+            self.runner_write("comment", Some(&item), body, login, now)?;
+            posted.push(it);
         }
-        Ok(items)
+        Ok(posted)
     }
 
     /// Runs the canvas flow on `board` from `start`, as the hub reads it from its own record.
-    async fn run_flow(&self, board: &str, start: &str, login: &str, now: i64) -> Result<serde_json::Value> {
-        let evs: Vec<serde_json::Value> = {
-            let hub = self.hub.borrow();
-            let (docs, _, _, _) = hub.as_ref().unwrap().studio_events(0, usize::MAX);
-            docs.into_iter().filter_map(|d| d.get("event").cloned()).collect()
-        };
+    fn all_events(&self) -> Vec<serde_json::Value> {
+        let hub = self.hub.borrow();
+        let (docs, _, _, _) = hub.as_ref().unwrap().studio_events(0, usize::MAX);
+        docs.into_iter().filter_map(|d| d.get("event").cloned()).collect()
+    }
+
+    /// The hub's hourly wake-up (S3): Durable Object alarms need no cron, route or account. Set if missing.
+    async fn ensure_alarm(&self) -> Result<()> {
+        let st = self.state.storage();
+        if st.get_alarm().await?.is_none() {
+            let now = Date::now().as_millis() as i64;
+            st.set_alarm(3_600_000 - now.rem_euclid(3_600_000) + 60_000).await?;   // a minute past the next hour
+        }
+        Ok(())
+    }
+
+    async fn run_flow(&self, board: &str, start: &str, login: &str, now: i64, slot: Option<&str>) -> Result<serde_json::Value> {
+        let evs = self.all_events();
         let flow = flows::fold(&evs, board);
         let order = match flows::plan(&flow, start) {
             Ok(o) => o,
@@ -424,7 +449,8 @@ impl Record {
                 Err(e) => { failed = true; steps.push(serde_json::json!({"id": id, "step": node.step, "ok": false, "error": e})); }
             }
         }
-        let summary = serde_json::json!({"board": board, "start": start, "ok": !failed, "by": login, "steps": steps});
+        let mut summary = serde_json::json!({"board": board, "start": start, "ok": !failed, "by": login, "steps": steps});
+        if let Some(sl) = slot { summary["slot"] = serde_json::json!(sl); }
         let _ = self.runner_write("flow.run", None, summary.clone(), login, now);
         Ok(summary)
     }
@@ -538,7 +564,7 @@ impl Record {
                             let body: serde_json::Value = req.json().await.unwrap_or(serde_json::Value::Null);
                             let board = body.get("board").and_then(|v| v.as_str()).unwrap_or("main").to_string();
                             let start = body.get("start").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                            let res = self.run_flow(&board, &start, &l, now).await?;
+                            let res = self.run_flow(&board, &start, &l, now, None).await?;
                             self.log(now, "/studio/api/run", "run", if res.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) { "ok" } else { "failed" }, &l);
                             json_status(&res, 200)?
                         }
@@ -717,8 +743,24 @@ impl DurableObject for Record {
         Self { state, env, hub: RefCell::new(None), oauth: RefCell::new(None) }
     }
 
+    /// Hourly: run every scheduled start step that is due this UK hour and hasn't run in this slot yet.
+    async fn alarm(&self) -> Result<Response> {
+        self.load()?;
+        let now = Date::now().as_millis() as i64;
+        // next wake-up first, so a failed run can never stop the schedule
+        self.state.storage().set_alarm(3_600_000 - now.rem_euclid(3_600_000) + 60_000).await?;
+        let due = flows::due(&self.all_events(), now);
+        for (board, start, slot) in &due {
+            let res = self.run_flow(board, start, "schedule", now, Some(slot)).await?;
+            let ok = res.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
+            self.log(now, "/alarm", "schedule", if ok { "ok" } else { "failed" }, "schedule");
+        }
+        Response::ok(format!("ran {}", due.len()))
+    }
+
     async fn fetch(&self, mut req: Request) -> Result<Response> {
         self.load()?;
+        if let Err(e) = self.ensure_alarm().await { console_error!("alarm: {e}"); }
         let url = req.url()?;
         let started = Date::now().as_millis() as i64;
         let path = req.path();

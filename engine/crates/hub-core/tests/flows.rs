@@ -1,6 +1,6 @@
 //! Runnable flows (D-174 C2): what the hub plans and computes from a canvas, without any network.
 
-use hub_core::flows::*;
+use hub_core::flows::{self, *};
 use serde_json::{json, Value};
 
 fn node(id: &str, step: &str, config: Value) -> Value {
@@ -119,4 +119,61 @@ fn base64_matches_rfc_4648() {
 fn runner_seed_is_separate_from_sessions() {
     assert_ne!(runner_seed("s"), hub_core::session::session_key("s"));
     assert_eq!(runner_seed("s"), runner_seed(" s "));
+}
+
+// ---- schedules (S3)
+fn ms(y: i64, mo: u32, d: u32, h: u32) -> i64 {
+    // test-only: UTC wall time → ms, via chrono-free arithmetic on a known anchor (2026-01-01T00:00Z)
+    let anchor = 1_767_225_600_000i64;
+    let days_before = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334][(mo - 1) as usize] as i64;
+    assert_eq!(y, 2026);
+    anchor + (days_before + d as i64 - 1) * 86_400_000 + h as i64 * 3_600_000
+}
+
+#[test]
+fn uk_slot_follows_british_summer_time() {
+    assert_eq!(flows::uk_slot(ms(2026, 1, 15, 7)), (7, "2026-01-15T07".into()));         // winter: UK = UTC
+    assert_eq!(flows::uk_slot(ms(2026, 7, 1, 6)), (7, "2026-07-01T07".into()));          // summer: UK = UTC+1
+    // clocks go forward 29 Mar 2026 at 01:00 UTC
+    assert_eq!(flows::uk_slot(ms(2026, 3, 29, 0)).0, 0);
+    assert_eq!(flows::uk_slot(ms(2026, 3, 29, 1)).0, 2);
+    // clocks go back 25 Oct 2026 at 01:00 UTC
+    assert_eq!(flows::uk_slot(ms(2026, 10, 25, 0)).0, 1);
+    assert_eq!(flows::uk_slot(ms(2026, 10, 25, 1)).0, 1);
+    assert_eq!(flows::uk_slot(ms(2026, 11, 13, 23)), (23, "2026-11-13T23".into()));
+}
+
+#[test]
+fn schedule_hours_reads_numbers_or_text() {
+    assert_eq!(flows::schedule_hours(&json!({"schedule": [18, 7, 7]})), vec![7, 18]);
+    assert_eq!(flows::schedule_hours(&json!({"schedule": "7, 18 25 x"})), vec![7, 18]);
+    assert!(flows::schedule_hours(&json!({})).is_empty());
+}
+
+#[test]
+fn due_runs_each_scheduled_start_once_per_slot() {
+    let node = |id: &str, step: &str, cfg: Value| json!({"kind": "flow.node", "item": null, "body": {"board": "main", "id": id, "step": step, "config": cfg}});
+    let mut evs = vec![
+        node("S-a", "fetch", json!({"schedule": "7,18"})),
+        node("S-b", "post", json!({})),
+        json!({"kind": "flow.wire", "item": null, "body": {"board": "main", "id": "W-1", "from": "S-a", "to": "S-b"}}),
+        node("S-c", "fetch", json!({})),                       // no schedule: by hand only
+    ];
+    let seven = ms(2026, 11, 13, 7);
+    assert_eq!(flows::due(&evs, seven), vec![("main".into(), "S-a".into(), "2026-11-13T07".into())]);
+    assert!(flows::due(&evs, ms(2026, 11, 13, 8)).is_empty());
+    evs.push(json!({"kind": "flow.run", "item": null, "body": {"board": "main", "start": "S-a", "slot": "2026-11-13T07", "ok": true}}));
+    assert!(flows::due(&evs, seven + 1_800_000).is_empty(), "already ran in this slot");
+    assert_eq!(flows::due(&evs, ms(2026, 11, 13, 18)).len(), 1);
+}
+
+#[test]
+fn posted_keys_are_read_from_the_items_comments() {
+    let evs = vec![
+        json!({"kind": "comment", "item": "LOBBY-income", "body": {"text": "a", "key": "123"}}),
+        json!({"kind": "comment", "item": "LOBBY-income", "body": {"text": "by hand"}}),
+        json!({"kind": "comment", "item": "OTHER", "body": {"text": "b", "key": "456"}}),
+    ];
+    let k = flows::posted_keys(&evs, "LOBBY-income");
+    assert!(k.contains("123") && !k.contains("456") && k.len() == 1);
 }

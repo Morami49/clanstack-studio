@@ -295,6 +295,12 @@ modelling. Phase 1 (rails) is built; voice is next. Owner: Nowed.
   `NODE_SECRET_<NAME>` only), filter/calc as data (no code), ai (Gemini, ≤20 items), post (comments on an item, created if
   missing). Each run is recorded as `flow.run` by the flow runner's own key. "Shift Scout" template = Reed → filter → travel
   estimate → ratio → Income lobby. Deploys copy NODE_SECRET_REED / GEMINI / ADZUNA_ID / ADZUNA_KEY from GitHub secrets.
+- **2026-11-13 — S3: flows run by themselves (D-176, Q32 left to the builder: scheduled runs first).** A start step may
+  carry `schedule` (UK hours, e.g. [7, 18]); the hub's Durable Object alarm wakes hourly (no cron, route or account),
+  and `flows::due` runs each due start once per slot (UK date + hour, BST-aware), writing `slot` into the `flow.run`
+  record so "already ran" comes from history. Post steps with `once` (template: `{{jobId}}`) skip keys already posted to
+  that item, read from the item's own comments (each carries `key`). F-75: Ask AI retries a busy Gemini (429/5xx) once,
+  then falls back to `gemini-flash-lite-latest`. The step panel gained a ✕ like items have. 14 flow tests, 39/39 scenarios.
 
 ## File map
 - `schema/event.schema.json` — the contract.

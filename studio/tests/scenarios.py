@@ -767,15 +767,46 @@ async def s38_runnable_steps(b):
     refused = len(st.events) == before
     run_disabled = await p.locator("#stRun").is_disabled()   # no hub here, so Run can't be pressed
     clean = all(e["item"] is None for e in st.events if e["kind"].startswith("flow."))
-    ok = len(nodes) == 5 and len(wires) == 4 and shown == 5 and good and refused and run_disabled and clean and not p.errors
-    return ok, f"steps={len(nodes)}, wires={len(wires)}, drawn={shown}, filter saved as data={good}, bad line refused={refused}, run off without hub={run_disabled}, items clean={clean}, errors={p.errors[:1]}"
+    await p.click("#stClose")   # a step's panel closes like an item's does
+    closed = await p.evaluate("document.querySelector('#inspector').classList.contains('closed')")
+    ok = len(nodes) == 5 and len(wires) == 4 and shown == 5 and good and refused and run_disabled and clean and closed and not p.errors
+    return ok, f"steps={len(nodes)}, wires={len(wires)}, drawn={shown}, filter saved as data={good}, bad line refused={refused}, run off without hub={run_disabled}, items clean={clean}, panel closes={closed}, errors={p.errors[:1]}"
+
+
+async def s39_scheduled_steps(b):
+    """S3: the start step of Shift Scout gets UK hours (saved as numbers, shown on the canvas), a wired-into step offers no schedule, a bad hour is refused, and the post step only posts new jobs by default."""
+    st = Store([]); p = await open_canvas_page(b, st, {})
+    await p.get_by_role("button", name="+ Step").click()
+    await p.get_by_role("button", name="Shift Scout (5 steps)").click()
+    for _ in range(100):
+        if sum(e["kind"] == "flow.wire" for e in st.events) >= 4: break
+        await p.wait_for_timeout(150)
+    await p.wait_for_timeout(500)
+    nodes = [e for e in st.events if e["kind"] == "flow.node"]
+    fetch = next(e["body"]["id"] for e in nodes if e["body"].get("step") == "fetch")
+    filt = next(e["body"]["id"] for e in nodes if e["body"].get("step") == "filter")
+    post = next(e["body"] for e in nodes if e["body"].get("step") == "post")
+    only_new = post["config"].get("once") == "{{jobId}}"
+    await p.evaluate(f"selectStep('{filt}')"); await p.wait_for_selector("#stConds", timeout=10000)
+    no_sched_mid = await p.locator("#stSched").count() == 0
+    await p.evaluate(f"selectStep('{fetch}')"); await p.wait_for_selector("#stSched", timeout=10000)
+    await p.fill("#stSched", "18, 7"); await p.click("#stSave"); await p.wait_for_timeout(500)
+    saved = [e for e in st.events if e["kind"] == "flow.node" and e["body"].get("id") == fetch and "config" in e["body"]][-1]["body"]["config"]
+    hours = saved.get("schedule") == [7, 18] and saved.get("url", "").startswith("https://www.reed.co.uk")
+    await p.wait_for_timeout(400)
+    badge = await p.locator(".nd-sched", has_text="7, 18").count() == 1
+    before = len(st.events)
+    await p.fill("#stSched", "7, 25"); await p.click("#stSave"); await p.wait_for_timeout(400)
+    refused = len(st.events) == before
+    ok = only_new and no_sched_mid and hours and badge and refused and not p.errors
+    return ok, f"post only-new by default={only_new}, no schedule on wired-into step={no_sched_mid}, hours saved={hours}, badge shown={badge}, bad hour refused={refused}, errors={p.errors[:1]}"
 
 
 SCENARIOS = [s01_tired_misclick, s02_undo, s03_stable_codes, s04_past_view_lock, s05_branch_awareness, s06_view_only_client,
              s07_names, s08_long_history, s09_ai_relay, s10_keyboard_list, s11_offline_capture, s12_member_rights,
              s13_two_people_at_once, s14_phone, s15_undo_old_status, s16_overwhelm, s17_disagreement, s18_clock_skew, s19_private_area,
              s20_addresses, s21_money_settings, s22_duplicate_id, s23_same_order_everywhere,
-             s24_hub_sync, s25_more_than_1000, s26_hub_not_connected, s27_read_on_open, s28_push_after_clean_runs, s29_runs_timeline, s30_builder_pipeline, s31_content_cycles, s32_private_files_and_views, s33_studio_edits_studio, s34_command_map, s35_history_words, s36_canvas, s37_classic_map_fallback, s38_runnable_steps]
+             s24_hub_sync, s25_more_than_1000, s26_hub_not_connected, s27_read_on_open, s28_push_after_clean_runs, s29_runs_timeline, s30_builder_pipeline, s31_content_cycles, s32_private_files_and_views, s33_studio_edits_studio, s34_command_map, s35_history_words, s36_canvas, s37_classic_map_fallback, s38_runnable_steps, s39_scheduled_steps]
 
 
 async def main():

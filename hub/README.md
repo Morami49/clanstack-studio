@@ -16,6 +16,8 @@ this crate only connects it to Cloudflare Workers and a SQLite-backed Durable Ob
   `studio/vendor` (open-source code, no record data, so no sign-in needed).
 - Runnable flows (D-174): `POST /studio/api/run {board, start}` (signed in, `x-nodach-studio` header). Step secrets come
   only from `NODE_SECRET_*` (GitHub secrets `NODE_SECRET_REED`, `NODE_SECRET_GEMINI`, `NODE_SECRET_ADZUNA_ID`, `NODE_SECRET_ADZUNA_KEY`).
+- Scheduled flows (D-176): the record's Durable Object sets an hourly alarm on first request; each wake-up runs start steps
+  whose `schedule` holds the current UK hour, once per slot, as `schedule`. Logged as `/alarm`.
 - Local run: `npx wrangler@4 dev --local` with a `.dev.vars` file holding `HUB_WRITE_TOKEN` and `IMPORTER_SEED` (never committed).
 - Deploy: automatic after green CI on main (`.github/workflows/hub-deploy.yml`), once the owner adds the Cloudflare secrets.
 - Tested locally 2026-11-06: 24 Studio events imported as 25 signed facts (importer identity + 24), re-import added 0,
