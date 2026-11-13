@@ -80,6 +80,7 @@ main{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 380px}
 .nd-step{width:200px;padding:6px 10px;border-radius:12px;border:2px solid var(--accent);background:var(--raise);color:var(--ink);font:12px/1.3 var(--sans,"IBM Plex Sans",system-ui);box-shadow:0 2px 6px rgba(0,0,0,.08)}
 .nd-step.sel{border-width:3px;box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 25%,transparent)}
 .nd-run{margin-top:4px;font:500 10px var(--mono,monospace);color:var(--mute)}.nd-run.ok{color:var(--ok)}.nd-run.bad{color:var(--bad)}
+.nd-sched{margin-top:3px;font:500 10px var(--mono,monospace);color:var(--accent)}
 .nd-menu{display:inline-flex;gap:4px;flex-wrap:wrap}
 .step-form label{display:block;margin:8px 0 2px;font-size:12px;color:var(--mute)}
 .step-form input,.step-form textarea,.step-form select{width:100%;box-sizing:border-box}
@@ -595,7 +596,7 @@ function renderCanvas(relayout){
   }
   const FS = flowState();
   for (const sn of FS.nodes) nodes.push({id:sn.id, type:"step", position:{x:+sn.x||0, y:+sn.y||0}, selected: sn.id===S.selStep,
-    data:{step:sn.step, title:sn.title, run:FS.lastRun[sn.id]}});
+    data:{step:sn.step, title:sn.title, run:FS.lastRun[sn.id], sched:schedText(sn.config)}});
   for (const w of FS.wires) edges.push({id:"w:"+w.id, source:w.from, target:w.to, animated:true, markerEnd:{type:"arrowclosed"}, style:{stroke:"var(--accent)", strokeWidth:2}});
   if (relayout) canvasFitKey++;
   window.NodachCanvas.render(el, {nodes, edges, sel:S.sel, can, dark: document.documentElement.dataset.theme==="dark",
@@ -622,12 +623,19 @@ addEventListener("nodach-canvas-ready", () => { if (S.view==="map") renderMap(tr
 /* ---------------------------------------------------------------- runnable steps (D-174 C2, Q30 A)
  * flow.node / flow.wire events describe the flow; the hub reads them from its record and runs them (hub_core::flows).
  * Filters and sums are written as plain lines and stored as data, never as code. */
+// S3: a start step may run by itself at UK hours (the hub wakes hourly); "only new" posts skip keys already posted.
+function schedText(cfg){ const s = cfg?.schedule; return Array.isArray(s) ? s.join(", ") : (s||"").toString().trim(); }
+function parseHours(txt){
+  const parts = txt.split(/[\s,]+/).filter(Boolean), hours = [], bad = [];
+  for (const p of parts){ const n = Number(p); if (Number.isInteger(n) && n>=0 && n<24) { if (!hours.includes(n)) hours.push(n); } else bad.push(p); }
+  return {hours: hours.sort((a,b)=>a-b), bad};
+}
 const STEP_DEFAULTS = {
   fetch: {title:"Fetch", config:{url:"https://www.reed.co.uk/api/1.0/search?keywords=temp&locationName=London&distanceFromLocation=15&resultsToTake=50", list:"results", auth:{type:"basic", secret:"REED"}}},
   filter:{title:"Filter", config:{all:[{field:"minimumSalary", op:"exists"}], none:[{field:"jobTitle", op:"contains", value:"driver"}, {field:"jobDescription", op:"contains", value:"licence"}]}},
   calc:  {title:"Calculate", config:{sets:[{set:"ratio", a:"minimumSalary", op:"/", b:"travel"}]}},
   ai:    {title:"Ask AI", config:{prompt:"Estimate the return public-transport fare in GBP from London E12 to {{locationName}}. Reply with a number only.", set:"travel", secret:"GEMINI", max_items:10}},
-  post:  {title:"Post to lobby", config:{item:"LOBBY-income", item_title:"Income lobby", text:"{{jobTitle}} · {{employerName}} · {{locationName}} · £{{minimumSalary}}–{{maximumSalary}} · ratio {{ratio}} · {{jobUrl}}", max_items:30}},
+  post:  {title:"Post to lobby", config:{item:"LOBBY-income", item_title:"Income lobby", text:"{{jobTitle}} · {{employerName}} · {{locationName}} · £{{minimumSalary}}–{{maximumSalary}} · ratio {{ratio}} · {{jobUrl}}", once:"{{jobId}}", max_items:30}},
 };
 function flowState(){
   const nodes = new Map(), wires = new Map(), runs = [];
@@ -700,13 +708,14 @@ function renderStepInspector(){
   if (n.step==="fetch"){ const a = Array.isArray(c.auth) ? (c.auth[0]||{}) : (c.auth||{});
     form += field("stUrl", "Address (https)", c.url) + field("stList", "List inside the answer (e.g. results)", c.list) +
       `<label for="stAuth">Sign-in</label><select id="stAuth" ${dis}>${["none","basic","bearer","header","query"].map(t=>`<option ${((a.type||"none")===t)?"selected":""}>${t}</option>`).join("")}</select>` +
-      field("stSecret", "Secret name (stored in the hub as NODE_SECRET_…)", a.secret) + field("stParam", "Header or query name (header/query sign-in)", a.header||a.param); }
+      field("stSecret", "Secret name (stored in the hub as NODE_SECRET_…)", a.secret) + field("stParam", "Header or query name (header/query sign-in)", a.header||a.param) +
+      (st.wires.some(w => w.to===n.id) ? "" : field("stSched", "Run by itself at these UK hours, e.g. <code>7, 18</code> (empty = only when you press Run)", schedText(c))); }
   if (n.step==="filter") form += field("stConds", "Keep items where every line holds; lines starting with “not” drop matches. e.g. <code>minimumSalary >= 12</code>, <code>not jobTitle contains driver</code>", condLines(c), true);
   if (n.step==="calc") form += field("stSums", "One sum per line: <code>ratio = minimumSalary / travel</code> (+ − * / max min)", sumLines(c), true);
   if (n.step==="ai") form += field("stPrompt", "Prompt, with {{field}} from each item", c.prompt, true) + field("stSet", "Save the answer as field", c.set) + field("stMax", "At most this many items (free tier: keep it small)", c.max_items) + field("stSecret", "Secret name (NODE_SECRET_…)", c.secret);
-  if (n.step==="post") form += field("stItem", "Post to item id (created if missing)", c.item) + field("stText", "Each line says", c.text, true) + field("stMax", "At most this many lines", c.max_items);
+  if (n.step==="post") form += field("stItem", "Post to item id (created if missing)", c.item) + field("stText", "Each line says", c.text, true) + field("stOnce", "Only new: skip items already posted here, matched by e.g. <code>{{jobId}}</code> (empty = post every time)", c.once) + field("stMax", "At most this many lines", c.max_items);
   const standalone = !!window.__nodach?.standalone;
-  box.innerHTML = `<div class="stack step-form"><div class="mono mute">STEP · ${esc(n.step.toUpperCase())} · ${esc(n.id)}</div>${form}
+  box.innerHTML = `<div class="stack step-form"><div class="row"><span class="mono mute">STEP · ${esc(n.step.toUpperCase())} · ${esc(n.id)}</span><span class="spacer"></span><button id="stClose" aria-label="Close">✕</button></div>${form}
     <div class="row" style="margin-top:10px;gap:6px;display:flex;flex-wrap:wrap">
       <button id="stSave" ${dis}>Save step</button>
       <button id="stRun" ${can && standalone ? "" : "disabled"} title="${standalone ? "Run this step and everything wired after it" : "Runs from the Studio served by your hub"}">Run from here</button>
@@ -715,16 +724,18 @@ function renderStepInspector(){
   $("#stSave").onclick = () => saveStep(n);
   $("#stDel").onclick = async () => { await write("flow.node", null, {board:BOARD, id:n.id, deleted:true}); S.selStep = null; box.innerHTML = '<p class="mute">Step removed. Its history stays.</p>'; };
   $("#stRun").onclick = () => runFrom(n.id);
+  $("#stClose").onclick = () => { $("#inspector").classList.add("closed"); S.selStep = null; if (S.view==="map") renderMap(false); };
 }
 async function saveStep(n){
   const v = id => $("#"+id)?.value ?? "";
   let cfg = {...(n.config||{})}, bad = [];
   if (n.step==="fetch"){ const t = v("stAuth"); cfg = {url:v("stUrl").trim(), list:v("stList").trim(),
-      auth: t==="none" ? [] : {type:t, secret:v("stSecret").trim(), ...(t==="header" ? {header:v("stParam").trim()} : t==="query" ? {param:v("stParam").trim()} : {})}}; }
+      auth: t==="none" ? [] : {type:t, secret:v("stSecret").trim(), ...(t==="header" ? {header:v("stParam").trim()} : t==="query" ? {param:v("stParam").trim()} : {})}};
+    if ($("#stSched")){ const r = parseHours(v("stSched")); bad = r.bad; if (r.hours.length) cfg.schedule = r.hours; } else if (n.config?.schedule) cfg.schedule = n.config.schedule; }
   if (n.step==="filter"){ const r = parseConds(v("stConds")); cfg = r.cfg; bad = r.bad; }
   if (n.step==="calc"){ const r = parseSums(v("stSums")); cfg = r.cfg; bad = r.bad; }
   if (n.step==="ai") cfg = {...cfg, prompt:v("stPrompt"), set:v("stSet").trim()||"ai", max_items:+v("stMax")||10, secret:v("stSecret").trim()||"GEMINI"};
-  if (n.step==="post") cfg = {...cfg, item:v("stItem").trim(), text:v("stText"), max_items:+v("stMax")||30};
+  if (n.step==="post") cfg = {...cfg, item:v("stItem").trim(), text:v("stText"), once:v("stOnce").trim(), max_items:+v("stMax")||30};
   if (bad.length) return toast(`Not saved: couldn't read “${bad[0]}”.`);
   const id = await write("flow.node", null, {board:BOARD, id:n.id, title:v("stTitle").trim()||n.title, config:cfg});
   if (id) toast("Step saved.");
@@ -773,7 +784,7 @@ function describe(h){
     h.kind==="link" ? `linked ${esc((b.refs||[]).join(", "))}${b.rel && REL_LABEL[b.rel] ? " ("+esc(REL_LABEL[b.rel])+")" : ""}` :
     h.kind==="flow.node" ? (b.deleted ? `removed step ${esc(b.id)}` : `step ${esc(b.title||b.id)} ${b.step ? "added" : "changed"}`) :
     h.kind==="flow.wire" ? (b.deleted ? `unwired ${esc(b.from||"")} → ${esc(b.to||"")}` : `wired ${esc(b.from)} → ${esc(b.to)}`) :
-    h.kind==="flow.run" ? `ran a flow from ${esc(b.start)}: ${b.ok ? "worked" : "stopped"}` :
+    h.kind==="flow.run" ? `${b.slot ? "ran on schedule (" + esc(b.slot.replace("T"," ")) + ":00 UK)" : "ran a flow"} from ${esc(b.start)}: ${b.ok ? "worked" : "stopped"}` :
     h.kind==="canvas.layout" ? `arranged ${Object.keys(b.moves||{}).length} item(s) on the canvas` :
     h.kind==="canvas.frame" ? (b.deleted ? `removed group “${esc(b.title||b.id)}”` : `group “${esc(b.title||b.id)}” placed or resized`) : h.kind==="genesis" ? "recorded from the chats (genesis)" : esc(h.kind);
 }
@@ -1721,6 +1732,7 @@ function StepNode({ data, selected }) {
     h(Handle, { type: "target", position: Position.Left }),
     h("div", { className: "nd-code" }, (STEP_ICON[data.step] || "•") + " " + data.step.toUpperCase()),
     h("div", { className: "nd-title" }, data.title || data.step),
+    data.sched ? h("div", { className: "nd-sched", title: "Runs by itself at these UK hours" }, "⏱ " + data.sched) : null,
     r ? h("div", { className: "nd-run " + (r.ok ? "ok" : r.skipped ? "" : "bad") }, r.skipped ? "skipped" : r.ok ? `${r.count} item(s)` : "failed") : null,
     h(Handle, { type: "source", position: Position.Right }));
 }

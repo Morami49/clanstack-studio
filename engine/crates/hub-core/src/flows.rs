@@ -308,3 +308,101 @@ pub fn sample(items: &[Value], n: usize) -> Value {
     }
     Value::Array(items.iter().take(n).map(trim).collect())
 }
+
+// ------------------------------------------------------------------ schedules (S3, Q32: executive call)
+// A start step (one with nothing wired into it) may carry `schedule`: UK hours, e.g. [7, 18] or "7, 18".
+// The hub wakes hourly; each due start runs once per slot (UK date + hour). The slot is written into the run
+// record, so "already ran this hour" is read from history, never from hidden state.
+
+/// Days since 1970-01-01 → (year, month, day). (Howard Hinnant's civil_from_days.)
+fn civil(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    (yoe + era * 400 + i64::from(m <= 2), m, d)
+}
+/// (year, month, day) → days since 1970-01-01.
+fn days_from(y: i64, m: u32, d: u32) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = (i64::from(m) + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + i64::from(d) - 1;
+    era * 146_097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719_468
+}
+/// Last Sunday of a 31-day month, as days since 1970-01-01 (1970-01-01 was a Thursday).
+fn last_sunday(y: i64, m: u32) -> i64 {
+    let d = days_from(y, m, 31);
+    d - (d + 4).rem_euclid(7)
+}
+/// UK hour and slot ("YYYY-MM-DDTHH", UK time) for a UTC instant in ms. British Summer Time runs from
+/// 01:00 UTC on the last Sunday of March to 01:00 UTC on the last Sunday of October.
+pub fn uk_slot(ms: i64) -> (u32, String) {
+    let hour_ms = 3_600_000;
+    let (y, _, _) = civil(ms.div_euclid(86_400_000));
+    let start = last_sunday(y, 3) * 86_400_000 + hour_ms;
+    let end = last_sunday(y, 10) * 86_400_000 + hour_ms;
+    let local = if (start..end).contains(&ms) { ms + hour_ms } else { ms };
+    let days = local.div_euclid(86_400_000);
+    let h = (local.rem_euclid(86_400_000) / hour_ms) as u32;
+    let (y, m, d) = civil(days);
+    (h, format!("{y:04}-{m:02}-{d:02}T{h:02}"))
+}
+
+/// The UK hours in a step's `schedule` (numbers or "7, 18"); out-of-range values are dropped.
+pub fn schedule_hours(config: &Value) -> Vec<u32> {
+    let raw: Vec<Value> = match config.get("schedule") {
+        Some(Value::Array(a)) => a.clone(),
+        Some(Value::String(s)) => s.split([',', ' ']).filter(|t| !t.is_empty()).map(|t| json!(t)).collect(),
+        Some(Value::Number(n)) => vec![Value::Number(n.clone())],
+        _ => vec![],
+    };
+    let mut hs: Vec<u32> = raw.iter().filter_map(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())))
+        .filter(|h| *h < 24).map(|h| h as u32).collect();
+    hs.sort_unstable();
+    hs.dedup();
+    hs
+}
+
+/// Boards that have flow steps, in first-seen order.
+pub fn boards<'a>(events: impl IntoIterator<Item = &'a Value>) -> Vec<String> {
+    let mut out: Vec<String> = vec![];
+    for e in events {
+        if e.get("kind").and_then(Value::as_str) != Some("flow.node") { continue; }
+        let b = e.pointer("/body/board").and_then(Value::as_str).unwrap_or("main").to_string();
+        if !out.contains(&b) { out.push(b); }
+    }
+    out
+}
+
+/// (board, start step, slot) for every scheduled start that is due at `now_ms` and hasn't run in this slot.
+pub fn due(events: &[Value], now_ms: i64) -> Vec<(String, String, String)> {
+    let (hour, slot) = uk_slot(now_ms);
+    let ran = |board: &str, start: &str| events.iter().any(|e| e.get("kind").and_then(Value::as_str) == Some("flow.run")
+        && e.pointer("/body/slot").and_then(Value::as_str) == Some(slot.as_str())
+        && e.pointer("/body/start").and_then(Value::as_str) == Some(start)
+        && e.pointer("/body/board").and_then(Value::as_str).unwrap_or("main") == board);
+    let mut out = vec![];
+    for board in boards(events) {
+        let f = fold(events, &board);
+        for (id, n) in &f.nodes {
+            if inputs_of(&f, id).is_empty() && schedule_hours(&n.config).contains(&hour) && !ran(&board, id) {
+                out.push((board.clone(), id.clone(), slot.clone()));
+            }
+        }
+    }
+    out
+}
+
+/// Keys already posted to `item` by a post step with "only new" on (comments carry `key`).
+pub fn posted_keys<'a>(events: impl IntoIterator<Item = &'a Value>, item: &str) -> std::collections::HashSet<String> {
+    events.into_iter()
+        .filter(|e| e.get("kind").and_then(Value::as_str) == Some("comment") && e.get("item").and_then(Value::as_str) == Some(item))
+        .filter_map(|e| e.pointer("/body/key").and_then(Value::as_str).map(str::to_string))
+        .collect()
+}
