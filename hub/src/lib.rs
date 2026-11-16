@@ -221,50 +221,94 @@ impl Record {
             "note": "ms counts only time spent waiting on the network or storage: Cloudflare freezes the clock while code computes (a timing-attack defence), so ms 0 means no waiting, not no work. 'not offered' means a client asked for a method this hub does not have; it is a probe, not a failure." }))
     }
 
-    /// I1: the Private tier. Rows are sealed per owner (hub_core::private) and kept apart from the signed record.
-    fn private_key(&self, owner: &str) -> Option<[u8; 32]> {
-        self.secret_opt("PRIVATE_SEED").map(|s| hub_core::private::owner_key(&s, owner))
+    /// I1: the Private tier (A-spec-identity envelope). PRIVATE_SEED gives the key-encryption key; each owner has a
+    /// random data key per version, stored only wrapped. If the secret was rotated, PRIVATE_SEED_PREVIOUS opens the
+    /// old wrapping once and the key is re-wrapped with the current secret; rows are never re-encrypted.
+    fn private_ready(&self) -> bool {
+        self.secret_opt("PRIVATE_SEED").is_some()
     }
 
-    fn private_table(&self) -> Result<SqlStorage> {
+    fn private_tables(&self) -> Result<SqlStorage> {
         let sql = self.sql();
-        sql.exec("CREATE TABLE IF NOT EXISTS private (seq INTEGER PRIMARY KEY AUTOINCREMENT, owner TEXT NOT NULL, path TEXT NOT NULL, doc_id TEXT NOT NULL, blob TEXT NOT NULL, UNIQUE(owner, path, doc_id))", None)?;
+        sql.exec("CREATE TABLE IF NOT EXISTS private_keys (owner TEXT NOT NULL, version INTEGER NOT NULL, wrapped TEXT NOT NULL, PRIMARY KEY (owner, version))", None)?;
+        sql.exec("CREATE TABLE IF NOT EXISTS private (seq INTEGER PRIMARY KEY AUTOINCREMENT, owner TEXT NOT NULL, key_version INTEGER NOT NULL, path TEXT NOT NULL, doc_id TEXT NOT NULL, blob TEXT NOT NULL, UNIQUE(owner, path, doc_id))", None)?;
         Ok(sql)
+    }
+
+    fn nonce() -> Result<[u8; hub_core::private::NONCE_LEN]> {
+        let mut n = [0u8; hub_core::private::NONCE_LEN];
+        getrandom::getrandom(&mut n).map_err(|e| Error::RustError(e.to_string()))?;
+        Ok(n)
+    }
+
+    /// The owner's data keys by version. `create` makes version 1 if the owner has none yet.
+    fn owner_deks(&self, owner: &str, create: bool) -> Result<Vec<(u32, [u8; 32])>> {
+        use hub_core::private::{kek, unwrap_dek, wrap_dek};
+        let cur = kek(&self.secret_opt("PRIVATE_SEED").ok_or_else(|| Error::RustError("PRIVATE_SEED is not set".into()))?);
+        let prev = self.secret_opt("PRIVATE_SEED_PREVIOUS").map(|s| kek(&s));
+        let o = owner.to_ascii_lowercase();
+        let sql = self.private_tables()?;
+        #[derive(Deserialize)]
+        struct K { version: f64, wrapped: String }
+        let rows: Vec<K> = sql.exec("SELECT version, wrapped FROM private_keys WHERE owner = ? ORDER BY version", vec![o.clone().into()])?.to_array()?;
+        let mut out = vec![];
+        for r in rows {
+            let v = r.version as u32;
+            if let Some(d) = unwrap_dek(&cur, &o, v, &r.wrapped) {
+                out.push((v, d));
+            } else if let Some(d) = prev.as_ref().and_then(|p| unwrap_dek(p, &o, v, &r.wrapped)) {
+                let w = wrap_dek(&cur, &Self::nonce()?, &o, v, &d);   // rotation: re-wrap with the current secret
+                sql.exec("UPDATE private_keys SET wrapped = ? WHERE owner = ? AND version = ?", vec![w.into(), o.clone().into(), (v as f64).into()])?;
+                out.push((v, d));
+            } else {
+                return Err(Error::RustError("a private data key can't be opened with PRIVATE_SEED or PRIVATE_SEED_PREVIOUS".into()));
+            }
+        }
+        if out.is_empty() && create {
+            let mut d = [0u8; 32];
+            getrandom::getrandom(&mut d).map_err(|e| Error::RustError(e.to_string()))?;
+            let w = wrap_dek(&cur, &Self::nonce()?, &o, 1, &d);
+            sql.exec("INSERT OR IGNORE INTO private_keys (owner, version, wrapped) VALUES (?, 1, ?)", vec![o.into(), w.into()])?;
+            out.push((1, d));
+        }
+        Ok(out)
     }
 
     /// Store one private event. Ok(false) if that doc id is already there (a repeat is harmless).
     fn private_put(&self, owner: &str, path: &str, doc_id: &str, event: &serde_json::Value) -> Result<bool> {
-        let key = self.private_key(owner).ok_or_else(|| Error::RustError("PRIVATE_SEED is not set".into()))?;
-        let mut nonce = [0u8; hub_core::private::NONCE_LEN];
-        getrandom::getrandom(&mut nonce).map_err(|e| Error::RustError(e.to_string()))?;
-        let plain = serde_json::to_vec(event).map_err(|e| Error::RustError(e.to_string()))?;
-        let blob = hub_core::private::seal(&key, &nonce, owner, path, doc_id, &plain);
-        let sql = self.private_table()?;
+        let o = owner.to_ascii_lowercase();
+        let sql = self.private_tables()?;
         #[derive(Deserialize)]
         struct N { n: f64 }
         let before: Vec<N> = sql.exec("SELECT COUNT(*) AS n FROM private WHERE owner = ? AND path = ? AND doc_id = ?",
-            vec![owner.to_ascii_lowercase().into(), path.into(), doc_id.into()])?.to_array()?;
+            vec![o.clone().into(), path.into(), doc_id.into()])?.to_array()?;
         if before.first().map(|r| r.n > 0.0).unwrap_or(false) { return Ok(false); }
-        sql.exec("INSERT OR IGNORE INTO private (owner, path, doc_id, blob) VALUES (?, ?, ?, ?)",
-            vec![owner.to_ascii_lowercase().into(), path.into(), doc_id.into(), blob.into()])?;
+        let (v, dek) = *self.owner_deks(owner, true)?.last().expect("created above");
+        let plain = serde_json::to_vec(event).map_err(|e| Error::RustError(e.to_string()))?;
+        let blob = hub_core::private::seal(&dek, &Self::nonce()?, &o, v, path, doc_id, &plain);
+        sql.exec("INSERT OR IGNORE INTO private (owner, key_version, path, doc_id, blob) VALUES (?, ?, ?, ?, ?)",
+            vec![o.into(), (v as f64).into(), path.into(), doc_id.into(), blob.into()])?;
         Ok(true)
     }
 
     /// An owner's private events, oldest first, as {doc_id, event, path}. `path` None means every path.
-    /// Rows that fail to open (wrong secret, tampering) are counted, never returned.
+    /// Rows that fail to open (tampering, a lost key) are counted, never returned.
     fn private_list(&self, owner: &str, path: Option<&str>) -> Result<(Vec<serde_json::Value>, usize)> {
-        let key = self.private_key(owner).ok_or_else(|| Error::RustError("PRIVATE_SEED is not set".into()))?;
-        let sql = self.private_table()?;
+        let deks: std::collections::HashMap<u32, [u8; 32]> = self.owner_deks(owner, false)?.into_iter().collect();
+        let sql = self.private_tables()?;
         #[derive(Deserialize)]
-        struct Row { path: String, doc_id: String, blob: String }
+        struct Row { key_version: f64, path: String, doc_id: String, blob: String }
         let o = owner.to_ascii_lowercase();
         let rows: Vec<Row> = match path {
-            Some(p) => sql.exec("SELECT path, doc_id, blob FROM private WHERE owner = ? AND path = ? ORDER BY seq", vec![o.into(), p.into()])?,
-            None => sql.exec("SELECT path, doc_id, blob FROM private WHERE owner = ? ORDER BY seq", vec![o.into()])?,
+            Some(p) => sql.exec("SELECT key_version, path, doc_id, blob FROM private WHERE owner = ? AND path = ? ORDER BY seq", vec![o.clone().into(), p.into()])?,
+            None => sql.exec("SELECT key_version, path, doc_id, blob FROM private WHERE owner = ? ORDER BY seq", vec![o.clone().into()])?,
         }.to_array()?;
         let (mut out, mut unreadable) = (vec![], 0);
         for r in rows {
-            match hub_core::private::open(&key, owner, &r.path, &r.doc_id, &r.blob).and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok()) {
+            let v = r.key_version as u32;
+            let ev = deks.get(&v).and_then(|d| hub_core::private::open(d, &o, v, &r.path, &r.doc_id, &r.blob))
+                .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok());
+            match ev {
                 Some(ev) => out.push(serde_json::json!({"doc_id": r.doc_id, "event": ev, "path": r.path})),
                 None => unreadable += 1,
             }
@@ -645,7 +689,7 @@ impl Record {
                         }
                     }
                     (Method::Get, "/studio/api/private/export", Some(l)) => {
-                        if self.private_key(&l).is_none() {
+                        if !self.private_ready() {
                             json_status(&serde_json::json!({"error": "the private store isn't set up on this hub yet (PRIVATE_SEED)"}), 503)?
                         } else {
                             let (rows, unreadable) = self.private_list(&l, None)?;
@@ -657,7 +701,7 @@ impl Record {
                         let path = url.query_pairs().find(|(a, _)| a == "path").map(|(_, v)| v.to_string()).unwrap_or_default();
                         if !hub_core::private::path_owned_by(&path, &l) {
                             json_status(&serde_json::json!({"error": "that private path isn't yours"}), 403)?
-                        } else if self.private_key(&l).is_none() {
+                        } else if !self.private_ready() {
                             json_status(&serde_json::json!({"error": "the private store isn't set up on this hub yet (PRIVATE_SEED)"}), 503)?
                         } else {
                             let (rows, unreadable) = self.private_list(&l, Some(&path))?;
@@ -680,7 +724,7 @@ impl Record {
                                 json_status(&serde_json::json!({"error": "need {path, doc_id, event:{kind, ts, ...}}"}), 400)?
                             } else if size > hub_core::private::MAX_EVENT_BYTES {
                                 json_status(&serde_json::json!({"error": "private event too large (64 KB max); use an encrypted file instead"}), 413)?
-                            } else if self.private_key(&l).is_none() {
+                            } else if !self.private_ready() {
                                 json_status(&serde_json::json!({"error": "the private store isn't set up on this hub yet (PRIVATE_SEED)"}), 503)?
                             } else {
                                 let added = self.private_put(&l, &path, &doc_id, &ev)?;
@@ -790,7 +834,7 @@ impl Record {
                         let path = m.pointer("/params/arguments/path").and_then(|v| v.as_str()).map(str::to_string);
                         let v = if !on {
                             mcp::tool_result(serde_json::json!({"error": "private reading is switched off for the connector on this hub (CONNECTOR_PRIVATE_READ)"}), true)
-                        } else if self.private_key(&login).is_none() {
+                        } else if !self.private_ready() {
                             mcp::tool_result(serde_json::json!({"error": "the private store isn't set up on this hub yet (PRIVATE_SEED)"}), true)
                         } else if path.as_deref().map(|p| !hub_core::private::path_owned_by(p, &login)).unwrap_or(false) {
                             mcp::tool_result(serde_json::json!({"error": "that private path isn't yours"}), true)

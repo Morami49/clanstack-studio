@@ -146,15 +146,21 @@ test("private items follow you to another browser or device (I1)", async () => {
   assert.equal(got.docs[0].data().body.id, "P-1");
 });
 
-test("items kept only in this browser before I1 are uploaded once, and not twice", async () => {
+test("items kept only in this browser before I1 are uploaded only after you press Upload, and only once", async () => {
   const H = fakeHub();
   const store = new Map([["nodach.priv." + PATH, JSON.stringify([{ ...P1, _id: "wold1" }])]]);
-  const db = await boot(H, {}, store).window.claude.use("db");
+  const dom = fakeDom();
+  const ctx = boot(H, { document: dom }, store);
+  const db = await ctx.window.claude.use("db");
   const got = await db.collection(PATH).orderBy("ts", "desc").limit(10).get();
-  assert.equal(got.size, 1);
+  assert.equal(got.size, 1, "still shown");
+  assert.equal(H.priv.length, 0, "nothing uploaded without consent");
+  const bar = dom.getElementById("nodach-private-offer");
+  assert.match(bar.textContent, /1 private item is saved only in this browser/);
+  bar.children[0].onclick(); await next(); await next();
   assert.equal(H.priv.length, 1);
   assert.equal(H.priv[0].doc_id, "wold1");
-  const db2 = await boot(H, {}, store).window.claude.use("db");   // same browser, next visit
+  const db2 = await boot(H, { document: fakeDom() }, store).window.claude.use("db");   // same browser, next visit
   await db2.collection(PATH).orderBy("ts", "desc").limit(10).get();
   assert.equal(H.priv.length, 1, "no duplicate upload");
 });

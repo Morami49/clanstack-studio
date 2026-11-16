@@ -86,7 +86,8 @@
   /* ---------------------------------------------------------------- private areas (I1, Q53 A)
    * Kept on the hub, encrypted with your own key and apart from the shared record, so they follow you to any
    * device. This browser keeps a copy plus anything not yet sent (offline, or a hub without the private store),
-   * and sends it when the hub can take it. Items saved only in this browser before I1 are uploaded once. */
+   * and sends it when the hub can take it. Items saved only in this browser before I1 are uploaded only when you
+ * press the button that offers it (consent first, A-spec-identity); until then they stay here and still show. */
   const isPrivate = path => path.startsWith("data/users/");
   const privKey = path => "nodach.priv." + path;
   const pendKey = "nodach.priv.pending";
@@ -123,10 +124,10 @@
         const pendIds = new Set(local(pendKey, "[]").map(p => p.ev._id));
         // one-time move of items that lived only in this browser before I1
         const onlyHere = local(privKey(path), "[]").filter(x => x && x._id && !have.has(x._id) && !pendIds.has(x._id));
-        const pend = local(pendKey, "[]"); for (const ev of onlyHere) pend.push({ path, ev }); save(pendKey, pend);
-        const mine = pend.filter(p => p.path === path).map(p => p.ev);   // shown now, whether or not the send below succeeds
+        if (onlyHere.length) offerUpload(path, onlyHere);
+        const mine = local(pendKey, "[]").filter(p => p.path === path).map(p => p.ev);   // shown now, sent or not
         await flushPending();
-        remember(path, [...server, ...mine]);
+        remember(path, [...server, ...onlyHere, ...mine]);
       } catch (e) {
         if (e && e.status === 503) privServer = false;     // this hub has no private store yet: stay browser-only
         priv.set(path, local(privKey(path), "[]"));
@@ -135,6 +136,25 @@
     })();
     privLoaded.set(path, pr);
     return pr;
+  }
+  const offers = new Map();          // path -> items only in this browser, waiting for your go-ahead
+  function offerUpload(path, rows) {
+    offers.set(path, rows);
+    const n = [...offers.values()].reduce((a, r) => a + r.length, 0);
+    const el = typeof document.getElementById === "function" && document.getElementById("nodach-private-offer");
+    if (el && el.remove) el.remove();
+    bar("nodach-private-offer", `${n} private item${n === 1 ? " is" : "s are"} saved only in this browser. Upload ${n === 1 ? "it" : "them"} to your private store (encrypted, on any device)?`,
+      "bottom:0;background:#2d3b2d;color:#fff", { label: "Upload", onclick: () => uploadPrivate() });
+  }
+  async function uploadPrivate() {
+    const pend = local(pendKey, "[]");
+    let n = 0;
+    for (const [path, rows] of offers) for (const ev of rows) { pend.push({ path, ev }); n++; }
+    save(pendKey, pend); offers.clear();
+    await flushPending();
+    const el = typeof document.getElementById === "function" && document.getElementById("nodach-private-offer");
+    if (el && el.remove) el.remove();
+    return n;
   }
   function privAdd(path, ev) {
     const rows = [...privRows(path), ev];
@@ -256,7 +276,7 @@
     document.addEventListener("visibilitychange", () => { if (!document.hidden) checkVersion(); });
   }
 
-  window.__nodach = { pull, shared, standalone: true, checkVersion, env: ENV, build: BUILD };
+  window.__nodach = { pull, shared, standalone: true, checkVersion, env: ENV, build: BUILD, uploadPrivate };
   window.claude = {
     use: async n => {
       if (n === "db") { try { await me(); return db; } catch { return null; } }

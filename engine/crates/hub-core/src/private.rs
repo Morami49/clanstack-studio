@@ -6,14 +6,16 @@
 //!
 //! Pure logic: no clock, no randomness, no network. The node supplies the hub secret and a fresh nonce.
 //!
-//! - Each owner gets their own key: SHA-256 over a fixed label, the hub secret and the lower-cased login.
-//! - Each row is AES-256-GCM sealed. The owner, the path and the doc id are bound in as associated data,
-//!   so a sealed row copied to another owner, path or id fails to open instead of leaking.
+//! - Envelope keys (A-spec-identity): a key-encryption key (KEK) comes from the hub secret; each owner has a random
+//!   data key (DEK), stored only wrapped by the KEK, with a version. Rotating the hub secret re-wraps the small DEK
+//!   table (the node tries the previous secret, then re-wraps with the new one); the data itself never changes.
+//! - Each row is AES-256-GCM sealed under the owner's DEK. The owner, key version, path and doc id are bound in as
+//!   associated data, so a sealed row copied to another owner, path or id fails to open instead of leaking.
 //! - The Sealed tier (passphrase only the owner knows, I4) is a layer on top: the browser encrypts first,
 //!   and the hub stores the result here like any other private row, without being able to read it.
 //!
-//! Losing the hub secret makes every private row unreadable, so the node never rotates it on its own,
-//! and the owner can export a decrypted copy at any time (`/studio/api/private/export`).
+//! Losing the hub secret (with no previous copy kept) makes every private row unreadable, so the owner can export a
+//! decrypted copy at any time (`/studio/api/private/export`).
 
 use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Nonce};
@@ -23,36 +25,57 @@ pub const NONCE_LEN: usize = 12;
 /// Largest private event a browser may send (bytes of JSON). Files have their own encrypted path.
 pub const MAX_EVENT_BYTES: usize = 64 * 1024;
 
-pub fn owner_key(secret: &str, owner: &str) -> [u8; 32] {
+/// The key-encryption key: SHA-256 over a fixed label and the hub secret. It only ever wraps data keys.
+pub fn kek(secret: &str) -> [u8; 32] {
     let mut h = Sha256::new();
-    h.update(b"nodach-private-v1\0");
+    h.update(b"nodach-private-kek-v1\0");
     h.update(secret.trim().as_bytes());
-    h.update(b"\0");
-    h.update(owner.to_ascii_lowercase().as_bytes());
     h.finalize().into()
 }
 
-fn aad(owner: &str, path: &str, doc_id: &str) -> Vec<u8> {
-    format!("{}\0{}\0{}", owner.to_ascii_lowercase(), path, doc_id).into_bytes()
-}
-
-/// Seal one private row. Returns hex(nonce || ciphertext+tag).
-pub fn seal(key: &[u8; 32], nonce: &[u8; NONCE_LEN], owner: &str, path: &str, doc_id: &str, plaintext: &[u8]) -> String {
+fn gcm_seal(key: &[u8; 32], nonce: &[u8; NONCE_LEN], aad: &[u8], plaintext: &[u8]) -> String {
     let c = Aes256Gcm::new_from_slice(key).expect("32-byte key");
-    let ct = c.encrypt(Nonce::from_slice(nonce), Payload { msg: plaintext, aad: &aad(owner, path, doc_id) })
+    let ct = c.encrypt(Nonce::from_slice(nonce), Payload { msg: plaintext, aad })
         .expect("AES-GCM encryption cannot fail for in-memory buffers");
     let mut out = nonce.to_vec();
     out.extend(ct);
     hex::encode(out)
 }
 
-/// Open a sealed row. None if it was tampered with, or belongs to another owner, path or doc id.
-pub fn open(key: &[u8; 32], owner: &str, path: &str, doc_id: &str, blob_hex: &str) -> Option<Vec<u8>> {
+fn gcm_open(key: &[u8; 32], aad: &[u8], blob_hex: &str) -> Option<Vec<u8>> {
     let raw = hex::decode(blob_hex).ok()?;
     if raw.len() < NONCE_LEN + 16 { return None; }
     let (n, ct) = raw.split_at(NONCE_LEN);
     let c = Aes256Gcm::new_from_slice(key).ok()?;
-    c.decrypt(Nonce::from_slice(n), Payload { msg: ct, aad: &aad(owner, path, doc_id) }).ok()
+    c.decrypt(Nonce::from_slice(n), Payload { msg: ct, aad }).ok()
+}
+
+fn dek_aad(owner: &str, version: u32) -> Vec<u8> {
+    format!("dek\0{}\0{}", owner.to_ascii_lowercase(), version).into_bytes()
+}
+
+fn row_aad(owner: &str, version: u32, path: &str, doc_id: &str) -> Vec<u8> {
+    format!("row\0{}\0{}\0{}\0{}", owner.to_ascii_lowercase(), version, path, doc_id).into_bytes()
+}
+
+/// Wrap an owner's data key under the KEK (stored as hex in the node's key table).
+pub fn wrap_dek(kek: &[u8; 32], nonce: &[u8; NONCE_LEN], owner: &str, version: u32, dek: &[u8; 32]) -> String {
+    gcm_seal(kek, nonce, &dek_aad(owner, version), dek)
+}
+
+/// Unwrap a data key. None if the KEK is wrong (e.g. the secret changed) or the row belongs to someone else.
+pub fn unwrap_dek(kek: &[u8; 32], owner: &str, version: u32, wrapped_hex: &str) -> Option<[u8; 32]> {
+    gcm_open(kek, &dek_aad(owner, version), wrapped_hex)?.try_into().ok()
+}
+
+/// Seal one private row under the owner's data key. Returns hex(nonce || ciphertext+tag).
+pub fn seal(dek: &[u8; 32], nonce: &[u8; NONCE_LEN], owner: &str, version: u32, path: &str, doc_id: &str, plaintext: &[u8]) -> String {
+    gcm_seal(dek, nonce, &row_aad(owner, version, path, doc_id), plaintext)
+}
+
+/// Open a sealed row. None if it was tampered with, or belongs to another owner, key version, path or doc id.
+pub fn open(dek: &[u8; 32], owner: &str, version: u32, path: &str, doc_id: &str, blob_hex: &str) -> Option<Vec<u8>> {
+    gcm_open(dek, &row_aad(owner, version, path, doc_id), blob_hex)
 }
 
 /// A private path belongs to `owner` only if it is `data/users/<owner>/<rest>` or `data/users/github:<owner>/<rest>`
@@ -73,52 +96,67 @@ mod tests {
 
     const S: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     const N: [u8; 12] = [7; 12];
+    const D: [u8; 32] = [3; 32];
+    const P: &str = "data/users/Morami49/vault/events";
 
     #[test]
     fn round_trip() {
-        let k = owner_key(S, "Morami49");
-        let b = seal(&k, &N, "Morami49", "data/users/Morami49/vault/events", "w1", br#"{"kind":"item.create"}"#);
-        assert_eq!(open(&k, "morami49", "data/users/Morami49/vault/events", "w1", &b).unwrap(), br#"{"kind":"item.create"}"#);
+        let b = seal(&D, &N, "Morami49", 1, P, "w1", br#"{"kind":"item.create"}"#);
+        assert_eq!(open(&D, "morami49", 1, P, "w1", &b).unwrap(), br#"{"kind":"item.create"}"#);
     }
 
     #[test]
     fn ciphertext_hides_the_content() {
-        let k = owner_key(S, "a");
-        let b = seal(&k, &N, "a", "data/users/a/vault/events", "w1", b"my secret plans");
+        let b = seal(&D, &N, "a", 1, "data/users/a/v", "w1", b"my secret plans");
         assert!(!b.contains(&hex::encode(b"secret")));
     }
 
     #[test]
-    fn another_owner_cannot_open_it() {
-        let b = seal(&owner_key(S, "alice"), &N, "alice", "data/users/alice/v", "w1", b"x");
-        assert!(open(&owner_key(S, "bob"), "bob", "data/users/alice/v", "w1", &b).is_none());
-        // even with alice's key, claiming the row for bob fails, because the owner is bound in
-        assert!(open(&owner_key(S, "alice"), "bob", "data/users/alice/v", "w1", &b).is_none());
+    fn another_owner_or_version_cannot_open_it() {
+        let b = seal(&D, &N, "alice", 1, "data/users/alice/v", "w1", b"x");
+        assert!(open(&D, "bob", 1, "data/users/alice/v", "w1", &b).is_none(), "owner is bound in");
+        assert!(open(&D, "alice", 2, "data/users/alice/v", "w1", &b).is_none(), "key version is bound in");
+        assert!(open(&[4; 32], "alice", 1, "data/users/alice/v", "w1", &b).is_none(), "another data key");
     }
 
     #[test]
     fn moving_a_row_to_another_path_or_id_fails() {
-        let k = owner_key(S, "a");
-        let b = seal(&k, &N, "a", "data/users/a/vault/events", "w1", b"x");
-        assert!(open(&k, "a", "data/users/a/other", "w1", &b).is_none());
-        assert!(open(&k, "a", "data/users/a/vault/events", "w2", &b).is_none());
+        let b = seal(&D, &N, "a", 1, "data/users/a/vault/events", "w1", b"x");
+        assert!(open(&D, "a", 1, "data/users/a/other", "w1", &b).is_none());
+        assert!(open(&D, "a", 1, "data/users/a/vault/events", "w2", &b).is_none());
     }
 
     #[test]
     fn tampering_is_detected() {
-        let k = owner_key(S, "a");
-        let mut b = seal(&k, &N, "a", "data/users/a/v", "w1", b"hello").into_bytes();
+        let mut b = seal(&D, &N, "a", 1, "data/users/a/v", "w1", b"hello").into_bytes();
         let last = b.len() - 1;
         b[last] = if b[last] == b'0' { b'1' } else { b'0' };
-        assert!(open(&k, "a", "data/users/a/v", "w1", std::str::from_utf8(&b).unwrap()).is_none());
-        assert!(open(&k, "a", "data/users/a/v", "w1", "zz").is_none());
-        assert!(open(&k, "a", "data/users/a/v", "w1", "00").is_none());
+        assert!(open(&D, "a", 1, "data/users/a/v", "w1", std::str::from_utf8(&b).unwrap()).is_none());
+        assert!(open(&D, "a", 1, "data/users/a/v", "w1", "zz").is_none());
+        assert!(open(&D, "a", 1, "data/users/a/v", "w1", "00").is_none());
     }
 
     #[test]
-    fn a_different_hub_secret_cannot_open_it() {
-        let b = seal(&owner_key(S, "a"), &N, "a", "data/users/a/v", "w1", b"x");
-        assert!(open(&owner_key("other-secret", "a"), "a", "data/users/a/v", "w1", &b).is_none());
+    fn data_keys_unwrap_only_with_the_right_secret_and_owner() {
+        let w = wrap_dek(&kek(S), &N, "Morami49", 1, &D);
+        assert_eq!(unwrap_dek(&kek(S), "morami49", 1, &w), Some(D));
+        assert_eq!(unwrap_dek(&kek("other-secret"), "morami49", 1, &w), None);
+        assert_eq!(unwrap_dek(&kek(S), "bob", 1, &w), None);
+        assert_eq!(unwrap_dek(&kek(S), "morami49", 2, &w), None);
+        assert!(!w.contains(&hex::encode(D)), "the data key is never stored in the clear");
+    }
+
+    #[test]
+    fn rotating_the_hub_secret_rewraps_keys_and_keeps_every_row_readable() {
+        let (old, new) = (kek(S), kek("a-new-secret"));
+        let wrapped_old = wrap_dek(&old, &N, "a", 1, &D);
+        let row = seal(&D, &[9; 12], "a", 1, "data/users/a/v", "w1", b"kept");
+        // the node: current secret fails, previous works, so re-wrap with the current one
+        assert!(unwrap_dek(&new, "a", 1, &wrapped_old).is_none());
+        let dek = unwrap_dek(&old, "a", 1, &wrapped_old).unwrap();
+        let wrapped_new = wrap_dek(&new, &[5; 12], "a", 1, &dek);
+        let dek2 = unwrap_dek(&new, "a", 1, &wrapped_new).unwrap();
+        assert_eq!(open(&dek2, "a", 1, "data/users/a/v", "w1", &row).unwrap(), b"kept");
     }
 
     #[test]
