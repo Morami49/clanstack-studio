@@ -18,6 +18,11 @@ this crate only connects it to Cloudflare Workers and a SQLite-backed Durable Ob
   only from `NODE_SECRET_*` (GitHub secrets `NODE_SECRET_REED`, `NODE_SECRET_GEMINI`, `NODE_SECRET_ADZUNA_ID`, `NODE_SECRET_ADZUNA_KEY`).
 - Scheduled flows (D-176): the record's Durable Object sets an hourly alarm on first request; each wake-up runs start steps
   whose `schedule` holds the current UK hour, once per slot, as `schedule`. Logged as `/alarm`.
+- Private tier (I1, D-nodach-identity, Q53 A): `GET/POST /studio/api/private` keep each owner's private items on the hub,
+  sealed with AES-256-GCM under a per-owner key derived from `PRIVATE_SEED` (`hub_core::private`), in a `private` table
+  apart from the signed record. Owner, path and doc id are bound into each row, so rows can't be moved between owners.
+  `GET /studio/api/private/export` is the owner's decrypted backup. The connector's `read_private` tool serves the same
+  rows to the signed-in owner when `CONNECTOR_PRIVATE_READ = "on"`. `PRIVATE_SEED` is generated once and never rotated.
 - Local run: `npx wrangler@4 dev --local` with a `.dev.vars` file holding `HUB_WRITE_TOKEN` and `IMPORTER_SEED` (never committed).
 - Deploy: automatic after green CI on main (`.github/workflows/hub-deploy.yml`), once the owner adds the Cloudflare secrets.
 - Tested locally 2026-11-06: 24 Studio events imported as 25 signed facts (importer identity + 24), re-import added 0,

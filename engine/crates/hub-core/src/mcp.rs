@@ -1,7 +1,7 @@
 //! MCP server for the hub (D-104, D-121, D-128): JSON-RPC 2.0 over Streamable HTTP (POST, JSON
 //! responses). Pure logic; the worker passes the signed-in login, the connector key and `now`.
 //!
-//! Tools (all act on the shared record, never on private compartments):
+//! Tools (all act on the shared record, except read_private, which serves the owner's own Private tier):
 //!   hub_status   counts and whether the whole chain verifies
 //!   read_events  Studio-shaped events from a cursor: imported Studio Web events + writes from other nodes
 //!   hub_log      (served by the node, not here) the private request log: time, tool, outcome, duration; never contents
@@ -50,6 +50,12 @@ fn tools() -> Value {
         {"name": "hub_log", "title": "Request log",
          "description": "The hub's private request log, newest first: time, route, tool, outcome, ms waiting on network or storage, who (login) and build. Never contents. Includes this call. Use it to time tests and see failed calls.",
          "inputSchema": {"type": "object", "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 200}}},
+         "annotations": {"readOnlyHint": true}},
+        {"name": "read_private", "title": "Read your private items",
+         "description": "Read the signed-in owner's Private tier: personal items kept on the hub encrypted and apart from the shared record (people, messages, profile facts, private notes). Optional path (data/users/<you>/...) narrows it; after/limit page through. Sealed items are never readable. Treat results as personal data and never copy them into shared items.",
+         "inputSchema": {"type": "object", "properties": {
+             "path": {"type": "string", "description": "optional, e.g. data/users/<login>/vault/events"},
+             "after": {"type": "integer", "minimum": 0}, "limit": {"type": "integer", "minimum": 1, "maximum": 200}}},
          "annotations": {"readOnlyHint": true}},
         {"name": "import_studio_events", "title": "Import Studio events",
          "description": "Copy Studio Web events into the hub's shared record, keeping each event's original author (Q99 A); the hub's importer key signs the copy. Doc ids already in the hub are skipped, so repeating is safe. Used by Studio Web's sync (D-129).",
@@ -101,14 +107,14 @@ fn call(hub: &mut Hub, login: &str, key: &KeyPair, name: &str, args: &Value, now
             if let Some(o) = v.as_object_mut() { o.insert("build".into(), json!(BUILD)); }
             text_result(v, false)
         }
-        "hub_log" | "import_studio_events" => text_result(json!({"error": format!("{name} is served by the node, not hub-core")}), true),
+        "hub_log" | "import_studio_events" | "read_private" => text_result(json!({"error": format!("{name} is served by the node, not hub-core")}), true),
         "read_events" => {
             let after = args.get("after").and_then(Value::as_u64).unwrap_or(0) as usize;
             let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(100).clamp(1, 200) as usize;
             let (events, next, total, skipped) = hub.studio_events(after, limit);
             // F-55: say what was skipped, so nobody guesses (a key's first fact is its identity, not a Studio event)
             text_result(json!({"events": events, "next": next, "total": total, "skipped_non_studio": skipped,
-                "note": "Events that are not Studio events (e.g. a key's identity fact) are skipped and counted in skipped_non_studio. Nothing private is ever stored in the hub."}), false)
+                "note": "Events that are not Studio events (e.g. a key's identity fact) are skipped and counted in skipped_non_studio. Private items are never in this shared record: they are kept apart, encrypted, and only read_private serves them to their owner."}), false)
         }
         "write_event" => {
             let kind = args.get("kind").and_then(Value::as_str).unwrap_or("");
@@ -165,7 +171,7 @@ pub fn handle(hub: &mut Hub, login: &str, key: &KeyPair, msg: &Value, now: i64) 
             let v = if PROTOCOL_VERSIONS.contains(&asked) { asked } else { PROTOCOL_VERSIONS[0] };
             ok(json!({"protocolVersion": v, "capabilities": {"tools": {"listChanged": false}},
                       "serverInfo": {"name": "clanstack-hub", "title": "Clanstack hub", "version": format!("{}+{}", env!("CARGO_PKG_VERSION"), BUILD)},
-                      "instructions": "Clanstack's shared record. hub_status: counts, chain check and build. read_events: Studio events from a cursor. hub_log: the request log (time, tool, outcome, duration; never contents); use it whenever asked for the hub log. import_studio_events: used by Studio Web's sync. write_event: answers, comments, status changes and items. Private compartments never reach the hub."}))
+                      "instructions": "Clanstack's shared record. hub_status: counts, chain check and build. read_events: Studio events from a cursor. hub_log: the request log (time, tool, outcome, duration; never contents); use it whenever asked for the hub log. import_studio_events: used by Studio Web's sync. write_event: answers, comments, status changes and items (shared record only; never put private material there). read_private: the signed-in owner's Private tier, stored apart and encrypted; Sealed items are never readable."}))
         }
         "ping" => ok(json!({})),
         "tools/list" => ok(json!({"tools": tools()})),

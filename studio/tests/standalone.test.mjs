@@ -7,8 +7,8 @@ import vm from "node:vm";
 const SHIM = readFileSync(new URL("../standalone.js", import.meta.url), "utf8");
 const GENESIS = { label: "test", created: "2026-11-04T00:00:00Z", items: [{ id: "D-001", type: "decision", title: "x" }] };
 
-function fakeHub({ signedIn = true, docs = [] } = {}) {
-  const H = { docs: [...docs], posts: [], redirects: [] };
+function fakeHub({ signedIn = true, docs = [], privateStore = true } = {}) {
+  const H = { docs: [...docs], posts: [], redirects: [], priv: [], privPosts: 0, privateStore };
   H.fetch = async (url, opts = {}) => {
     const u = new URL(url, "https://hub.test");
     const json = (v, status = 200) => ({ ok: status < 400, status, json: async () => v, text: async () => JSON.stringify(v) });
@@ -28,13 +28,24 @@ function fakeHub({ signedIn = true, docs = [] } = {}) {
       if (!H.docs.some(d => d.doc_id === b.doc_id)) H.docs.push({ doc_id: b.doc_id, event: b.event });
       return json({ id: b.doc_id, imported: 1 });
     }
+    if (u.pathname === "/studio/api/private") {
+      if (!H.privateStore) return json({ error: "no private store" }, 503);
+      if ((opts.method || "GET") === "GET") {
+        const path = u.searchParams.get("path");
+        return json({ events: H.priv.filter(r => r.path === path).map(r => ({ doc_id: r.doc_id, event: r.event, path })), unreadable: 0 });
+      }
+      if (opts.headers?.["x-nodach-studio"] !== "1") return json({ error: "csrf" }, 403);
+      const b = JSON.parse(opts.body); H.privPosts++;
+      const dup = H.priv.some(r => r.path === b.path && r.doc_id === b.doc_id);
+      if (!dup) H.priv.push(b);
+      return json({ id: b.doc_id, stored: !dup });
+    }
     return json({ error: "not found" }, 404);
   };
   return H;
 }
 
-function boot(H, extra = {}) {
-  const store = new Map();
+function boot(H, extra = {}, store = new Map()) {
   const ctx = {
     fetch: H.fetch, setTimeout, clearTimeout, setInterval: () => 0, URL, console,
     document: { hidden: false, addEventListener() {} },
@@ -107,16 +118,61 @@ test("a write goes to the hub with the anti-forgery header and shows at once", a
   assert.equal(seen.at(-1), 1, "the echo from the hub is not counted twice");
 });
 
-test("private items never reach the hub", async () => {
+const PATH = "data/users/github:Morami49/vault/events";
+const P1 = { ts: "2026-11-11T19:00:00Z", kind: "item.create", body: { id: "P-1", private: true } };
+
+test("private items go to the hub's private store, never the shared record (I1)", async () => {
   const H = fakeHub();
-  const ctx = boot(H);
-  const db = await ctx.window.claude.use("db");
-  const path = "data/users/github:Morami49/vault/events";
-  await db.collection(path).add({ ts: "2026-11-11T19:00:00Z", kind: "item.create", body: { id: "P-1", private: true } });
-  assert.equal(H.posts.length, 0);
-  const got = await db.collection(path).orderBy("ts", "desc").limit(10).get();
+  const db = await boot(H).window.claude.use("db");
+  await db.collection(PATH).add(P1);
+  await next();
+  assert.equal(H.posts.length, 0, "nothing private in the shared record");
+  assert.equal(H.priv.length, 1);
+  assert.equal(H.priv[0].path, PATH);
+  assert.equal(H.priv[0].event.body.id, "P-1");
+  assert.equal(H.docs.length, 0);
+  const got = await db.collection(PATH).orderBy("ts", "desc").limit(10).get();
+  assert.equal(got.size, 1);
+});
+
+test("private items follow you to another browser or device (I1)", async () => {
+  const H = fakeHub();
+  const db1 = await boot(H).window.claude.use("db");
+  await db1.collection(PATH).add(P1);
+  await next();
+  const db2 = await boot(H).window.claude.use("db");          // fresh browser: empty localStorage
+  const got = await db2.collection(PATH).orderBy("ts", "desc").limit(10).get();
   assert.equal(got.size, 1);
   assert.equal(got.docs[0].data().body.id, "P-1");
+});
+
+test("items kept only in this browser before I1 are uploaded once, and not twice", async () => {
+  const H = fakeHub();
+  const store = new Map([["nodach.priv." + PATH, JSON.stringify([{ ...P1, _id: "wold1" }])]]);
+  const db = await boot(H, {}, store).window.claude.use("db");
+  const got = await db.collection(PATH).orderBy("ts", "desc").limit(10).get();
+  assert.equal(got.size, 1);
+  assert.equal(H.priv.length, 1);
+  assert.equal(H.priv[0].doc_id, "wold1");
+  const db2 = await boot(H, {}, store).window.claude.use("db");   // same browser, next visit
+  await db2.collection(PATH).orderBy("ts", "desc").limit(10).get();
+  assert.equal(H.priv.length, 1, "no duplicate upload");
+});
+
+test("a hub without the private store keeps private items in this browser, and sends them later", async () => {
+  const H = fakeHub({ privateStore: false });
+  const store = new Map();
+  const db = await boot(H, {}, store).window.claude.use("db");
+  await db.collection(PATH).add(P1);
+  await next();
+  assert.equal(H.priv.length, 0);
+  assert.equal(H.posts.length, 0, "still never in the shared record");
+  assert.equal((await db.collection(PATH).orderBy("ts", "desc").limit(10).get()).size, 1);
+  H.privateStore = true;                                       // the hub gets its private store
+  const db2 = await boot(H, {}, store).window.claude.use("db");
+  const got = await db2.collection(PATH).orderBy("ts", "desc").limit(10).get();
+  assert.equal(got.size, 1);
+  assert.equal(H.priv.length, 1, "sent once the hub could take it");
 });
 
 test("a refused write surfaces as invalid_argument, as the page expects", async () => {

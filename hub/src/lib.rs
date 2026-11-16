@@ -28,6 +28,9 @@
 //! GET  /studio/api/genesis  the genesis seed
 //! GET  /studio/api/events   ?after=N&limit=M → {events:[{doc_id,event}], next, total} (same as the connector's read_events)
 //! POST /studio/api/events   {doc_id, event}: one Studio event, imported with the importer key like Studio Web's sync.
+//! GET  /studio/api/private  ?path=data/users/<you>/... → {events:[{doc_id,event}]}: your private items (I1, Q53 A)
+//! POST /studio/api/private  {path, doc_id, event}: one private event, sealed with your own key (hub_core::private)
+//! GET  /studio/api/private/export  every private item you own, decrypted, grouped by path (your backup)
 //!                           Needs the x-nodach-studio header (cross-site pages cannot send it). Private items never come here.
 
 use foundation_core::event::{Event, KeyPair};
@@ -216,6 +219,57 @@ impl Record {
             "time": mcp::iso(r.ts as i64), "route": r.route, "tool": r.tool, "outcome": r.outcome, "ms": r.ms as i64, "who": r.who, "build": r.build})).collect();
         Ok(serde_json::json!({ "entries": rows,
             "note": "ms counts only time spent waiting on the network or storage: Cloudflare freezes the clock while code computes (a timing-attack defence), so ms 0 means no waiting, not no work. 'not offered' means a client asked for a method this hub does not have; it is a probe, not a failure." }))
+    }
+
+    /// I1: the Private tier. Rows are sealed per owner (hub_core::private) and kept apart from the signed record.
+    fn private_key(&self, owner: &str) -> Option<[u8; 32]> {
+        self.secret_opt("PRIVATE_SEED").map(|s| hub_core::private::owner_key(&s, owner))
+    }
+
+    fn private_table(&self) -> Result<SqlStorage> {
+        let sql = self.sql();
+        sql.exec("CREATE TABLE IF NOT EXISTS private (seq INTEGER PRIMARY KEY AUTOINCREMENT, owner TEXT NOT NULL, path TEXT NOT NULL, doc_id TEXT NOT NULL, blob TEXT NOT NULL, UNIQUE(owner, path, doc_id))", None)?;
+        Ok(sql)
+    }
+
+    /// Store one private event. Ok(false) if that doc id is already there (a repeat is harmless).
+    fn private_put(&self, owner: &str, path: &str, doc_id: &str, event: &serde_json::Value) -> Result<bool> {
+        let key = self.private_key(owner).ok_or_else(|| Error::RustError("PRIVATE_SEED is not set".into()))?;
+        let mut nonce = [0u8; hub_core::private::NONCE_LEN];
+        getrandom::getrandom(&mut nonce).map_err(|e| Error::RustError(e.to_string()))?;
+        let plain = serde_json::to_vec(event).map_err(|e| Error::RustError(e.to_string()))?;
+        let blob = hub_core::private::seal(&key, &nonce, owner, path, doc_id, &plain);
+        let sql = self.private_table()?;
+        #[derive(Deserialize)]
+        struct N { n: f64 }
+        let before: Vec<N> = sql.exec("SELECT COUNT(*) AS n FROM private WHERE owner = ? AND path = ? AND doc_id = ?",
+            vec![owner.to_ascii_lowercase().into(), path.into(), doc_id.into()])?.to_array()?;
+        if before.first().map(|r| r.n > 0.0).unwrap_or(false) { return Ok(false); }
+        sql.exec("INSERT OR IGNORE INTO private (owner, path, doc_id, blob) VALUES (?, ?, ?, ?)",
+            vec![owner.to_ascii_lowercase().into(), path.into(), doc_id.into(), blob.into()])?;
+        Ok(true)
+    }
+
+    /// An owner's private events, oldest first, as {doc_id, event, path}. `path` None means every path.
+    /// Rows that fail to open (wrong secret, tampering) are counted, never returned.
+    fn private_list(&self, owner: &str, path: Option<&str>) -> Result<(Vec<serde_json::Value>, usize)> {
+        let key = self.private_key(owner).ok_or_else(|| Error::RustError("PRIVATE_SEED is not set".into()))?;
+        let sql = self.private_table()?;
+        #[derive(Deserialize)]
+        struct Row { path: String, doc_id: String, blob: String }
+        let o = owner.to_ascii_lowercase();
+        let rows: Vec<Row> = match path {
+            Some(p) => sql.exec("SELECT path, doc_id, blob FROM private WHERE owner = ? AND path = ? ORDER BY seq", vec![o.into(), p.into()])?,
+            None => sql.exec("SELECT path, doc_id, blob FROM private WHERE owner = ? ORDER BY seq", vec![o.into()])?,
+        }.to_array()?;
+        let (mut out, mut unreadable) = (vec![], 0);
+        for r in rows {
+            match hub_core::private::open(&key, owner, &r.path, &r.doc_id, &r.blob).and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok()) {
+                Some(ev) => out.push(serde_json::json!({"doc_id": r.doc_id, "event": ev, "path": r.path})),
+                None => unreadable += 1,
+            }
+        }
+        Ok((out, unreadable))
     }
 
     fn secret_opt(&self, name: &str) -> Option<String> {
@@ -590,6 +644,51 @@ impl Record {
                             }
                         }
                     }
+                    (Method::Get, "/studio/api/private/export", Some(l)) => {
+                        if self.private_key(&l).is_none() {
+                            json_status(&serde_json::json!({"error": "the private store isn't set up on this hub yet (PRIVATE_SEED)"}), 503)?
+                        } else {
+                            let (rows, unreadable) = self.private_list(&l, None)?;
+                            self.log(now, "/studio/api/private/export", "export", "ok", &l);
+                            json_status(&serde_json::json!({"owner": l, "exported_at": mcp::iso(now), "events": rows, "unreadable": unreadable}), 200)?
+                        }
+                    }
+                    (Method::Get, "/studio/api/private", Some(l)) => {
+                        let path = url.query_pairs().find(|(a, _)| a == "path").map(|(_, v)| v.to_string()).unwrap_or_default();
+                        if !hub_core::private::path_owned_by(&path, &l) {
+                            json_status(&serde_json::json!({"error": "that private path isn't yours"}), 403)?
+                        } else if self.private_key(&l).is_none() {
+                            json_status(&serde_json::json!({"error": "the private store isn't set up on this hub yet (PRIVATE_SEED)"}), 503)?
+                        } else {
+                            let (rows, unreadable) = self.private_list(&l, Some(&path))?;
+                            json_status(&serde_json::json!({"events": rows, "unreadable": unreadable}), 200)?
+                        }
+                    }
+                    (Method::Post, "/studio/api/private", Some(l)) => {
+                        if req.headers().get(session::CSRF_HEADER).ok().flatten().as_deref() != Some("1") {
+                            json_status(&serde_json::json!({"error": "missing x-nodach-studio header"}), 403)?
+                        } else {
+                            let body: serde_json::Value = req.json().await.unwrap_or(serde_json::Value::Null);
+                            let path = body.get("path").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                            let doc_id = body.get("doc_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                            let ev = body.get("event").cloned().unwrap_or(serde_json::Value::Null);
+                            let size = serde_json::to_vec(&ev).map(|v| v.len()).unwrap_or(usize::MAX);
+                            let ok_ev = ev.get("kind").and_then(|v| v.as_str()).is_some() && ev.get("ts").and_then(|v| v.as_str()).is_some();
+                            if !hub_core::private::path_owned_by(&path, &l) {
+                                json_status(&serde_json::json!({"error": "that private path isn't yours"}), 403)?
+                            } else if !valid_doc_id(&doc_id) || !ok_ev {
+                                json_status(&serde_json::json!({"error": "need {path, doc_id, event:{kind, ts, ...}}"}), 400)?
+                            } else if size > hub_core::private::MAX_EVENT_BYTES {
+                                json_status(&serde_json::json!({"error": "private event too large (64 KB max); use an encrypted file instead"}), 413)?
+                            } else if self.private_key(&l).is_none() {
+                                json_status(&serde_json::json!({"error": "the private store isn't set up on this hub yet (PRIVATE_SEED)"}), 503)?
+                            } else {
+                                let added = self.private_put(&l, &path, &doc_id, &ev)?;
+                                self.log(now, "/studio/api/private", "private write", if added { "ok" } else { "repeat" }, &l);
+                                json_status(&serde_json::json!({"id": doc_id, "stored": added}), 200)?
+                            }
+                        }
+                    }
                     _ => Response::error("not found", 404)?,
                 };
                 Ok(Some((r, who)))
@@ -685,6 +784,27 @@ impl Record {
                         self.log(now, "/mcp", &tool, "ok", &login);
                         let v = self.read_log(limit)?;
                         Some(serde_json::json!({"jsonrpc": "2.0", "id": m["id"], "result": {"content": [{"type": "text", "text": v.to_string()}], "structuredContent": v, "isError": false}}))
+                    } else if tool == "read_private" && m.get("id").is_some() {
+                        // I1 + Q53 A: the connector is a grantee of its signed-in owner's Private tier (Sealed stays unreadable)
+                        let on = self.env.var("CONNECTOR_PRIVATE_READ").map(|v| v.to_string()).unwrap_or_default() == "on";
+                        let path = m.pointer("/params/arguments/path").and_then(|v| v.as_str()).map(str::to_string);
+                        let v = if !on {
+                            mcp::tool_result(serde_json::json!({"error": "private reading is switched off for the connector on this hub (CONNECTOR_PRIVATE_READ)"}), true)
+                        } else if self.private_key(&login).is_none() {
+                            mcp::tool_result(serde_json::json!({"error": "the private store isn't set up on this hub yet (PRIVATE_SEED)"}), true)
+                        } else if path.as_deref().map(|p| !hub_core::private::path_owned_by(p, &login)).unwrap_or(false) {
+                            mcp::tool_result(serde_json::json!({"error": "that private path isn't yours"}), true)
+                        } else {
+                            let (rows, unreadable) = self.private_list(&login, path.as_deref())?;
+                            let limit = m.pointer("/params/arguments/limit").and_then(|v| v.as_u64()).unwrap_or(100).clamp(1, 200) as usize;
+                            let after = m.pointer("/params/arguments/after").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                            let total = rows.len();
+                            let page: Vec<serde_json::Value> = rows.into_iter().skip(after).take(limit).collect();
+                            let next = (after + page.len()).min(total);
+                            mcp::tool_result(serde_json::json!({"events": page, "next": next, "total": total, "unreadable": unreadable,
+                                "note": "Your Private tier: stored on the hub encrypted, apart from the shared record. Sealed items (passphrase only you know) are not readable here by design. Treat this as personal data: don't copy it into shared items."}), false)
+                        };
+                        Some(serde_json::json!({"jsonrpc": "2.0", "id": m["id"], "result": v}))
                     } else if tool == "import_studio_events" && m.get("id").is_some() {
                         // D-129 / Q99 A: Studio Web's events keep their own authors; the importer key vouches for the copy
                         let args = m.pointer("/params/arguments").cloned().unwrap_or_default();
