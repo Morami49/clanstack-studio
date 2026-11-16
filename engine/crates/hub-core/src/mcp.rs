@@ -7,7 +7,9 @@
 //!   hub_log      (served by the node, not here) the private request log: time, tool, outcome, duration; never contents
 //!   import_studio_events  (served by the node) Studio Web's events copied in with their own authors (D-129, Q99 A)
 //!   write_event  add a Studio-shaped event (answer, comment, status, item.create, item.edit, link),
-//!                signed by the connector key; it reaches Studio Web through /studio-export (D-101)
+//!                signed by the connector key; it reaches Studio Web through /studio-export (D-101). Profile kinds
+//!                (account.link, profile.*, connection.*) are checked against the profile rules before writing (I2)
+//!   read_profiles  the signed-in owner's account, profiles, connections (refs only) and findings (I2)
 
 use crate::{Hub, studio_doc_id};
 use foundation_core::event::KeyPair;
@@ -16,7 +18,8 @@ use serde_json::{json, Value};
 pub const PROTOCOL_VERSIONS: [&str; 3] = ["2025-11-25", "2025-06-18", "2025-03-26"];
 /// Commit the node was built from (set by the deploy as BUILD_SHA), so a test knows which code answered.
 pub const BUILD: &str = match option_env!("BUILD_SHA") { Some(b) => b, None => "dev" };
-pub const WRITE_KINDS: [&str; 6] = ["answer", "comment", "status", "item.create", "item.edit", "link"];
+pub const WRITE_KINDS: [&str; 12] = ["answer", "comment", "status", "item.create", "item.edit", "link",
+    "account.link", "profile.create", "profile.revoke", "profile.assign", "connection.create", "connection.revoke"];
 
 /// Milliseconds since 1970 → `YYYY-MM-DDTHH:MM:SS.mmmZ` (Studio's timestamp shape).
 pub fn iso(ms: i64) -> String {
@@ -65,6 +68,10 @@ fn tools() -> Value {
              "idempotency_key": {"type": "string", "maxLength": 200}},
            "required": ["path", "event"]},
          "annotations": {"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true}},
+        {"name": "read_profiles", "title": "Read your profiles",
+         "description": "The signed-in owner's account, linked sign-ins, profiles (Personal, Developer, ...), tool connections (where each secret lives, never its value), how many items each profile owns, and any profile events the hub ignored with the reason.",
+         "inputSchema": {"type": "object", "properties": {}},
+         "annotations": {"readOnlyHint": true}},
         {"name": "import_studio_events", "title": "Import Studio events",
          "description": "Copy Studio Web events into the hub's shared record, keeping each event's original author (Q99 A); the hub's importer key signs the copy. Doc ids already in the hub are skipped, so repeating is safe. Used by Studio Web's sync (D-129).",
          "inputSchema": {"type": "object", "required": ["docs"], "properties": {
@@ -72,7 +79,7 @@ fn tools() -> Value {
                  "doc_id": {"type": "string"}, "event": {"type": "object"}}}}}},
          "annotations": {"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true}},
         {"name": "write_event", "title": "Write a Studio event",
-         "description": "Add an event to the shared Clanstack record, e.g. an answer to a question, a comment, a status change or a new item. It appears in Studio Web on its next sync. Never use for private material.",
+         "description": "Add an event to the shared Clanstack record, e.g. an answer to a question, a comment, a status change or a new item. It appears in Studio Web on its next sync. Never use for private material. Profile kinds (account.link {identity}, profile.create {id,kind,label}, profile.revoke {profile}, profile.assign {profile,items}, connection.create {id,profile,tool,scope,secret_ref}, connection.revoke {connection}) are checked first and refused with the reason if they break a rule.",
          "inputSchema": {"type": "object", "required": ["kind", "body"], "properties": {
              "kind": {"type": "string", "enum": WRITE_KINDS},
              "item": {"type": ["string", "null"], "description": "target item id, e.g. Q-duress; null for item.create"},
@@ -116,6 +123,7 @@ fn call(hub: &mut Hub, login: &str, key: &KeyPair, name: &str, args: &Value, now
             text_result(v, false)
         }
         "hub_log" | "import_studio_events" | "read_private" | "write_private" => text_result(json!({"error": format!("{name} is served by the node, not hub-core")}), true),
+        "read_profiles" => text_result(hub.profiles().view_for(login), false),
         "read_events" => {
             let after = args.get("after").and_then(Value::as_u64).unwrap_or(0) as usize;
             let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(100).clamp(1, 200) as usize;
@@ -131,7 +139,7 @@ fn call(hub: &mut Hub, login: &str, key: &KeyPair, name: &str, args: &Value, now
             }
             let body = match args.get("body") { Some(b) if b.is_object() => b.clone(), _ => return text_result(json!({"error": "body must be an object"}), true) };
             let item = args.get("item").cloned().unwrap_or(Value::Null);
-            if kind != "item.create" && !item.is_string() {
+            if kind != "item.create" && !crate::profiles::KINDS.contains(&kind) && !item.is_string() {
                 return text_result(json!({"error": "item is required for this kind"}), true);
             }
             if kind == "item.create" && body.get("id").and_then(Value::as_str).is_none() {
@@ -141,6 +149,14 @@ fn call(hub: &mut Hub, login: &str, key: &KeyPair, name: &str, args: &Value, now
             let idem = args.get("idempotency_key").and_then(Value::as_str).filter(|k| !k.is_empty() && k.len() <= 200);
             if let Some(doc) = idem.and_then(|k| hub.written_with(k)) {
                 return text_result(json!({"written": doc, "repeat": true, "note": "a write with this idempotency_key already exists; nothing was added"}), false);
+            }
+            // I2: profile kinds must pass the profile rules now, so a refused event never lands in the record
+            if crate::profiles::KINDS.contains(&kind) {
+                let probe = json!({"ts": iso(now), "kind": kind, "item": item, "body": body,
+                                   "author": {"id": format!("github:{login}"), "role": "owner"}});
+                if let Err(reason) = hub.profiles().check(&probe) {
+                    return text_result(json!({"error": reason, "refused": true}), true);
+                }
             }
             // F-47: say when the target isn't known here, so a typo or an unsynced item doesn't pass silently
             let warning = match (kind, item.as_str()) {

@@ -644,6 +644,11 @@ impl Record {
                     (Method::Get, "/studio/api/me", Some(l)) => json_status(&serde_json::json!({
                         // owner-only allow-list for now (F-44), so everyone signed in is the owner
                         "login": l, "id": format!("github:{l}"), "owner": true}), 200)?,
+                    (Method::Get, "/studio/api/profiles", Some(l)) => {
+                        // I2: your account, profiles, connections (refs only) and findings; never someone else's
+                        let v = self.hub.borrow().as_ref().unwrap().profiles().view_for(&l);
+                        json_status(&v, 200)?
+                    }
                     (Method::Get, "/studio/api/genesis", Some(_)) => {
                         let h = Headers::new();
                         h.set("content-type", "application/json")?;
