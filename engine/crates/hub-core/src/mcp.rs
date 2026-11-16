@@ -57,6 +57,14 @@ fn tools() -> Value {
              "path": {"type": "string", "description": "optional, e.g. data/users/<login>/vault/events"},
              "after": {"type": "integer", "minimum": 0}, "limit": {"type": "integer", "minimum": 1, "maximum": 200}}},
          "annotations": {"readOnlyHint": true}},
+        {"name": "write_private", "title": "Write to your private items",
+         "description": "Add one event to the signed-in owner's Private tier (encrypted, apart from the shared record): personal notes, decisions, people, the personal trail of a conversation. path must be data/users/<you>/... (e.g. data/users/github:<login>/trail/events). event needs kind and ts (read the clock, never invent it). A repeated idempotency_key returns the first write.",
+         "inputSchema": {"type": "object", "properties": {
+             "path": {"type": "string"},
+             "event": {"type": "object", "description": "{kind, ts, item?, body}"},
+             "idempotency_key": {"type": "string", "maxLength": 200}},
+           "required": ["path", "event"]},
+         "annotations": {"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true}},
         {"name": "import_studio_events", "title": "Import Studio events",
          "description": "Copy Studio Web events into the hub's shared record, keeping each event's original author (Q99 A); the hub's importer key signs the copy. Doc ids already in the hub are skipped, so repeating is safe. Used by Studio Web's sync (D-129).",
          "inputSchema": {"type": "object", "required": ["docs"], "properties": {
@@ -107,7 +115,7 @@ fn call(hub: &mut Hub, login: &str, key: &KeyPair, name: &str, args: &Value, now
             if let Some(o) = v.as_object_mut() { o.insert("build".into(), json!(BUILD)); }
             text_result(v, false)
         }
-        "hub_log" | "import_studio_events" | "read_private" => text_result(json!({"error": format!("{name} is served by the node, not hub-core")}), true),
+        "hub_log" | "import_studio_events" | "read_private" | "write_private" => text_result(json!({"error": format!("{name} is served by the node, not hub-core")}), true),
         "read_events" => {
             let after = args.get("after").and_then(Value::as_u64).unwrap_or(0) as usize;
             let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(100).clamp(1, 200) as usize;
@@ -171,7 +179,7 @@ pub fn handle(hub: &mut Hub, login: &str, key: &KeyPair, msg: &Value, now: i64) 
             let v = if PROTOCOL_VERSIONS.contains(&asked) { asked } else { PROTOCOL_VERSIONS[0] };
             ok(json!({"protocolVersion": v, "capabilities": {"tools": {"listChanged": false}},
                       "serverInfo": {"name": "clanstack-hub", "title": "Clanstack hub", "version": format!("{}+{}", env!("CARGO_PKG_VERSION"), BUILD)},
-                      "instructions": "Clanstack's shared record. hub_status: counts, chain check and build. read_events: Studio events from a cursor. hub_log: the request log (time, tool, outcome, duration; never contents); use it whenever asked for the hub log. import_studio_events: used by Studio Web's sync. write_event: answers, comments, status changes and items (shared record only; never put private material there). read_private: the signed-in owner's Private tier, stored apart and encrypted; Sealed items are never readable."}))
+                      "instructions": "Clanstack's shared record. hub_status: counts, chain check and build. read_events: Studio events from a cursor. hub_log: the request log (time, tool, outcome, duration; never contents); use it whenever asked for the hub log. import_studio_events: used by Studio Web's sync. write_event: answers, comments, status changes and items (shared record only; never put private material there). read_private / write_private: the signed-in owner's Private tier, stored apart and encrypted (personal material goes there, never into write_event); Sealed items are never readable."}))
         }
         "ping" => ok(json!({})),
         "tools/list" => ok(json!({"tools": tools()})),

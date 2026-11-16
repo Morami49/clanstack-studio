@@ -21,6 +21,7 @@ ALLOWED_GITHUB_LOGINS = "Morami49"
 NODACH_ENV = "production"
 # I1, Q53 A: the Claude connector may read its signed-in owner's Private tier ("on" or "off"). Sealed items never.
 CONNECTOR_PRIVATE_READ = "on"
+CONNECTOR_PRIVATE_WRITE = "on"
 
 # Secrets (set with `wrangler secret put`, never in this file):
 #   HUB_WRITE_TOKEN  bearer token required for /push and /import
@@ -49,3 +50,4 @@ new_sqlite_classes = ["Record"]
 ALLOWED_GITHUB_LOGINS = "Morami49"
 NODACH_ENV = "staging"
 CONNECTOR_PRIVATE_READ = "on"
+CONNECTOR_PRIVATE_WRITE = "on"

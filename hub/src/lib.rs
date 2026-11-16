@@ -849,6 +849,37 @@ impl Record {
                                 "note": "Your Private tier: stored on the hub encrypted, apart from the shared record. Sealed items (passphrase only you know) are not readable here by design. Treat this as personal data: don't copy it into shared items."}), false)
                         };
                         Some(serde_json::json!({"jsonrpc": "2.0", "id": m["id"], "result": v}))
+                    } else if tool == "write_private" && m.get("id").is_some() {
+                        // the personal side of a conversation's trail goes here, never into the shared record
+                        let on = self.env.var("CONNECTOR_PRIVATE_WRITE").map(|v| v.to_string()).unwrap_or_default() == "on";
+                        let args = m.pointer("/params/arguments").cloned().unwrap_or(serde_json::Value::Null);
+                        let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                        let ev = args.get("event").cloned().unwrap_or(serde_json::Value::Null);
+                        let ok_ev = ev.get("kind").and_then(|v| v.as_str()).is_some() && ev.get("ts").and_then(|v| v.as_str()).is_some();
+                        let size = serde_json::to_vec(&ev).map(|v| v.len()).unwrap_or(usize::MAX);
+                        let key = args.get("idempotency_key").and_then(|v| v.as_str()).map(str::to_string);
+                        let doc_id = match &key {
+                            Some(k) => format!("cp-{}", &hex::encode(<sha2::Sha256 as sha2::Digest>::digest(format!("{}\0{}\0{}", login.to_ascii_lowercase(), path, k).as_bytes()))[..32]),
+                            None => { let mut b = [0u8; 16]; getrandom::getrandom(&mut b).map_err(|e| Error::RustError(e.to_string()))?; format!("cp-{}", hex::encode(b)) }
+                        };
+                        let v = if !on {
+                            mcp::tool_result(serde_json::json!({"error": "private writing is switched off for the connector on this hub (CONNECTOR_PRIVATE_WRITE)"}), true)
+                        } else if !self.private_ready() {
+                            mcp::tool_result(serde_json::json!({"error": "the private store isn't set up on this hub yet (PRIVATE_SEED)"}), true)
+                        } else if !hub_core::private::path_owned_by(&path, &login) {
+                            mcp::tool_result(serde_json::json!({"error": "that private path isn't yours (use data/users/<your login>/...)"}), true)
+                        } else if !ok_ev {
+                            mcp::tool_result(serde_json::json!({"error": "event needs kind and ts"}), true)
+                        } else if size > hub_core::private::MAX_EVENT_BYTES {
+                            mcp::tool_result(serde_json::json!({"error": "private event too large (64 KB max)"}), true)
+                        } else {
+                            let mut ev = ev;
+                            if let Some(o) = ev.as_object_mut() { o.insert("via".into(), "claude-connector".into()); }
+                            let added = self.private_put(&login, &path, &doc_id, &ev)?;
+                            self.log(now, "/mcp", "write_private", if added { "ok" } else { "repeat" }, &login);
+                            mcp::tool_result(serde_json::json!({"written": doc_id, "repeat": !added}), false)
+                        };
+                        Some(serde_json::json!({"jsonrpc": "2.0", "id": m["id"], "result": v}))
                     } else if tool == "import_studio_events" && m.get("id").is_some() {
                         // D-129 / Q99 A: Studio Web's events keep their own authors; the importer key vouches for the copy
                         let args = m.pointer("/params/arguments").cloned().unwrap_or_default();
