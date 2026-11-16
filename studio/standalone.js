@@ -4,8 +4,8 @@
  * Inside claude.ai the artifact host provides that. When the hub serves the page itself, this file
  * provides the same interface backed by the hub:
  *   db      shared "events" ↔ the hub's record (/studio/api/events), genesis ↔ /studio/api/genesis.
- *           Private paths (data/users/<id>/vault/...) never leave this browser (localStorage): the hub
- *           stores nothing private (F-23, D-055).
+ *           Private paths (data/users/<id>/...) ↔ /studio/api/private (I1): kept on the hub encrypted with your
+ *           own key, apart from the shared record; this browser keeps a copy and anything not yet sent.
  *   user    the GitHub login you signed in with (id "github:<login>", the same id the connector uses).
  *   mcp     none: the page is already talking to the hub, so there is nothing to sync.
  *   assets  none yet (uploads are not part of S1).
@@ -24,7 +24,7 @@
     catch { throw { code: "unavailable", message: "can't reach the hub" }; }
     if (r.status === 401) { toLogin(); throw { code: "unauthenticated", message: "signed out" }; }
     if (r.status === 400 || r.status === 403) { const t = await r.text().catch(() => ""); throw { code: "invalid_argument", message: t }; }
-    if (!r.ok) throw { code: "unavailable", message: "hub answered " + r.status };
+    if (!r.ok) throw { code: "unavailable", status: r.status, message: "hub answered " + r.status };
     return r.json();
   }
 
@@ -83,15 +83,86 @@
     return { id };
   }
 
-  /* ---------------------------------------------------------------- private areas: this browser only */
+  /* ---------------------------------------------------------------- private areas (I1, Q53 A)
+   * Kept on the hub, encrypted with your own key and apart from the shared record, so they follow you to any
+   * device. This browser keeps a copy plus anything not yet sent (offline, or a hub without the private store),
+   * and sends it when the hub can take it. Items saved only in this browser before I1 are uploaded only when you
+ * press the button that offers it (consent first, A-spec-identity); until then they stay here and still show. */
   const isPrivate = path => path.startsWith("data/users/");
   const privKey = path => "nodach.priv." + path;
-  function privRows(path) { try { return JSON.parse(localStorage.getItem(privKey(path)) || "[]"); } catch { return []; } }
+  const pendKey = "nodach.priv.pending";
+  const priv = new Map();            // path -> rows (newest known state)
+  const privLoaded = new Map();      // path -> promise of the first server load
+  let privServer = null;             // true once the hub answered with a private store; false if it has none (503)
+  const local = (k, d) => { try { return JSON.parse(localStorage.getItem(k) || d); } catch { return JSON.parse(d); } };
+  const save = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch { return false; } };
+  function privRows(path) { return priv.get(path) || local(privKey(path), "[]"); }
+  function remember(path, rows) {
+    const byId = new Map(rows.map(r => [r._id, r]));
+    priv.set(path, [...byId.values()]);
+    save(privKey(path), priv.get(path));
+  }
+  async function sendPrivate(path, ev) {
+    const d = { ...ev }; const doc_id = d._id; delete d._id;
+    await api("private", { method: "POST", headers: { "content-type": "application/json", "x-nodach-studio": "1" },
+      body: JSON.stringify({ path, doc_id, event: d }) });
+  }
+  async function flushPending() {
+    const pend = local(pendKey, "[]"); if (!pend.length) return;
+    const left = [];
+    for (const p of pend) { try { await sendPrivate(p.path, p.ev); } catch { left.push(p); } }
+    save(pendKey, left);
+  }
+  function loadPrivate(path) {
+    if (privLoaded.has(path)) return privLoaded.get(path);
+    const pr = (async () => {
+      try {
+        const r = await api("private?path=" + encodeURIComponent(path));
+        privServer = true;
+        const server = (r.events || []).map(x => ({ ...x.event, _id: x.doc_id }));
+        const have = new Set(server.map(x => x._id));
+        const pendIds = new Set(local(pendKey, "[]").map(p => p.ev._id));
+        // one-time move of items that lived only in this browser before I1
+        const onlyHere = local(privKey(path), "[]").filter(x => x && x._id && !have.has(x._id) && !pendIds.has(x._id));
+        if (onlyHere.length) offerUpload(path, onlyHere);
+        const mine = local(pendKey, "[]").filter(p => p.path === path).map(p => p.ev);   // shown now, sent or not
+        await flushPending();
+        remember(path, [...server, ...onlyHere, ...mine]);
+      } catch (e) {
+        if (e && e.status === 503) privServer = false;     // this hub has no private store yet: stay browser-only
+        priv.set(path, local(privKey(path), "[]"));
+      }
+      notify();
+    })();
+    privLoaded.set(path, pr);
+    return pr;
+  }
+  const offers = new Map();          // path -> items only in this browser, waiting for your go-ahead
+  function offerUpload(path, rows) {
+    offers.set(path, rows);
+    const n = [...offers.values()].reduce((a, r) => a + r.length, 0);
+    const el = typeof document.getElementById === "function" && document.getElementById("nodach-private-offer");
+    if (el && el.remove) el.remove();
+    bar("nodach-private-offer", `${n} private item${n === 1 ? " is" : "s are"} saved only in this browser. Upload ${n === 1 ? "it" : "them"} to your private store (encrypted, on any device)?`,
+      "bottom:0;background:#2d3b2d;color:#fff", { label: "Upload", onclick: () => uploadPrivate() });
+  }
+  async function uploadPrivate() {
+    const pend = local(pendKey, "[]");
+    let n = 0;
+    for (const [path, rows] of offers) for (const ev of rows) { pend.push({ path, ev }); n++; }
+    save(pendKey, pend); offers.clear();
+    await flushPending();
+    const el = typeof document.getElementById === "function" && document.getElementById("nodach-private-offer");
+    if (el && el.remove) el.remove();
+    return n;
+  }
   function privAdd(path, ev) {
-    const rows = privRows(path); rows.push(ev);
-    try { localStorage.setItem(privKey(path), JSON.stringify(rows)); }
-    catch { throw { code: "quota_exceeded", message: "this browser's storage is full" }; }
+    const rows = [...privRows(path), ev];
+    priv.set(path, rows);
+    if (!save(privKey(path), rows) && privServer !== true) throw { code: "quota_exceeded", message: "this browser's storage is full" };
+    const pend = local(pendKey, "[]"); pend.push({ path, ev }); save(pendKey, pend);
     notify();
+    flushPending().catch(() => {});
   }
 
   /* ---------------------------------------------------------------- the db interface the page expects */
@@ -111,12 +182,12 @@
       orderBy: (_f, d) => query(path, d || "asc", lim, filters),
       limit: n => query(path, dir, n, filters),
       where: (f, op, v) => query(path, dir, lim, [...filters, e => op === "<" ? e[f] < v : op === ">" ? e[f] > v : op === "<=" ? e[f] <= v : op === ">=" ? e[f] >= v : e[f] === v]),
-      get: async () => { if (!isPrivate(path)) await pull().catch(() => {}); return result(); },
+      get: async () => { if (isPrivate(path)) await loadPrivate(path); else await pull().catch(() => {}); return result(); },
       onSnapshot: (next, err) => {
         let live = true;
         const f = () => { if (live) next(result()); };
         listeners.add(f);
-        if (isPrivate(path)) setTimeout(f, 0);
+        if (isPrivate(path)) { setTimeout(f, 0); loadPrivate(path).then(f); }
         else pull().then(() => { f(); startPolling(); }).catch(e => { if (err) err(e); });
         return () => { live = false; listeners.delete(f); };
       },
@@ -205,7 +276,7 @@
     document.addEventListener("visibilitychange", () => { if (!document.hidden) checkVersion(); });
   }
 
-  window.__nodach = { pull, shared, standalone: true, checkVersion, env: ENV, build: BUILD };
+  window.__nodach = { pull, shared, standalone: true, checkVersion, env: ENV, build: BUILD, uploadPrivate };
   window.claude = {
     use: async n => {
       if (n === "db") { try { await me(); return db; } catch { return null; } }

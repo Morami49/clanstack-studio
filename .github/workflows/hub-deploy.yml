@@ -85,6 +85,10 @@ jobs:
           if ! npx -y wrangler@4.158.0 secret list | grep -q CONNECTOR_SEED; then
             openssl rand -hex 32 | npx -y wrangler@4.158.0 secret put CONNECTOR_SEED
           fi
+          # I1: root of the Private-tier keys. Made once; never rotated (rotating it makes private items unreadable).
+          if ! npx -y wrangler@4.158.0 secret list | grep -q PRIVATE_SEED; then
+            openssl rand -hex 32 | npx -y wrangler@4.158.0 secret put PRIVATE_SEED
+          fi
       - if: steps.go.outputs.run == 'yes'
         name: Step secrets for runnable flows (D-174; only when provided)
         # A flow step names a secret (e.g. REED); the hub reads NODE_SECRET_REED. Flows can't read any other secret.

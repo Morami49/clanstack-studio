@@ -302,6 +302,12 @@ modelling. Phase 1 (rails) is built; voice is next. Owner: Nowed.
   that item, read from the item's own comments (each carries `key`). F-75: Ask AI retries a busy Gemini (429/5xx) once,
   then falls back to `gemini-flash-lite-latest`. The step panel gained a ✕ like items have. 14 flow tests, 39/39 scenarios.
 
+- **2026-11-16 — I1 Private tier on the hub (D-nodach-identity, Q53 A, Q54 A, Q56 A).** Private items move from
+  localStorage to the hub: `hub-core/src/private.rs` (envelope: random per-owner data keys wrapped by a key from `PRIVATE_SEED`,
+  key versions, rotation via `PRIVATE_SEED_PREVIOUS`; AES-256-GCM with owner/version/path/doc id as associated data; 8 tests), `/studio/api/private` (GET, POST, export) in `hub/src/lib.rs`, connector tool `read_private`
+  (owner-only, `CONNECTOR_PRIVATE_READ`). `studio/standalone.js` keeps a local copy plus a pending queue, offers an Upload button for items
+  that were browser-only before I1 (consent first, A-spec-identity), and falls back to browser-only on a hub without the store (503). CI makes
+  `PRIVATE_SEED` once per environment. F-07 reassessed: not blocking (F-62 + the shim already read every event).
 ## File map
 - `schema/event.schema.json` — the contract.
 - `spine/store.py` append-only hashed log · `spine/control.py` event-sourced control state + policy ·
