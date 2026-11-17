@@ -308,6 +308,16 @@ modelling. Phase 1 (rails) is built; voice is next. Owner: Nowed.
   (owner-only, `CONNECTOR_PRIVATE_READ`). `studio/standalone.js` keeps a local copy plus a pending queue, offers an Upload button for items
   that were browser-only before I1 (consent first, A-spec-identity), and falls back to browser-only on a hub without the store (503). CI makes
   `PRIVATE_SEED` once per environment. F-07 reassessed: not blocking (F-62 + the shim already read every event).
+- **2026-11-16 — I2 profiles, first slice (D-nodach-identity, A-spec-identity I2; branch b-i2-profiles).** `hub-core/src/profiles.rs`
+  folds six Studio-shaped kinds (account.link, profile.create/revoke/assign, connection.create/revoke) into accounts, profiles,
+  owner_profile links and connections. Rules: one account per person, implicit Personal profile `P-<login>`, linking an identity
+  owned by another account is refused (merge must be explicit), raw email addresses refused (`email:sha256:` only), Developer
+  profiles granted/revoked by the owner only, revoking a profile switches off its connections, `secret_ref` names a Worker secret
+  or private path and never holds a value. Rule breaks stay in the record as findings (F-19 style). The connector checks profile
+  kinds before writing (refused events never land) and gains `read_profiles`; `/studio/api/profiles` serves the same view to Studio.
+  Migration helper `bucket()` sorts existing items by title tags; the mixed/untagged policies wait for Nowed. 12 + 1 new tests.
+  Not yet: the Studio profile switcher and filtered views, the migration run itself, write-access enforcement by profile.
+
 ## File map
 - `schema/event.schema.json` — the contract.
 - `spine/store.py` append-only hashed log · `spine/control.py` event-sourced control state + policy ·

@@ -23,6 +23,7 @@ pub mod oauth;
 pub mod session;
 pub mod flows;
 pub mod private;
+pub mod profiles;
 
 pub const IMPORT_KIND: &str = "studio.event";
 /// A Studio-shaped write made on a node other than Studio Web (PC, phone, an AI via the hub).
@@ -181,6 +182,18 @@ impl Hub {
         }).collect();
         let skipped = page.events.len() - docs.len();
         (docs, page.next, page.total, skipped)
+    }
+
+    /// Accounts, profiles, item ownership and connections (I2), folded from every Studio-shaped event in order.
+    pub fn profiles(&self) -> profiles::State {
+        let (docs, _, _, _) = self.studio_events(0, usize::MAX);
+        let mut st = profiles::State::default();
+        for d in &docs {
+            if let (Some(id), Some(ev)) = (d.get("doc_id").and_then(Value::as_str), d.get("event")) {
+                st.observe(id, ev);
+            }
+        }
+        st
     }
 
     pub fn has_imported(&self, doc_id: &str) -> bool {

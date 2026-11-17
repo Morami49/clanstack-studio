@@ -177,7 +177,7 @@ fn mcp_initialize_list_and_tools() {
     assert!(handle(&mut hub, "Morami49", &key, &json!({"jsonrpc": "2.0", "method": "notifications/initialized"}), T0).is_none());
     let tools = handle(&mut hub, "Morami49", &key, &json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}), T0).unwrap();
     let names: Vec<&str> = tools["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
-    assert_eq!(names, ["hub_status", "read_events", "hub_log", "read_private", "write_private", "import_studio_events", "write_event"]);
+    assert_eq!(names, ["hub_status", "read_events", "hub_log", "read_private", "write_private", "read_profiles", "import_studio_events", "write_event"]);
 
     let call = |hub: &mut Hub, name: &str, args: Value| handle(hub, "Morami49", &key, &json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": name, "arguments": args}}), T0 + 60_000).unwrap()["result"].clone();
     let w = call(&mut hub, "write_event", json!({"kind": "answer", "item": "Q-duress", "body": {"code": "Q86", "text": "A"}}));
@@ -273,4 +273,31 @@ fn f48_repeat_writes_and_f47_unknown_items() {
     let after_restart = call(&mut cold, json!({"kind": "comment", "item": "Q-nope", "body": {"text": "x"}, "idempotency_key": "R-1/1"}));
     assert_eq!(after_restart["written"], a["written"]);
     assert!(cold.knows_item("Q-new"));
+}
+
+#[test]
+fn i2_profile_writes_are_checked_first_and_read_back() {
+    let mut hub = Hub::new();
+    let key = KeyPair::from_seed([9u8; 32]);
+    let call = |hub: &mut Hub, name: &str, args: Value| handle(hub, "Morami49", &key, &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": name, "arguments": args}}), T0).unwrap()["result"].clone();
+    let dev = call(&mut hub, "write_event", json!({"kind": "profile.create", "item": null, "body": {"id": "P-dev", "kind": "developer", "label": "Developer"}}));
+    assert_eq!(dev["isError"], false, "{dev}");
+    let before = hub.status().events;
+    // refused before writing: nothing lands in the record
+    for bad in [json!({"kind": "profile.create", "body": {"id": "P-dev", "kind": "work"}}),
+                json!({"kind": "account.link", "body": {"identity": "email:nowed@example.com"}}),
+                json!({"kind": "connection.create", "body": {"id": "C1", "profile": "P-dev", "tool": "github", "scope": "repo", "secret_ref": "ghp_live"}}),
+                json!({"kind": "profile.revoke", "body": {"profile": "P-morami49"}})] {
+        let r = call(&mut hub, "write_event", bad.clone());
+        assert_eq!(r["isError"], true, "{bad} should be refused");
+        assert_eq!(r["structuredContent"]["refused"], true);
+    }
+    assert_eq!(hub.status().events, before);
+    assert_eq!(call(&mut hub, "write_event", json!({"kind": "profile.assign", "body": {"profile": "P-dev", "items": ["D-171"], "migration": true}}))["isError"], false);
+    let v = call(&mut hub, "read_profiles", json!({}))["structuredContent"].clone();
+    let ids: Vec<&str> = v["profiles"].as_array().unwrap().iter().map(|p| p["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["P-dev", "P-morami49"]);
+    assert_eq!(v["assigned_items"]["P-dev"], 1);
+    assert_eq!(hub.profiles().owner_profile("D-171", "Morami49"), "P-dev");
 }
