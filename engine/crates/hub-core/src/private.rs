@@ -90,6 +90,59 @@ pub fn path_owned_by(path: &str, owner: &str) -> bool {
         && tail.bytes().all(|b| b.is_ascii_alphanumeric() || b"/-_.".contains(&b))
 }
 
+/// Most events one `write_private_batch` call may carry.
+pub const MAX_BATCH: usize = 200;
+
+/// The doc id a keyed private write gets: deterministic, so a re-run of the same import is a no-op.
+pub fn doc_id_for(login: &str, path: &str, key: &str) -> String {
+    format!("cp-{}", &hex::encode(Sha256::digest(format!("{}\0{}\0{}", login.to_ascii_lowercase(), path, key).as_bytes()))[..32])
+}
+
+/// SHA-256 of an event's JSON (object keys sorted), so the sender can check what was stored row by row.
+pub fn checksum(event: &serde_json::Value) -> String {
+    hex::encode(Sha256::digest(serde_json::to_vec(event).unwrap_or_default()))
+}
+
+/// One checked item of a batch, ready for the node to seal and store.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BatchItem {
+    pub key: String,
+    pub path: String,
+    pub doc_id: String,
+    pub checksum: String,
+    pub event: serde_json::Value,
+}
+
+/// Check a whole `write_private_batch` call before anything is stored. Every item needs a path the signed-in
+/// owner owns, an event with `kind` and `ts` (at most 64 KB) and an idempotency key unique in the batch.
+/// Any bad item rejects the whole batch with every reason listed, so an import never half-lands silently.
+pub fn plan_batch(login: &str, args: &serde_json::Value) -> Result<(Vec<BatchItem>, String), Vec<String>> {
+    let items = match args.get("items").and_then(serde_json::Value::as_array) {
+        Some(a) if !a.is_empty() && a.len() <= MAX_BATCH => a,
+        _ => return Err(vec![format!("items: 1 to {MAX_BATCH} entries of {{path, event, key}}")]),
+    };
+    let (mut out, mut errs, mut seen) = (vec![], vec![], std::collections::HashSet::new());
+    for (i, it) in items.iter().enumerate() {
+        let path = it.get("path").and_then(serde_json::Value::as_str).unwrap_or("");
+        let key = it.get("key").and_then(serde_json::Value::as_str).unwrap_or("");
+        let ev = it.get("event").cloned().unwrap_or(serde_json::Value::Null);
+        let size = serde_json::to_vec(&ev).map(|v| v.len()).unwrap_or(usize::MAX);
+        if !path_owned_by(path, login) { errs.push(format!("items[{i}]: path isn't yours")); continue; }
+        if key.is_empty() || key.len() > 200 { errs.push(format!("items[{i}]: key is required (1-200 characters)")); continue; }
+        if !seen.insert((path.to_string(), key.to_string())) { errs.push(format!("items[{i}]: key {key} repeats in this batch")); continue; }
+        if ev.get("kind").and_then(serde_json::Value::as_str).is_none() || ev.get("ts").and_then(serde_json::Value::as_str).is_none() {
+            errs.push(format!("items[{i}]: event needs kind and ts")); continue;
+        }
+        if size > MAX_EVENT_BYTES { errs.push(format!("items[{i}]: event too large (64 KB max)")); continue; }
+        let mut ev = ev;
+        if let Some(o) = ev.as_object_mut() { o.insert("via".into(), "claude-connector".into()); }
+        out.push(BatchItem { key: key.into(), path: path.into(), doc_id: doc_id_for(login, path, key), checksum: checksum(&ev), event: ev });
+    }
+    if !errs.is_empty() { return Err(errs); }
+    let whole = hex::encode(Sha256::digest(out.iter().map(|b| b.checksum.as_str()).collect::<Vec<_>>().join("\n").as_bytes()));
+    Ok((out, whole))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -174,5 +227,27 @@ mod tests {
         assert!(!path_owned_by("events", "a"));
         assert!(!path_owned_by("data/users/a/x y", "a"));
         assert!(!path_owned_by(&format!("data/users/a/{}", "x".repeat(121)), "a"));
+    }
+
+    #[test]
+    fn a_batch_is_checked_whole_before_anything_is_stored() {
+        use serde_json::json;
+        let p = "data/users/github:Morami49/career/roles";
+        let ev = |n: u32| json!({"kind": "rrs.row", "ts": "2026-11-17T20:00:00.000Z", "body": {"row": n}});
+        let ok = json!({"items": [{"path": p, "key": "Roles/2", "event": ev(2)}, {"path": p, "key": "Roles/3", "event": ev(3)}]});
+        let (items, whole) = plan_batch("Morami49", &ok).unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].doc_id, doc_id_for("morami49", p, "Roles/2"), "same id as a single keyed write, case-insensitive login");
+        assert_eq!(items[0].event["via"], "claude-connector");
+        assert_eq!(whole.len(), 64);
+        let (again, whole2) = plan_batch("Morami49", &ok).unwrap();
+        assert_eq!((again, whole2), (items, whole), "re-running an import plans the same ids and checksums");
+        let bad = json!({"items": [{"path": p, "key": "a", "event": ev(1)}, {"path": "data/users/someone/x", "key": "b", "event": ev(2)},
+                                   {"path": p, "key": "a", "event": ev(3)}, {"path": p, "key": "", "event": ev(4)}, {"path": p, "key": "c", "event": json!({"kind": "x"})}]});
+        let errs = plan_batch("Morami49", &bad).unwrap_err();
+        assert_eq!(errs.len(), 4, "{errs:?}");
+        assert!(plan_batch("Morami49", &json!({"items": []})).is_err());
+        let many: Vec<_> = (0..=MAX_BATCH).map(|i| json!({"path": p, "key": format!("k{i}"), "event": ev(i as u32)})).collect();
+        assert!(plan_batch("Morami49", &json!({"items": many})).is_err());
     }
 }

@@ -325,6 +325,12 @@ modelling. Phase 1 (rails) is built; voice is next. Owner: Nowed.
   take comments only; auditors write comments, answers, links and findings only; explorers write to their branch. Writes without a
   session still respect claims. 7 unit tests + a connector test replaying the 17 Nov double answer.
 
+- **2026-11-17 — Work-lane import path (R4 d, I-next' d; branch b-work-lane-import, stacked on b-guard-sessions).** Connector tool
+  `write_private_batch`: up to 200 private events per call, each `{path, event, key}`. `hub-core::private::plan_batch` checks the
+  whole batch first (owned path, kind + ts, 64 KB, key required and unique in the batch); any bad item rejects all of it with every
+  reason. Doc ids are deterministic (`doc_id_for`, shared with the keyed single write), so re-running an import is a no-op. The result
+  lists per-row SHA-256 checksums, new and repeat counts, and one batch checksum, for the count/checksum verification in D-work-lane-hosting.
+
 ## File map
 - `schema/event.schema.json` — the contract.
 - `spine/store.py` append-only hashed log · `spine/control.py` event-sourced control state + policy ·

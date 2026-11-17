@@ -864,7 +864,7 @@ impl Record {
                         let size = serde_json::to_vec(&ev).map(|v| v.len()).unwrap_or(usize::MAX);
                         let key = args.get("idempotency_key").and_then(|v| v.as_str()).map(str::to_string);
                         let doc_id = match &key {
-                            Some(k) => format!("cp-{}", &hex::encode(<sha2::Sha256 as sha2::Digest>::digest(format!("{}\0{}\0{}", login.to_ascii_lowercase(), path, k).as_bytes()))[..32]),
+                            Some(k) => hub_core::private::doc_id_for(&login, &path, k),
                             None => { let mut b = [0u8; 16]; getrandom::getrandom(&mut b).map_err(|e| Error::RustError(e.to_string()))?; format!("cp-{}", hex::encode(b)) }
                         };
                         let v = if !on {
@@ -883,6 +883,32 @@ impl Record {
                             let added = self.private_put(&login, &path, &doc_id, &ev)?;
                             self.log(now, "/mcp", "write_private", if added { "ok" } else { "repeat" }, &login);
                             mcp::tool_result(serde_json::json!({"written": doc_id, "repeat": !added}), false)
+                        };
+                        Some(serde_json::json!({"jsonrpc": "2.0", "id": m["id"], "result": v}))
+                    } else if tool == "write_private_batch" && m.get("id").is_some() {
+                        // I-next' d: bulk private import (e.g. the career sheet), checked whole, with per-row checksums
+                        let on = self.env.var("CONNECTOR_PRIVATE_WRITE").map(|v| v.to_string()).unwrap_or_default() == "on";
+                        let args = m.pointer("/params/arguments").cloned().unwrap_or(serde_json::Value::Null);
+                        let v = if !on {
+                            mcp::tool_result(serde_json::json!({"error": "private writing is switched off for the connector on this hub (CONNECTOR_PRIVATE_WRITE)"}), true)
+                        } else if !self.private_ready() {
+                            mcp::tool_result(serde_json::json!({"error": "the private store isn't set up on this hub yet (PRIVATE_SEED)"}), true)
+                        } else {
+                            match hub_core::private::plan_batch(&login, &args) {
+                                Err(errs) => mcp::tool_result(serde_json::json!({"error": "batch rejected; nothing was stored", "reasons": errs}), true),
+                                Ok((items, whole)) => {
+                                    let mut rows = vec![];
+                                    let mut added_n = 0;
+                                    for it in &items {
+                                        let added = self.private_put(&login, &it.path, &it.doc_id, &it.event)?;
+                                        if added { added_n += 1; }
+                                        rows.push(serde_json::json!({"key": it.key, "doc_id": it.doc_id, "checksum": it.checksum, "repeat": !added}));
+                                    }
+                                    self.log(now, "/mcp", "write_private_batch", &format!("ok {added_n}/{}", items.len()), &login);
+                                    mcp::tool_result(serde_json::json!({"count": items.len(), "new": added_n, "repeats": items.len() - added_n,
+                                        "batch_checksum": whole, "items": rows}), false)
+                                }
+                            }
                         };
                         Some(serde_json::json!({"jsonrpc": "2.0", "id": m["id"], "result": v}))
                     } else if tool == "import_studio_events" && m.get("id").is_some() {

@@ -70,6 +70,12 @@ fn tools() -> Value {
              "idempotency_key": {"type": "string", "maxLength": 200}},
            "required": ["path", "event"]},
          "annotations": {"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true}},
+        {"name": "write_private_batch", "title": "Write many private items",
+         "description": "Store up to 200 events in the signed-in owner's Private tier in one call (e.g. importing a spreadsheet). Each item is {path, event:{kind, ts, ...}, key}; the key makes re-runs safe. The whole batch is checked first: one bad item rejects it with every reason listed. Returns per-item doc ids and SHA-256 checksums, counts of new and repeated items, and one checksum for the batch, so an import can be verified row by row.",
+         "inputSchema": {"type": "object", "required": ["items"], "properties": {
+             "items": {"type": "array", "maxItems": 200, "items": {"type": "object", "required": ["path", "event", "key"], "properties": {
+                 "path": {"type": "string"}, "event": {"type": "object"}, "key": {"type": "string", "maxLength": 200}}}}}},
+         "annotations": {"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true}},
         {"name": "read_profiles", "title": "Read your profiles",
          "description": "The signed-in owner's account, linked sign-ins, profiles (Personal, Developer, ...), tool connections (where each secret lives, never its value), how many items each profile owns, and any profile events the hub ignored with the reason.",
          "inputSchema": {"type": "object", "properties": {}},
@@ -143,7 +149,7 @@ fn call(hub: &mut Hub, login: &str, key: &KeyPair, name: &str, args: &Value, now
             if let Some(o) = v.as_object_mut() { o.insert("build".into(), json!(BUILD)); }
             text_result(v, false)
         }
-        "hub_log" | "import_studio_events" | "read_private" | "write_private" => text_result(json!({"error": format!("{name} is served by the node, not hub-core")}), true),
+        "hub_log" | "import_studio_events" | "read_private" | "write_private" | "write_private_batch" => text_result(json!({"error": format!("{name} is served by the node, not hub-core")}), true),
         "read_profiles" => text_result(hub.profiles().view_for(login), false),
         "read_claims" => {
             let g = hub.guard();
