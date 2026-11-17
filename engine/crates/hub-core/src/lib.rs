@@ -24,6 +24,7 @@ pub mod session;
 pub mod flows;
 pub mod private;
 pub mod profiles;
+pub mod guard;
 
 pub const IMPORT_KIND: &str = "studio.event";
 /// A Studio-shaped write made on a node other than Studio Web (PC, phone, an AI via the hub).
@@ -194,6 +195,12 @@ impl Hub {
             }
         }
         st
+    }
+
+    /// Session claims and Studio branches (multi-chat guard), folded from every Studio-shaped event in order.
+    pub fn guard(&self) -> guard::State {
+        let (docs, _, _, _) = self.studio_events(0, usize::MAX);
+        guard::State::fold(docs.iter().filter_map(|d| d.get("event")))
     }
 
     pub fn has_imported(&self, doc_id: &str) -> bool {

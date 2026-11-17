@@ -318,6 +318,13 @@ modelling. Phase 1 (rails) is built; voice is next. Owner: Nowed.
   Migration helper `bucket()` sorts existing items by title tags; the mixed/untagged policies wait for Nowed. 12 + 1 new tests.
   Not yet: the Studio profile switcher and filtered views, the migration run itself, write-access enforcement by profile.
 
+- **2026-11-17 — Multi-chat guard (D-nodach-parallel-guard v2, C12 d, C13; branch b-guard-sessions, stacked on b-i2-profiles).**
+  `hub-core/src/guard.rs` folds `session.claim` / `session.release` events. Connector tools: `begin_answer` (message fingerprint,
+  hashed and never stored; role builder|interviewer|auditor|explorer; claimed items; minutes; explorer branch, created on first use),
+  `end_answer` (release with the R- reply id), `read_claims`. `write_event` takes `session`: items claimed by another live session
+  take comments only; auditors write comments, answers, links and findings only; explorers write to their branch. Writes without a
+  session still respect claims. 7 unit tests + a connector test replaying the 17 Nov double answer.
+
 ## File map
 - `schema/event.schema.json` — the contract.
 - `spine/store.py` append-only hashed log · `spine/control.py` event-sourced control state + policy ·
