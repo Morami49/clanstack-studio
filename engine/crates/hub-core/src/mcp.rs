@@ -10,6 +10,8 @@
 //!                signed by the connector key; it reaches Studio Web through /studio-export (D-101). Profile kinds
 //!                (account.link, profile.*, connection.*) are checked against the profile rules before writing (I2)
 //!   read_profiles  the signed-in owner's account, profiles, connections (refs only) and findings (I2)
+//!   begin_answer / end_answer / read_claims  the multi-chat guard (D-nodach-parallel-guard v2): duplicate-message
+//!                check, item claims, roles; write_event takes the session it writes under
 
 use crate::{Hub, studio_doc_id};
 use foundation_core::event::KeyPair;
@@ -72,6 +74,24 @@ fn tools() -> Value {
          "description": "The signed-in owner's account, linked sign-ins, profiles (Personal, Developer, ...), tool connections (where each secret lives, never its value), how many items each profile owns, and any profile events the hub ignored with the reason.",
          "inputSchema": {"type": "object", "properties": {}},
          "annotations": {"readOnlyHint": true}},
+        {"name": "begin_answer", "title": "Begin answering a message",
+         "description": "Call before writing anything for a message from Nowed. Pass the message text (only its fingerprint is stored), your role (builder, interviewer, auditor, explorer) and the item ids you expect to change. Returns a session id to pass to write_event, any earlier session that already answered the same message (read its reply and add only what's missing), and any items other sessions have claimed (comment on those, don't edit them). An explorer must name a branch; its writes go there, not to main.",
+         "inputSchema": {"type": "object", "required": ["message", "role"], "properties": {
+             "message": {"type": "string", "description": "the message being answered; hashed, never stored"},
+             "role": {"type": "string", "enum": ["builder", "interviewer", "auditor", "explorer"]},
+             "items": {"type": "array", "maxItems": 50, "items": {"type": "string"}},
+             "minutes": {"type": "integer", "minimum": 1, "maximum": 60, "description": "how long the claim lasts (default 15)"},
+             "branch": {"type": "string", "description": "explorer only: the Studio branch to write to"}}},
+         "annotations": {"readOnlyHint": false, "destructiveHint": false}},
+        {"name": "end_answer", "title": "Finish answering",
+         "description": "Release your session's claims once your reply item (R-...) is written, so other sessions can edit those items.",
+         "inputSchema": {"type": "object", "required": ["session"], "properties": {
+             "session": {"type": "string"}, "reply": {"type": "string", "description": "the R- item you wrote"}}},
+         "annotations": {"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true}},
+        {"name": "read_claims", "title": "Who is working on what",
+         "description": "Active session claims (session, role, items, until), so a new chat can see what other chats are doing before it starts.",
+         "inputSchema": {"type": "object", "properties": {}},
+         "annotations": {"readOnlyHint": true}},
         {"name": "import_studio_events", "title": "Import Studio events",
          "description": "Copy Studio Web events into the hub's shared record, keeping each event's original author (Q99 A); the hub's importer key signs the copy. Doc ids already in the hub are skipped, so repeating is safe. Used by Studio Web's sync (D-129).",
          "inputSchema": {"type": "object", "required": ["docs"], "properties": {
@@ -84,6 +104,7 @@ fn tools() -> Value {
              "kind": {"type": "string", "enum": WRITE_KINDS},
              "item": {"type": ["string", "null"], "description": "target item id, e.g. Q-duress; null for item.create"},
              "idempotency_key": {"type": "string", "maxLength": 200, "description": "optional; repeating a write with the same key returns the first write instead of adding another (use one per intended change, e.g. R-261109-1/3)"},
+             "session": {"type": "string", "description": "the session id from begin_answer; its role and branch apply. Without one, the write still respects other sessions' claims."},
              "body": {"type": "object", "description": "event body, e.g. {text} for a comment, {code,text} for an answer, {status} for a status, {id,type,title,body,status,refs} for item.create"}}},
          "annotations": {"readOnlyHint": false, "destructiveHint": false}}
     ])
@@ -124,6 +145,27 @@ fn call(hub: &mut Hub, login: &str, key: &KeyPair, name: &str, args: &Value, now
         }
         "hub_log" | "import_studio_events" | "read_private" | "write_private" => text_result(json!({"error": format!("{name} is served by the node, not hub-core")}), true),
         "read_profiles" => text_result(hub.profiles().view_for(login), false),
+        "read_claims" => {
+            let g = hub.guard();
+            text_result(json!({"active": g.active(now), "now": iso(now)}), false)
+        }
+        "begin_answer" => begin_answer(hub, login, key, args, now),
+        "end_answer" => {
+            let session = args.get("session").and_then(Value::as_str).unwrap_or("");
+            let g = hub.guard();
+            match g.claims.get(session) {
+                None => text_result(json!({"error": format!("session {session} doesn't exist")}), true),
+                Some(c) if c.released.is_some() => text_result(json!({"ended": session, "repeat": true}), false),
+                Some(_) => {
+                    let mut body = json!({"session": session});
+                    if let Some(r) = args.get("reply").and_then(Value::as_str) { body["reply"] = json!(r); }
+                    match write_studio(hub, login, key, "session.release", Value::Null, body, "main", Some(&format!("{session}/end")), now) {
+                        Ok(_) => text_result(json!({"ended": session}), false),
+                        Err(e) => text_result(json!({"error": e}), true),
+                    }
+                }
+            }
+        }
         "read_events" => {
             let after = args.get("after").and_then(Value::as_u64).unwrap_or(0) as usize;
             let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(100).clamp(1, 200) as usize;
@@ -158,6 +200,12 @@ fn call(hub: &mut Hub, login: &str, key: &KeyPair, name: &str, args: &Value, now
                     return text_result(json!({"error": reason, "refused": true}), true);
                 }
             }
+            // D-nodach-parallel-guard v2: claims by other sessions, the writer's role and its branch
+            let session = args.get("session").and_then(Value::as_str);
+            let branch = match hub.guard().check_write(session, kind, item.as_str(), &body, now) {
+                Ok(b) => b,
+                Err(reason) => return text_result(json!({"error": reason, "refused": true}), true),
+            };
             // F-47: say when the target isn't known here, so a typo or an unsynced item doesn't pass silently
             let warning = match (kind, item.as_str()) {
                 ("item.create", _) => body.get("id").and_then(Value::as_str).filter(|id| hub.knows_item(id))
@@ -165,10 +213,11 @@ fn call(hub: &mut Hub, login: &str, key: &KeyPair, name: &str, args: &Value, now
                 (_, Some(t)) if !hub.knows_item(t) => Some(format!("{t} isn't in the hub's copy of Studio. If it's new in Studio, sync Studio first; otherwise check the id.")),
                 _ => None,
             };
-            let mut ev = json!({"ts": iso(now), "kind": kind, "item": item, "branch": "main", "body": body,
+            let mut ev = json!({"ts": iso(now), "kind": kind, "item": item, "branch": branch, "body": body,
                             "author": {"id": format!("github:{login}"), "label": login, "role": "owner"},
                             "via": "claude-connector"});
             if let Some(k) = idem { ev["idem"] = json!(k); }
+            if let Some(sid) = session { ev["session"] = json!(sid); }
             match hub.write(key, &format!("connector ({login})"), ev, now) {
                 Ok(made) => {
                     let mut r = json!({"written": studio_doc_id(&made.last().map(|e| e.id.clone()).unwrap_or_default())});
@@ -180,6 +229,56 @@ fn call(hub: &mut Hub, login: &str, key: &KeyPair, name: &str, args: &Value, now
         }
         _ => text_result(json!({"error": format!("unknown tool {name}")}), true),
     }
+}
+
+/// Write one Studio-shaped event as the signed-in person (used by the guard tools).
+#[allow(clippy::too_many_arguments)]
+fn write_studio(hub: &mut Hub, login: &str, key: &KeyPair, kind: &str, item: Value, body: Value, branch: &str, idem: Option<&str>, now: i64) -> Result<String, String> {
+    if let Some(doc) = idem.and_then(|k| hub.written_with(k)) {
+        return Ok(doc.clone());
+    }
+    let mut ev = json!({"ts": iso(now), "kind": kind, "item": item, "branch": branch, "body": body,
+                        "author": {"id": format!("github:{login}"), "label": login, "role": "owner"}, "via": "claude-connector"});
+    if let Some(k) = idem { ev["idem"] = json!(k); }
+    hub.write(key, &format!("connector ({login})"), ev, now).map(|made| studio_doc_id(&made.last().map(|e| e.id.clone()).unwrap_or_default())).map_err(|e| format!("{e:?}"))
+}
+
+fn begin_answer(hub: &mut Hub, login: &str, key: &KeyPair, args: &Value, now: i64) -> Value {
+    use crate::guard;
+    let message = args.get("message").and_then(Value::as_str).unwrap_or("");
+    let role = args.get("role").and_then(Value::as_str).unwrap_or("");
+    if message.trim().is_empty() { return text_result(json!({"error": "message is required (only its fingerprint is stored)"}), true); }
+    if !guard::ROLES.contains(&role) { return text_result(json!({"error": format!("role must be one of {:?}", guard::ROLES)}), true); }
+    let items: Vec<String> = args.get("items").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(String::from).collect()).unwrap_or_default();
+    if items.len() > guard::MAX_ITEMS { return text_result(json!({"error": format!("claim at most {} items", guard::MAX_ITEMS)}), true); }
+    let minutes = args.get("minutes").and_then(Value::as_i64).unwrap_or(guard::DEFAULT_MINUTES).clamp(1, guard::MAX_MINUTES);
+    let branch = match (role, args.get("branch").and_then(Value::as_str)) {
+        ("explorer", Some(b)) if guard::valid_branch(b) => b.to_string(),
+        ("explorer", _) => return text_result(json!({"error": "an explorer needs a branch name (letters, digits, - _ .; not main)"}), true),
+        _ => "main".to_string(),
+    };
+    let fp = guard::fingerprint(message);
+    let g = hub.guard();
+    let duplicate = g.duplicate_of(&fp).cloned();
+    let locked: Vec<Value> = g.locked(&items, now, None).into_iter()
+        .map(|(it, c)| json!({"item": it, "session": c.session, "role": c.role, "until": iso(c.until_ms)})).collect();
+    let mine: Vec<String> = items.iter().filter(|i| !locked.iter().any(|l| l["item"] == json!(i))).cloned().collect();
+    let session = guard::session_id(&fp, login, now);
+    if branch != "main" && !g.branches.contains(&branch) {
+        if let Err(e) = write_studio(hub, login, key, "branch.create", Value::Null, json!({"name": branch, "fork_ts": iso(now), "from": "main"}), "main", None, now) {
+            return text_result(json!({"error": e}), true);
+        }
+    }
+    let body = json!({"session": session, "role": role, "items": mine, "fingerprint": fp, "branch": branch, "until_ms": now + minutes * 60_000});
+    if let Err(e) = write_studio(hub, login, key, "session.claim", Value::Null, body, "main", Some(&format!("{session}/claim")), now) {
+        return text_result(json!({"error": e}), true);
+    }
+    let mut r = json!({"session": session, "role": role, "branch": branch, "claimed": mine, "until": iso(now + minutes * 60_000), "locked_by_others": locked});
+    if let Some(d) = duplicate {
+        r["duplicate_of"] = json!({"session": d.session, "role": d.role, "since": d.since, "reply": d.reply, "still_working": d.released.is_none() && now < d.until_ms});
+        r["note"] = json!("Another session already took this message. Read its reply (or its recent writes) and add only what's missing.");
+    }
+    text_result(r, false)
 }
 
 /// Handle one JSON-RPC message. Returns None for notifications. `made` collects new events to persist.
@@ -195,7 +294,7 @@ pub fn handle(hub: &mut Hub, login: &str, key: &KeyPair, msg: &Value, now: i64) 
             let v = if PROTOCOL_VERSIONS.contains(&asked) { asked } else { PROTOCOL_VERSIONS[0] };
             ok(json!({"protocolVersion": v, "capabilities": {"tools": {"listChanged": false}},
                       "serverInfo": {"name": "clanstack-hub", "title": "Clanstack hub", "version": format!("{}+{}", env!("CARGO_PKG_VERSION"), BUILD)},
-                      "instructions": "Clanstack's shared record. hub_status: counts, chain check and build. read_events: Studio events from a cursor. hub_log: the request log (time, tool, outcome, duration; never contents); use it whenever asked for the hub log. import_studio_events: used by Studio Web's sync. write_event: answers, comments, status changes and items (shared record only; never put private material there). read_private / write_private: the signed-in owner's Private tier, stored apart and encrypted (personal material goes there, never into write_event); Sealed items are never readable."}))
+                      "instructions": "Clanstack's shared record. hub_status: counts, chain check and build. read_events: Studio events from a cursor. hub_log: the request log (time, tool, outcome, duration; never contents); use it whenever asked for the hub log. import_studio_events: used by Studio Web's sync. write_event: answers, comments, status changes and items (shared record only; never put private material there). read_private / write_private: the signed-in owner's Private tier, stored apart and encrypted (personal material goes there, never into write_event); Sealed items are never readable. Several chats and AI tools work on this record at once (D-nodach-parallel-guard): before writing anything for a message, call begin_answer with the message, your role and the items you expect to change, pass the returned session to every write_event, and call end_answer with your reply id when done. If begin_answer reports duplicate_of, another session already took the message: read its reply and add only what is missing. Items in locked_by_others take comments only. read_claims shows who is working on what; a new chat reads it, and the latest R- reply items, before starting."}))
         }
         "ping" => ok(json!({})),
         "tools/list" => ok(json!({"tools": tools()})),

@@ -174,10 +174,11 @@ fn mcp_initialize_list_and_tools() {
 
     let r = handle(&mut hub, "Morami49", &key, &json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18"}}), T0).unwrap();
     assert_eq!(r["result"]["protocolVersion"], "2025-06-18");
+    assert!(r["result"]["instructions"].as_str().unwrap().contains("call begin_answer"), "every chat is told to use the guard");
     assert!(handle(&mut hub, "Morami49", &key, &json!({"jsonrpc": "2.0", "method": "notifications/initialized"}), T0).is_none());
     let tools = handle(&mut hub, "Morami49", &key, &json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}), T0).unwrap();
     let names: Vec<&str> = tools["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
-    assert_eq!(names, ["hub_status", "read_events", "hub_log", "read_private", "write_private", "read_profiles", "import_studio_events", "write_event"]);
+    assert_eq!(names, ["hub_status", "read_events", "hub_log", "read_private", "write_private", "read_profiles", "begin_answer", "end_answer", "read_claims", "import_studio_events", "write_event"]);
 
     let call = |hub: &mut Hub, name: &str, args: Value| handle(hub, "Morami49", &key, &json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": name, "arguments": args}}), T0 + 60_000).unwrap()["result"].clone();
     let w = call(&mut hub, "write_event", json!({"kind": "answer", "item": "Q-duress", "body": {"code": "Q86", "text": "A"}}));
@@ -300,4 +301,49 @@ fn i2_profile_writes_are_checked_first_and_read_back() {
     assert_eq!(ids, ["P-dev", "P-morami49"]);
     assert_eq!(v["assigned_items"]["P-dev"], 1);
     assert_eq!(hub.profiles().owner_profile("D-171", "Morami49"), "P-dev");
+}
+
+#[test]
+fn guard_replays_the_17_nov_double_answer() {
+    // Two chats get Nowed's "d + can't afford a solicitor" message. The first claims A-spec-identity and answers;
+    // the second is told it's a duplicate, can't edit the claimed item, but can still comment.
+    let mut hub = Hub::new();
+    let key = KeyPair::from_seed([9u8; 32]);
+    let call = |hub: &mut Hub, name: &str, args: Value, t: i64| handle(hub, "Morami49", &key, &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": name, "arguments": args}}), t).unwrap()["result"].clone();
+    let msg = "d. on point 3, I cannot afford a solicitor's check yet";
+    let a = call(&mut hub, "begin_answer", json!({"message": msg, "role": "builder", "items": ["A-spec-identity"]}), T0)["structuredContent"].clone();
+    let sa = a["session"].as_str().unwrap().to_string();
+    assert_eq!(a["claimed"], json!(["A-spec-identity"]));
+    assert!(a.get("duplicate_of").is_none());
+    // a second chat, a minute later, same message with different spacing
+    let b = call(&mut hub, "begin_answer", json!({"message": "D. on point 3,  i cannot afford a solicitor's check yet", "role": "builder", "items": ["A-spec-identity", "R-2"]}), T0 + 60_000)["structuredContent"].clone();
+    let sb = b["session"].as_str().unwrap().to_string();
+    assert_eq!(b["duplicate_of"]["session"], json!(sa));
+    assert_eq!(b["duplicate_of"]["still_working"], true);
+    assert_eq!(b["claimed"], json!(["R-2"]));
+    assert_eq!(b["locked_by_others"][0]["item"], "A-spec-identity");
+    let edit = call(&mut hub, "write_event", json!({"kind": "item.edit", "item": "A-spec-identity", "session": sb, "body": {"title": "x"}}), T0 + 61_000);
+    assert_eq!(edit["isError"], true);
+    let comment = call(&mut hub, "write_event", json!({"kind": "comment", "item": "A-spec-identity", "session": sb, "body": {"text": "adds the missing part"}}), T0 + 62_000);
+    assert_eq!(comment["isError"], false, "{comment}");
+    assert_eq!(call(&mut hub, "write_event", json!({"kind": "item.edit", "item": "A-spec-identity", "session": sa, "body": {"title": "v1.1"}}), T0 + 63_000)["isError"], false);
+    assert_eq!(call(&mut hub, "read_claims", json!({}), T0 + 64_000)["structuredContent"]["active"].as_array().unwrap().len(), 2);
+    // the first chat finishes; the item is free again, and a third chat sees the reply id
+    assert_eq!(call(&mut hub, "end_answer", json!({"session": sa, "reply": "R-261117-7"}), T0 + 65_000)["isError"], false);
+    assert_eq!(call(&mut hub, "write_event", json!({"kind": "item.edit", "item": "A-spec-identity", "body": {"title": "y"}}), T0 + 66_000)["isError"], false);
+    let c = call(&mut hub, "begin_answer", json!({"message": msg, "role": "auditor"}), T0 + 67_000)["structuredContent"].clone();
+    assert_eq!(c["duplicate_of"]["reply"], "R-261117-7");
+    let sc = c["session"].as_str().unwrap();
+    assert_eq!(call(&mut hub, "write_event", json!({"kind": "status", "item": "D-1", "session": sc, "body": {"status": "done"}}), T0 + 68_000)["isError"], true, "auditors don't change status");
+    // an explorer writes to its own branch, created on first use
+    let e = call(&mut hub, "begin_answer", json!({"message": "what if shifts first", "role": "explorer", "items": ["D-work-lane"], "branch": "what-if-shifts"}), T0 + 70_000)["structuredContent"].clone();
+    let se = e["session"].as_str().unwrap();
+    assert_eq!(call(&mut hub, "write_event", json!({"kind": "item.edit", "item": "D-work-lane", "session": se, "body": {"title": "t"}}), T0 + 71_000)["isError"], false);
+    let (docs, _) = hub.to_studio(0, 500);
+    let last = &docs.last().unwrap().1;
+    assert_eq!(last["branch"], "what-if-shifts");
+    assert!(docs.iter().any(|(_, ev)| ev["kind"] == "branch.create" && ev["body"]["name"] == "what-if-shifts"));
+    assert!(!docs.iter().any(|(_, ev)| ev.to_string().contains("solicitor")), "the message text is never stored");
+    assert_eq!(call(&mut hub, "begin_answer", json!({"message": "x", "role": "explorer"}), T0)["isError"], true);
 }
