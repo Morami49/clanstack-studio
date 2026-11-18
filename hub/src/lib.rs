@@ -50,6 +50,9 @@ use worker::*;
 /// The Studio page, its host shim and its genesis seed, built into the Worker (one file each in studio/).
 const STUDIO_HTML: &str = include_str!("../../studio/index.html");
 const STUDIO_SHIM: &str = include_str!("../../studio/standalone.js");
+const SITE_HOME: &str = include_str!("../../site/index.html");
+const SITE_PRIVACY: &str = include_str!("../../site/privacy.html");
+const SITE_TERMS: &str = include_str!("../../site/terms.html");
 const LOGIN_PAGE: &str = include_str!("../../studio/login.html");
 const STUDIO_IMPORT: &str = include_str!("../../studio/import.html");
 const XLSX_LITE: &str = include_str!("../../studio/xlsx-lite.js");
@@ -761,6 +764,20 @@ impl Record {
         }
         let method = req.method();
         match (method.clone(), path.as_str()) {
+            // DN1 d: nodach.com is the public front page; studio./staging. open Studio at their root
+            (Method::Get, "/" | "/privacy" | "/terms") => {
+                let host = url.host_str().unwrap_or("").to_ascii_lowercase();
+                if path == "/" && (host.starts_with("studio.") || host.starts_with("staging.")) {
+                    return Ok(Some((Response::redirect(Url::parse(&format!("{}/studio", cfg.issuer))?)?, "-".into())));
+                }
+                let body = match path.as_str() { "/privacy" => SITE_PRIVACY, "/terms" => SITE_TERMS, _ => SITE_HOME };
+                let h = Headers::new();
+                h.set("content-type", "text/html; charset=utf-8")?;
+                h.set("cache-control", "public, max-age=300")?;
+                h.set("x-content-type-options", "nosniff")?;
+                h.set("x-frame-options", "DENY")?;
+                Ok(Some((Response::ok(body)?.with_headers(h), "-".into())))
+            }
             (Method::Get, "/studio/login") => {
                 let h = Headers::new();
                 h.set("content-type", "text/html; charset=utf-8")?;
