@@ -396,9 +396,11 @@ impl Record {
         let mut val: Option<String> = None;
         for r in rows {
             let ev = &r["event"];
-            if ev.get("name").and_then(|v| v.as_str()) != Some(name) { continue; }
+            // name and value may sit at the top of the event or in its body (the connector's write_private shape)
+            let field = |k: &str| ev.get(k).or_else(|| ev.pointer(&format!("/body/{k}"))).and_then(|v| v.as_str()).map(str::to_string);
+            if field("name").as_deref() != Some(name) { continue; }
             match ev.get("kind").and_then(|v| v.as_str()) {
-                Some("vault.set") => val = ev.get("value").and_then(|v| v.as_str()).map(str::to_string),
+                Some("vault.set") => val = field("value"),
                 Some("vault.unset") => val = None,
                 _ => {}
             }
