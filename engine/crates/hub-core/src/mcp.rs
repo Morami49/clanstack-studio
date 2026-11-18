@@ -20,8 +20,8 @@ use serde_json::{json, Value};
 pub const PROTOCOL_VERSIONS: [&str; 3] = ["2025-11-25", "2025-06-18", "2025-03-26"];
 /// Commit the node was built from (set by the deploy as BUILD_SHA), so a test knows which code answered.
 pub const BUILD: &str = match option_env!("BUILD_SHA") { Some(b) => b, None => "dev" };
-pub const WRITE_KINDS: [&str; 12] = ["answer", "comment", "status", "item.create", "item.edit", "link",
-    "account.link", "profile.create", "profile.revoke", "profile.assign", "connection.create", "connection.revoke"];
+pub const WRITE_KINDS: [&str; 14] = ["answer", "comment", "status", "item.create", "item.edit", "link",
+    "account.link", "profile.create", "profile.revoke", "profile.assign", "connection.create", "connection.revoke", "access.grant", "access.revoke"];
 
 /// Milliseconds since 1970 → `YYYY-MM-DDTHH:MM:SS.mmmZ` (Studio's timestamp shape).
 pub fn iso(ms: i64) -> String {
@@ -175,7 +175,8 @@ fn call(hub: &mut Hub, login: &str, key: &KeyPair, name: &str, args: &Value, now
         "read_events" => {
             let after = args.get("after").and_then(Value::as_u64).unwrap_or(0) as usize;
             let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(100).clamp(1, 200) as usize;
-            let (events, next, total, skipped) = hub.studio_events(after, limit);
+            // A1 d: a member gets only the spaces they were given and their own writes
+            let (events, next, total, skipped) = hub.studio_events_for(login, after, limit);
             // F-55: say what was skipped, so nobody guesses (a key's first fact is its identity, not a Studio event)
             text_result(json!({"events": events, "next": next, "total": total, "skipped_non_studio": skipped,
                 "note": "Events that are not Studio events (e.g. a key's identity fact) are skipped and counted in skipped_non_studio. Private items are never in this shared record: they are kept apart, encrypted, and only read_private serves them to their owner."}), false)
@@ -187,7 +188,12 @@ fn call(hub: &mut Hub, login: &str, key: &KeyPair, name: &str, args: &Value, now
             }
             let body = match args.get("body") { Some(b) if b.is_object() => b.clone(), _ => return text_result(json!({"error": "body must be an object"}), true) };
             let item = args.get("item").cloned().unwrap_or(Value::Null);
-            if kind != "item.create" && !crate::profiles::KINDS.contains(&kind) && !item.is_string() {
+            // A1 d: members write only inside the spaces they were given; only owners grant access
+            let subject = if kind == "item.create" { body.get("id").and_then(Value::as_str).map(str::to_string) } else { item.as_str().map(str::to_string) };
+            if let Err(e) = hub.access().check_write(login, kind, subject.as_deref()) {
+                return text_result(json!({"error": e, "refused": true}), true);
+            }
+            if kind != "item.create" && !crate::profiles::KINDS.contains(&kind) && !crate::access::KINDS.contains(&kind) && !item.is_string() {
                 return text_result(json!({"error": "item is required for this kind"}), true);
             }
             if kind == "item.create" && body.get("id").and_then(Value::as_str).is_none() {

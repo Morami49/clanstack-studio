@@ -262,7 +262,7 @@ pub fn render(template: &str, item: &Value) -> String {
 }
 
 /// An Ask AI step may name private values to use in its prompt (18 Nov): `vars: {"home": "HOME_AREA"}` reads
-/// the hub secret NODE_SECRET_HOME_AREA and renders it as `{{vars.home}}`. The value is used for the prompt only and
+/// HOME_AREA from the run owner's vault (V1 d) and renders it as `{{vars.home}}`. The value is used for the prompt only and
 /// never written into the items, the run record or the template, so a personal detail stays out of shared data.
 pub fn with_vars(item: &Value, vars: &serde_json::Map<String, Value>) -> Value {
     let mut view = item.clone();

@@ -169,6 +169,8 @@ impl Record {
         if !r.refused.is_empty() {
             console_error!("restore refused {} events", r.refused.len());
         }
+        let mut hub = hub;
+        hub.set_owners(self.owners());
         *self.hub.borrow_mut() = Some(hub);
         Ok(())
     }
@@ -372,6 +374,38 @@ impl Record {
         Ok(KeyPair::from_seed(flows::runner_seed(&s)))
     }
 
+    /// The hub's owners (A1 d): OWNER_GITHUB_LOGINS, else the first allowed login.
+    fn owners(&self) -> Vec<String> {
+        let read = |k: &str| self.env.var(k).map(|v| v.to_string()).unwrap_or_default();
+        let list = |v: String| v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect::<Vec<_>>();
+        let o = list(read("OWNER_GITHUB_LOGINS"));
+        if !o.is_empty() { return o; }
+        list(read("ALLOWED_GITHUB_LOGINS")).into_iter().take(1).collect()
+    }
+
+    /// V1 d: a value from `login`'s vault (data/users/<login>/vault/vars, encrypted with their own key); scheduled
+    /// runs use the first owner's vault. The latest `vault.set` for the name wins; `vault.unset` removes it.
+    fn vault_get(&self, login: &str, name: &str) -> std::result::Result<String, String> {
+        let owner = if login == "schedule" { self.owners().into_iter().next().unwrap_or_default() } else { login.to_string() };
+        if owner.is_empty() || !self.private_ready() { return Err(format!("no vault available for {name}")); }
+        let path = format!("data/users/{owner}/vault/vars");
+        let mut rows = vec![];
+        for p in [path.clone(), format!("data/users/github:{owner}/vault/vars")] {
+            rows.extend(self.private_list(&owner, Some(&p)).map_err(|e| e.to_string())?.0);
+        }
+        let mut val: Option<String> = None;
+        for r in rows {
+            let ev = &r["event"];
+            if ev.get("name").and_then(|v| v.as_str()) != Some(name) { continue; }
+            match ev.get("kind").and_then(|v| v.as_str()) {
+                Some("vault.set") => val = ev.get("value").and_then(|v| v.as_str()).map(str::to_string),
+                Some("vault.unset") => val = None,
+                _ => {}
+            }
+        }
+        val.filter(|v| !v.is_empty()).ok_or_else(|| format!("{name} isn't in your vault yet (Private tier path {path}, a vault.set event with name {name})"))
+    }
+
     fn node_secret(&self, name: &str) -> std::result::Result<String, String> {
         let var = flows::secret_var(name).ok_or_else(|| format!("{name:?} isn't a usable secret name"))?;
         self.secret_opt(&var).ok_or_else(|| format!("the hub has no secret {var} yet (add it in GitHub → Settings → Secrets, then deploy)"))
@@ -429,7 +463,7 @@ impl Record {
         Ok(flows::as_items(body, cfg.get("list").and_then(|v| v.as_str()).unwrap_or("")))
     }
 
-    async fn step_ai(&self, cfg: &serde_json::Value, items: Vec<serde_json::Value>) -> std::result::Result<Vec<serde_json::Value>, String> {
+    async fn step_ai(&self, cfg: &serde_json::Value, items: Vec<serde_json::Value>, login: &str) -> std::result::Result<Vec<serde_json::Value>, String> {
         let key = self.node_secret(cfg.get("secret").and_then(|v| v.as_str()).unwrap_or("GEMINI"))?;
         let model = cfg.get("model").and_then(|v| v.as_str()).unwrap_or("gemini-flash-latest");
         if !model.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'.') {
@@ -442,8 +476,9 @@ impl Record {
         let mut vars = serde_json::Map::new();
         if let Some(o) = cfg.get("vars").and_then(|v| v.as_object()) {
             for (k, sec) in o.iter().take(5) {
+                // V1 d: personal values live in the run owner's vault (their Private tier), never in GitHub secrets
                 let name = sec.as_str().unwrap_or("");
-                let val = self.node_secret(name).map_err(|e| format!("{e}; add NODE_SECRET_{} as a GitHub secret and redeploy", name.to_ascii_uppercase()))?;
+                let val = self.vault_get(login, name)?;
                 vars.insert(k.clone(), serde_json::json!(val));
             }
         }
@@ -565,7 +600,7 @@ impl Record {
                 "fetch" => self.step_fetch(&node.config).await,
                 "filter" => flows::filter(input, &node.config),
                 "calc" => flows::calc(input, &node.config),
-                "ai" => self.step_ai(&node.config, input).await,
+                "ai" => self.step_ai(&node.config, input, login).await,
                 "post" => self.step_post(&node.config, input, login, now).await,
                 other => Err(format!("unknown step {other}")),
             };
@@ -698,13 +733,19 @@ impl Record {
                         }
                     }
                     (_, _, None) => json_status(&serde_json::json!({"error": "sign in at /studio/login"}), 401)?,
-                    (Method::Get, "/studio/api/me", Some(l)) => json_status(&serde_json::json!({
-                        // owner-only allow-list for now (F-44), so everyone signed in is the owner
-                        "login": l, "id": format!("github:{l}"), "owner": true}), 200)?,
+                    (Method::Get, "/studio/api/me", Some(l)) => {
+                        // A1 d: owners see everything; a member sees the spaces they were given
+                        let acc = self.hub.borrow().as_ref().unwrap().access();
+                        json_status(&serde_json::json!({"login": l, "id": format!("github:{l}"), "owner": acc.is_owner(&l),
+                            "spaces": acc.grants_of(&l)}), 200)?
+                    }
                     (Method::Get, "/studio/api/profiles", Some(l)) => {
                         // I2: your account, profiles, connections (refs only) and findings; never someone else's
                         let v = self.hub.borrow().as_ref().unwrap().profiles().view_for(&l);
                         json_status(&v, 200)?
+                    }
+                    (Method::Get, "/studio/api/genesis", Some(l)) if !self.hub.borrow().as_ref().unwrap().access().is_owner(&l) => {
+                        json_status(&serde_json::json!({"label": "genesis", "items": []}), 200)?
                     }
                     (Method::Get, "/studio/api/genesis", Some(_)) => {
                         let h = Headers::new();
@@ -712,13 +753,15 @@ impl Record {
                         h.set("cache-control", "no-store")?;
                         Response::ok(STUDIO_GENESIS)?.with_headers(h)
                     }
-                    (Method::Get, "/studio/api/events", Some(_)) => {
+                    (Method::Get, "/studio/api/events", Some(l)) => {
                         let q = |k: &str| url.query_pairs().find(|(a, _)| a == k).and_then(|(_, v)| v.parse::<usize>().ok());
-                        let (events, next, total, _) = self.hub.borrow().as_ref().unwrap().studio_events(q("after").unwrap_or(0), q("limit").unwrap_or(500).clamp(1, 2000));
+                        let (events, next, total, _) = self.hub.borrow().as_ref().unwrap().studio_events_for(&l, q("after").unwrap_or(0), q("limit").unwrap_or(500).clamp(1, 2000));
                         json_status(&serde_json::json!({"events": events, "next": next, "total": total}), 200)?
                     }
                     (Method::Post, "/studio/api/run", Some(l)) => {
-                        if req.headers().get(session::CSRF_HEADER).ok().flatten().as_deref() != Some("1") {
+                        if !self.hub.borrow().as_ref().unwrap().access().is_owner(&l) {
+                            json_status(&serde_json::json!({"error": "running flows is for owners for now"}), 403)?
+                        } else if req.headers().get(session::CSRF_HEADER).ok().flatten().as_deref() != Some("1") {
                             json_status(&serde_json::json!({"error": "missing x-nodach-studio header"}), 403)?
                         } else {
                             let body: serde_json::Value = req.json().await.unwrap_or(serde_json::Value::Null);
@@ -737,8 +780,13 @@ impl Record {
                             let doc_id = body.get("doc_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
                             let ev = body.get("event").cloned().unwrap_or(serde_json::Value::Null);
                             let ok_ev = ev.get("kind").and_then(|v| v.as_str()).is_some() && ev.get("ts").and_then(|v| v.as_str()).is_some();
+                            let kind = ev.get("kind").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                            let subject = hub_core::access::subject(&ev);
+                            let allowed = self.hub.borrow().as_ref().unwrap().access().check_write(&l, &kind, subject.as_deref());
                             if !valid_doc_id(&doc_id) || !ok_ev {
                                 json_status(&serde_json::json!({"error": "need {doc_id, event:{kind, ts, ...}}"}), 400)?
+                            } else if let Err(e) = allowed {
+                                json_status(&serde_json::json!({"error": e, "refused": true}), 403)?
                             } else {
                                 let importer = self.importer_key()?;
                                 let made = self.hub.borrow_mut().as_mut().unwrap().import(&importer, vec![(doc_id.clone(), ev)], now)
