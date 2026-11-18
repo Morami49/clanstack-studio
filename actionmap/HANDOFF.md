@@ -362,3 +362,10 @@ Read `events` there for answers; new decisions continue at D-053.
   `data/users/<login>/work-lane/<tab>` keyed by a hash of their cells, so re-runs repeat and edited rows become new versions;
   each import writes `import.snapshot` (ordered keys) and `import.manifest` (file sha256, per-tab counts, batch checksums,
   held-back tabs) under `work-lane/imports`. People, LinkedIn and Messages can't be selected. Tests: xlsx-lite.test.mjs, import_page.py.
+
+- **2026-11-18 — A1 d step one and V1 d: spaces and the vault.** `hub_core::access`: owners (`OWNER_GITHUB_LOGINS`, else the
+  first allowed login) see the whole shared record; any other signed-in login sees only items granted to them by id or id
+  prefix (`access.grant` / `access.revoke`, owner-only, replayable) plus their own writes, and writes only inside those
+  grants. Applied to the connector's read_events/write_event and Studio's events, me, genesis and run. The Ask AI step's
+  `vars` now read from the run owner's vault (Private tier `data/users/<login>/vault/vars`, `vault.set`/`vault.unset`
+  events), never GitHub secrets; scheduled runs use the first owner's vault. Supersedes PR #26's NODE_SECRET_HOME_AREA.

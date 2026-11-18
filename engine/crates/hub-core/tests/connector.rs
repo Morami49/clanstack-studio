@@ -347,3 +347,27 @@ fn guard_replays_the_17_nov_double_answer() {
     assert!(!docs.iter().any(|(_, ev)| ev.to_string().contains("solicitor")), "the message text is never stored");
     assert_eq!(call(&mut hub, "begin_answer", json!({"message": "x", "role": "explorer"}), T0)["isError"], true);
 }
+
+#[test]
+fn a_tenant_sees_and_writes_only_their_space() {
+    // A1 d step one: before Insydr signs in, a member must never see Nodach's governance or other spaces.
+    let mut hub = Hub::new();
+    hub.set_owners(vec!["Morami49".into()]);
+    let key = KeyPair::from_seed([9u8; 32]);
+    let call = |hub: &mut Hub, who: &str, name: &str, args: Value| handle(hub, who, &key, &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": name, "arguments": args}}), T0).unwrap()["result"].clone();
+    let w = |hub: &mut Hub, who: &str, args: Value| call(hub, who, "write_event", args);
+    assert_eq!(w(&mut hub, "Morami49", json!({"kind": "item.create", "item": null, "body": {"id": "D-nodach-org-model", "type": "decision", "title": "ownership"}}))["isError"], false);
+    assert_eq!(w(&mut hub, "Morami49", json!({"kind": "item.create", "item": null, "body": {"id": "INSYDR-pilot", "type": "asset", "title": "pilot board"}}))["isError"], false);
+    // a member can't grant themselves anything
+    let forged = w(&mut hub, "nassar-insydr", json!({"kind": "access.grant", "item": null, "body": {"login": "nassar-insydr", "prefixes": ["D-"]}}));
+    assert_eq!(forged["structuredContent"]["refused"], true, "{forged}");
+    assert_eq!(w(&mut hub, "Morami49", json!({"kind": "access.grant", "item": null, "body": {"login": "nassar-insydr", "prefixes": ["INSYDR-"]}}))["isError"], false);
+    let seen = call(&mut hub, "nassar-insydr", "read_events", json!({"after": 0, "limit": 200}))["structuredContent"]["events"].clone();
+    let ids: Vec<String> = seen.as_array().unwrap().iter().filter_map(|d| d["event"]["body"]["id"].as_str().map(String::from)).collect();
+    assert_eq!(ids, ["INSYDR-pilot"], "the member sees their space only");
+    assert_eq!(w(&mut hub, "nassar-insydr", json!({"kind": "comment", "item": "INSYDR-pilot", "body": {"text": "start with the hotel fit-out"}}))["isError"], false);
+    assert_eq!(w(&mut hub, "nassar-insydr", json!({"kind": "comment", "item": "D-nodach-org-model", "body": {"text": "hi"}}))["structuredContent"]["refused"], true);
+    let owner_sees = call(&mut hub, "Morami49", "read_events", json!({"after": 0, "limit": 200}))["structuredContent"]["events"].as_array().unwrap().len();
+    assert_eq!(owner_sees, 4, "the owner sees everything: two items, the grant and the tenant's comment");
+}

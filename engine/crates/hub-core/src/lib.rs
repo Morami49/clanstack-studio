@@ -25,6 +25,7 @@ pub mod flows;
 pub mod private;
 pub mod profiles;
 pub mod guard;
+pub mod access;
 
 pub const IMPORT_KIND: &str = "studio.event";
 /// A Studio-shaped write made on a node other than Studio Web (PC, phone, an AI via the hub).
@@ -71,6 +72,8 @@ pub struct Hub {
     idem: HashMap<String, String>,
     /// F-47: item ids this record knows (created in Studio or through the hub), to warn on unknown targets.
     items: HashSet<String>,
+    /// A1 d: owner logins (from the hub's settings); empty means everyone signed in is an owner, as before.
+    owners: Vec<String>,
 }
 
 impl Hub {
@@ -195,6 +198,25 @@ impl Hub {
             }
         }
         st
+    }
+
+    /// A1 d: set the owner logins (the worker reads them from OWNER_GITHUB_LOGINS).
+    pub fn set_owners(&mut self, owners: Vec<String>) { self.owners = owners; }
+
+    /// Who may see and change what, folded from the record's access grants (A1 d).
+    pub fn access(&self) -> access::State {
+        let (docs, _, _, _) = self.studio_events(0, usize::MAX);
+        let evs: Vec<Value> = docs.iter().filter_map(|d| d.get("event").cloned()).collect();
+        access::State::fold(&self.owners, &evs)
+    }
+
+    /// One page of the shared record as `login` may see it: same cursor and total, members get only what's theirs.
+    pub fn studio_events_for(&self, login: &str, after: usize, limit: usize) -> (Vec<Value>, usize, usize, usize) {
+        let (docs, next, total, skipped) = self.studio_events(after, limit);
+        let acc = self.access();
+        if acc.is_owner(login) { return (docs, next, total, skipped); }
+        let mine: Vec<Value> = docs.into_iter().filter(|d| d.get("event").map(|e| acc.visible(login, e)).unwrap_or(false)).collect();
+        (mine, next, total, skipped)
     }
 
     /// Session claims and Studio branches (multi-chat guard), folded from every Studio-shaped event in order.
