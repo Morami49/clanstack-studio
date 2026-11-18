@@ -1,8 +1,17 @@
-# Clanstack Studio
+# Nodach Studio
 
 Licensed under the [GNU AGPL v3.0](LICENSE). "Nodach" and "Nodach Studio" are trademarks; see [TRADEMARKS.md](TRADEMARKS.md).
 
-The platform for building and running Clanstack (D-056, D-065).
+Nodach Studio is a shared workspace where people, ventures and AI agents plan, decide and build together, on a signed,
+versioned record. It's where Nodach is built from within Nodach. Each person keeps a Private tier (encrypted, theirs);
+shared work lands on a record anyone with access can trace back through every version.
+
+**Why use the hosted Nodach if the code is open?** Anyone may run or fork this code under the AGPL. What a fork can't
+copy is the name, the people and tenants already working here, their record, the stewards who protect the mission,
+and the hosting. The ownership model behind that is recorded on the hub as D-nodach-org-model (v1.0, 18 Nov 2026).
+
+This repository was called clanstack-studio until 18 Nov 2026; Clanstack is now a separate venture. Some hub
+addresses and decision codes still say Clanstack (D-056, D-065) and will be renamed later without changing history.
 
 | Folder | Layer | What it is |
 |---|---|---|
