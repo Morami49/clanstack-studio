@@ -369,3 +369,10 @@ Read `events` there for answers; new decisions continue at D-053.
   grants. Applied to the connector's read_events/write_event and Studio's events, me, genesis and run. The Ask AI step's
   `vars` now read from the run owner's vault (Private tier `data/users/<login>/vault/vars`, `vault.set`/`vault.unset`
   events), never GitHub secrets; scheduled runs use the first owner's vault. Supersedes PR #26's NODE_SECRET_HOME_AREA.
+
+- **2026-11-18 — Google and email sign-in for invited people.** `/studio/login` offers Google, GitHub or an emailed link.
+  Email accounts use login `e-` + the first 16 hex of SHA-256(lowercased email): the same address gives the same account
+  via Google or a link, and the raw address is never stored. An owner invites with `access.invite {email_sha256, label}`
+  (uninvite reverses it); signed-in sessions are re-checked against the allow-list plus current invites on every request.
+  Links are HMAC-signed separately from sessions and expire after 15 minutes (not single-use yet). Needs secrets
+  GOOGLE_OAUTH_CLIENT_ID/SECRET and RESEND_API_KEY, and MAIL_FROM in wrangler.toml. The connector stays GitHub-only.
