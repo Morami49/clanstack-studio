@@ -62,6 +62,7 @@ jobs:
           NODE_SECRET_GEMINI: ${{ secrets.NODE_SECRET_GEMINI }}
           NODE_SECRET_ADZUNA_ID: ${{ secrets.NODE_SECRET_ADZUNA_ID }}
           NODE_SECRET_ADZUNA_KEY: ${{ secrets.NODE_SECRET_ADZUNA_KEY }}
+          NODE_SECRET_HOME_AREA: ${{ secrets.NODE_SECRET_HOME_AREA }}   # Shift Scout's starting area, kept out of the public repo
         run: |
           W="npx -y wrangler@4.158.0"
           have=$($W secret list --env staging)
@@ -73,7 +74,7 @@ jobs:
           [ -n "$GH_SECRET" ] && printf '%s' "$GH_SECRET" | $W secret put GH_OAUTH_CLIENT_SECRET --env staging || true
           [ -n "$TOKEN" ] && printf '%s' "$TOKEN" | $W secret put HUB_WRITE_TOKEN --env staging || true
           # step secrets for runnable flows (D-174): same keys as production, so flows can be tried on staging first
-          for n in NODE_SECRET_REED NODE_SECRET_GEMINI NODE_SECRET_ADZUNA_ID NODE_SECRET_ADZUNA_KEY; do
+          for n in NODE_SECRET_REED NODE_SECRET_GEMINI NODE_SECRET_ADZUNA_ID NODE_SECRET_ADZUNA_KEY NODE_SECRET_HOME_AREA; do
             v="${!n}"; [ -n "$v" ] && printf '%s' "$v" | $W secret put "$n" --env staging || true
           done
       - if: steps.ready.outputs.go == 'yes'

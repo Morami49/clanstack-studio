@@ -634,7 +634,7 @@ const STEP_DEFAULTS = {
   fetch: {title:"Fetch", config:{url:"https://www.reed.co.uk/api/1.0/search?keywords=temp&locationName=London&distanceFromLocation=15&resultsToTake=50", list:"results", auth:{type:"basic", secret:"REED"}}},
   filter:{title:"Filter", config:{all:[{field:"minimumSalary", op:"exists"}], none:[{field:"jobTitle", op:"contains", value:"driver"}, {field:"jobDescription", op:"contains", value:"licence"}]}},
   calc:  {title:"Calculate", config:{sets:[{set:"ratio", a:"minimumSalary", op:"/", b:"travel"}]}},
-  ai:    {title:"Ask AI", config:{prompt:"Estimate the return public-transport fare in GBP from London E12 to {{locationName}}. Reply with a number only.", set:"travel", secret:"GEMINI", max_items:10}},
+  ai:    {title:"Ask AI", config:{prompt:"Estimate the return public-transport fare in GBP from {{vars.home}} to {{locationName}}. Reply with a number only.", vars:{home:"HOME_AREA"}, set:"travel", secret:"GEMINI", max_items:10}},
   post:  {title:"Post to lobby", config:{item:"LOBBY-income", item_title:"Income lobby", text:"{{jobTitle}} · {{employerName}} · {{locationName}} · £{{minimumSalary}}–{{maximumSalary}} · ratio {{ratio}} · {{jobUrl}}", once:"{{jobId}}", max_items:30}},
 };
 function flowState(){

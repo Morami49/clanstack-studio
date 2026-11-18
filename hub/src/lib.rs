@@ -438,6 +438,15 @@ impl Record {
         let prompt = cfg.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
         let set = cfg.get("set").and_then(|v| v.as_str()).unwrap_or("ai").to_string();
         let max = cfg.get("max_items").and_then(|v| v.as_u64()).unwrap_or(10).min(20) as usize;
+        // Private values for the prompt only (flows::with_vars), e.g. the owner's home area kept out of the record.
+        let mut vars = serde_json::Map::new();
+        if let Some(o) = cfg.get("vars").and_then(|v| v.as_object()) {
+            for (k, sec) in o.iter().take(5) {
+                let name = sec.as_str().unwrap_or("");
+                let val = self.node_secret(name).map_err(|e| format!("{e}; add NODE_SECRET_{} as a GitHub secret and redeploy", name.to_ascii_uppercase()))?;
+                vars.insert(k.clone(), serde_json::json!(val));
+            }
+        }
         // Busy models (429/500/503) are retried after a pause, then the lighter model is tried (F-75): Gemini's
         // free tier answers "high demand" often enough that one refusal shouldn't stop a whole flow.
         let mut models = vec![model.to_string()];
@@ -446,7 +455,7 @@ impl Record {
         let mut used: Option<String> = None;
         for (i, mut it) in items.into_iter().enumerate() {
             if i < max {
-                let body = serde_json::json!({"contents": [{"parts": [{"text": flows::render(prompt, &it)}]}]}).to_string();
+                let body = serde_json::json!({"contents": [{"parts": [{"text": flows::render(prompt, &flows::with_vars(&it, &vars))}]}]}).to_string();
                 let mut last = String::new();
                 let mut text = None;
                 'models: for m in models.iter().skip_while(|m| used.as_ref().is_some_and(|u| u != *m)) {

@@ -177,3 +177,14 @@ fn posted_keys_are_read_from_the_items_comments() {
     let k = flows::posted_keys(&evs, "LOBBY-income");
     assert!(k.contains("123") && !k.contains("456") && k.len() == 1);
 }
+
+#[test]
+fn private_vars_render_in_the_prompt_but_never_reach_the_item() {
+    // Shift Scout's starting area comes from a hub secret, not the template or the record (18 Nov).
+    let it = serde_json::json!({"locationName": "Hounslow"});
+    let mut v = serde_json::Map::new();
+    v.insert("home".into(), serde_json::json!("North Pole"));
+    let view = hub_core::flows::with_vars(&it, &v);
+    assert_eq!(hub_core::flows::render("from {{vars.home}} to {{locationName}}", &view), "from North Pole to Hounslow");
+    assert!(it.get("vars").is_none());
+}
