@@ -21,7 +21,11 @@
 //!
 //! Nodach Studio served by the hub (D-171 S1, Q21 A): GitHub sign-in, then a session cookie (hub_core::session).
 //! GET  /studio              the Studio page (signed in) or a redirect to /studio/login
-//! GET  /studio/login        sends the person to GitHub; GitHub returns to the shared /callback with a studio- state
+//! GET  /studio/login        choose GitHub, Google or an emailed link (Google and email accounts need an owner's invite)
+//! GET  /studio/login/github sends the person to GitHub; GitHub returns to the shared /callback with a studio- state
+//! GET  /studio/login/google sends the person to Google; Google returns to /studio/callback/google
+//! POST /studio/login/email  {email}: emails a 15-minute sign-in link if the address was invited
+//! GET  /studio/login/email?token=  signs in from that link
 //! GET  /studio/logout       clears the session
 //! POST /studio/api/run      {board, start}: run the canvas flow from that step (hub_core::flows; D-174 C2)
 //! GET  /studio/api/me       {login, id, owner}
@@ -46,6 +50,7 @@ use worker::*;
 /// The Studio page, its host shim and its genesis seed, built into the Worker (one file each in studio/).
 const STUDIO_HTML: &str = include_str!("../../studio/index.html");
 const STUDIO_SHIM: &str = include_str!("../../studio/standalone.js");
+const LOGIN_PAGE: &str = include_str!("../../studio/login.html");
 const STUDIO_IMPORT: &str = include_str!("../../studio/import.html");
 const XLSX_LITE: &str = include_str!("../../studio/xlsx-lite.js");
 const STUDIO_GENESIS: &str = include_str!("../../studio/tests/genesis.json");
@@ -643,7 +648,75 @@ impl Record {
         let key = self.session_key()?;
         let header = req.headers().get("cookie").ok().flatten()?;
         let c = session::cookie_value(&header, session::SESSION_COOKIE)?;
-        session::verify(&key, &c, now, &cfg.allowed_logins)
+        session::verify(&key, &c, now, &self.sign_in_allowed(cfg))
+    }
+
+    /// Who may sign in to Studio: the GitHub allow-list plus email accounts an owner invited (18 Nov).
+    fn sign_in_allowed(&self, cfg: &Config) -> Vec<String> {
+        let _ = self.load();
+        let mut list = cfg.allowed_logins.clone();
+        if let Some(h) = self.hub.borrow().as_ref() { list.extend(h.access().invited_logins()); }
+        list
+    }
+
+    /// Ends a sign-in: mint the session for `login` if they may sign in, then go to Studio.
+    fn finish_sign_in(&self, cfg: &Config, login: &str, now: i64, method: &str) -> Result<Option<(Response, String)>> {
+        if !session::allowed(login, &self.sign_in_allowed(cfg)) {
+            let msg = if method == "github" { format!("{login} is not allowed to use this Studio yet.") }
+                      else { "That email address hasn't been invited to this Studio yet. Ask the person who invited you which address they used.".to_string() };
+            let r = page("Not allowed", &msg, 403)?;
+            return Ok(Some((with_cookies(r, &[session::state_set_cookie(None)])?, login.to_string())));
+        }
+        let Some(value) = self.session_key().and_then(|k| session::mint(&k, login, now)) else {
+            return Ok(Some((page("Not set up yet", "The hub has no signing seed yet; deploy once more.", 503)?, "-".into())));
+        };
+        let r = Response::redirect(Url::parse(&format!("{}/studio", cfg.issuer))?)?;
+        Ok(Some((with_cookies(r, &[session::session_set_cookie(Some(&value)), session::state_set_cookie(None)])?, login.to_string())))
+    }
+
+    /// Google sign-in: exchange the code, then read the verified email from Google's userinfo endpoint.
+    async fn google_email(&self, code: &str, redirect_uri: &str) -> Result<String> {
+        let (id, secret) = match (self.secret_opt("GOOGLE_OAUTH_CLIENT_ID"), self.secret_opt("GOOGLE_OAUTH_CLIENT_SECRET")) {
+            (Some(i), Some(s)) => (i, s),
+            _ => return Err(Error::RustError("Google sign-in is not set up yet".into())),
+        };
+        let h = Headers::new();
+        h.set("content-type", "application/x-www-form-urlencoded")?;
+        let body = format!("code={}&client_id={}&client_secret={}&redirect_uri={}&grant_type=authorization_code",
+            oauth::enc(code), oauth::enc(&id), oauth::enc(&secret), oauth::enc(redirect_uri));
+        let mut init = RequestInit::new();
+        init.with_method(Method::Post).with_headers(h).with_body(Some(worker::wasm_bindgen::JsValue::from_str(&body)));
+        let mut r = Fetch::Request(Request::new_with_init("https://oauth2.googleapis.com/token", &init)?).send().await?;
+        let tok: serde_json::Value = r.json().await?;
+        let at = tok.get("access_token").and_then(|v| v.as_str()).ok_or_else(|| Error::RustError("Google refused the sign-in".into()))?.to_string();
+        let h = Headers::new();
+        h.set("authorization", &format!("Bearer {at}"))?;
+        let mut init = RequestInit::new();
+        init.with_method(Method::Get).with_headers(h);
+        let mut r = Fetch::Request(Request::new_with_init("https://openidconnect.googleapis.com/v1/userinfo", &init)?).send().await?;
+        let user: serde_json::Value = r.json().await?;
+        if user.get("email_verified").and_then(|v| v.as_bool()) != Some(true) {
+            return Err(Error::RustError("Google says that email address isn't verified".into()));
+        }
+        user.get("email").and_then(|v| v.as_str()).map(String::from).ok_or_else(|| Error::RustError("Google returned no email".into()))
+    }
+
+    /// Sends the one-time sign-in link through Resend (RESEND_API_KEY secret, MAIL_FROM var).
+    async fn send_sign_in_link(&self, to: &str, link: &str) -> std::result::Result<(), String> {
+        let key = self.secret_opt("RESEND_API_KEY").ok_or("email sign-in isn't set up yet (RESEND_API_KEY)")?;
+        let from = self.env.var("MAIL_FROM").map(|v| v.to_string()).unwrap_or_default();
+        if from.is_empty() { return Err("email sign-in isn't set up yet (MAIL_FROM)".into()); }
+        let text = format!("Here's your link to sign in to Nodach Studio. It works for 15 minutes.\n\n{link}\n\nIf you didn't ask for this, you can ignore this email.");
+        let body = serde_json::json!({"from": from, "to": [to], "subject": "Your Nodach Studio sign-in link", "text": text}).to_string();
+        let h = Headers::new();
+        h.set("authorization", &format!("Bearer {key}")).map_err(|e| e.to_string())?;
+        h.set("content-type", "application/json").map_err(|e| e.to_string())?;
+        let mut init = RequestInit::new();
+        init.with_method(Method::Post).with_headers(h).with_body(Some(worker::wasm_bindgen::JsValue::from_str(&body)));
+        let req = Request::new_with_init("https://api.resend.com/emails", &init).map_err(|e| e.to_string())?;
+        let r = Fetch::Request(req).send().await.map_err(|e| e.to_string())?;
+        if r.status_code() >= 300 { return Err(format!("the mail service answered {}", r.status_code())); }
+        Ok(())
     }
 
     /// Nodach Studio routes; None = not a Studio route (the shared /callback falls through for the connector).
@@ -665,19 +738,72 @@ impl Record {
                 Ok(l) => l,
                 Err(e) => return Ok(Some((page("Sign-in failed", &e.to_string(), 502)?, "-".into()))),
             };
-            if !session::allowed(&login, &cfg.allowed_logins) {
-                let r = page("Not allowed", &format!("{login} is not allowed to use this Studio yet."), 403)?;
-                return Ok(Some((with_cookies(r, &[session::state_set_cookie(None)])?, login)));
+            // a GitHub account named like an email account can't take that account over
+            if login.to_ascii_lowercase().starts_with(session::EMAIL_LOGIN_PREFIX) && !session::allowed(&login, &cfg.allowed_logins) {
+                return Ok(Some((page("Not allowed", "That GitHub account can't sign in here.", 403)?, "-".into())));
             }
-            let Some(value) = self.session_key().and_then(|k| session::mint(&k, &login, now)) else {
-                return Ok(Some((page("Not set up yet", "The hub has no signing seed yet; deploy once more.", 503)?, "-".into())));
+            return self.finish_sign_in(&cfg, &login, now, "github");
+        }
+        if path == "/studio/callback/google" {
+            let q = oauth::parse_form(url.query().unwrap_or(""));
+            let cookie = req.headers().get("cookie").ok().flatten().and_then(|h| session::cookie_value(&h, session::STATE_COOKIE));
+            if !q.get("state").is_some_and(|s| session::state_matches(s, cookie.as_deref())) {
+                return Ok(Some((page("Sign-in expired", "Open /studio and sign in again.", 400)?, "-".into())));
+            }
+            let Some(code) = q.get("code") else {
+                return Ok(Some((page("Sign-in cancelled", "Google didn't return a sign-in code. Open /studio to try again.", 400)?, "-".into())));
             };
-            let r = Response::redirect(Url::parse(&format!("{}/studio", cfg.issuer))?)?;
-            return Ok(Some((with_cookies(r, &[session::session_set_cookie(Some(&value)), session::state_set_cookie(None)])?, login)));
+            let email = match self.google_email(code, &format!("{}/studio/callback/google", cfg.issuer)).await {
+                Ok(e) => e,
+                Err(e) => return Ok(Some((page("Sign-in failed", &e.to_string(), 502)?, "-".into()))),
+            };
+            return self.finish_sign_in(&cfg, &session::email_login(&email), now, "google");
         }
         let method = req.method();
         match (method.clone(), path.as_str()) {
             (Method::Get, "/studio/login") => {
+                let h = Headers::new();
+                h.set("content-type", "text/html; charset=utf-8")?;
+                h.set("cache-control", "no-store")?;
+                h.set("x-frame-options", "DENY")?;
+                Ok(Some((Response::ok(LOGIN_PAGE)?.with_headers(h), "-".into())))
+            }
+            (Method::Get, "/studio/login/google") => {
+                let Some(gid) = self.secret_opt("GOOGLE_OAUTH_CLIENT_ID") else {
+                    return Ok(Some((page("Not set up yet", "Google sign-in isn't configured on this hub yet.", 503)?, "-".into())));
+                };
+                let state = format!("{}{}", session::STATE_PREFIX, random_hex(16)?);
+                let to = format!("https://accounts.google.com/o/oauth2/v2/auth?client_id={}&redirect_uri={}&response_type=code&scope=openid%20email&state={}&prompt=select_account",
+                    oauth::enc(&gid), oauth::enc(&format!("{}/studio/callback/google", cfg.issuer)), state);
+                let r = Response::redirect(Url::parse(&to)?)?;
+                Ok(Some((with_cookies(r, &[session::state_set_cookie(Some(&state))])?, "-".into())))
+            }
+            (Method::Post, "/studio/login/email") => {
+                // Always the same answer, invited or not, so the form can't be used to test addresses.
+                let form = oauth::parse_form(&req.text().await.unwrap_or_default());
+                let email = form.get("email").cloned().unwrap_or_default();
+                let done = page("Check your email", "If that address has been invited, a sign-in link is on its way. It works for 15 minutes.", 200)?;
+                if !session::plausible_email(&email) {
+                    return Ok(Some((page("That doesn't look like an email address", "Go back and check it.", 400)?, "-".into())));
+                }
+                let login = session::email_login(&email);
+                if session::allowed(&login, &self.sign_in_allowed(&cfg)) {
+                    if let Some(token) = self.session_key().and_then(|k| session::mint_link(&k, &login, now)) {
+                        let link = format!("{}/studio/login/email?token={}", cfg.issuer, oauth::enc(&token));
+                        let outcome = match self.send_sign_in_link(email.trim(), &link).await { Ok(()) => "sent", Err(e) => { console_error!("sign-in link: {e}"); "failed" } };
+                        self.log(now, "/studio/login/email", "email link", outcome, &login);
+                    }
+                }
+                Ok(Some((done, "-".into())))
+            }
+            (Method::Get, "/studio/login/email") => {
+                let token = url.query_pairs().find(|(k, _)| k == "token").map(|(_, v)| v.to_string()).unwrap_or_default();
+                match self.session_key().and_then(|k| session::verify_link(&k, &token, now)) {
+                    Some(login) => self.finish_sign_in(&cfg, &login, now, "email"),
+                    None => Ok(Some((page("Link expired", "Sign-in links work once for 15 minutes. Open /studio/login to get a new one.", 400)?, "-".into()))),
+                }
+            }
+            (Method::Get, "/studio/login/github") => {
                 let Some(gh_id) = self.secret_opt("GH_OAUTH_CLIENT_ID") else {
                     return Ok(Some((page("Not set up yet", "The hub's GitHub sign-in isn't configured yet (D-128).", 503)?, "-".into())));
                 };
@@ -738,8 +864,9 @@ impl Record {
                     (Method::Get, "/studio/api/me", Some(l)) => {
                         // A1 d: owners see everything; a member sees the spaces they were given
                         let acc = self.hub.borrow().as_ref().unwrap().access();
-                        json_status(&serde_json::json!({"login": l, "id": format!("github:{l}"), "owner": acc.is_owner(&l),
-                            "spaces": acc.grants_of(&l)}), 200)?
+                        let email_account = l.to_ascii_lowercase().starts_with(session::EMAIL_LOGIN_PREFIX);
+                        json_status(&serde_json::json!({"login": l, "id": if email_account { format!("email:{l}") } else { format!("github:{l}") },
+                            "label": acc.label_of(&l), "owner": acc.is_owner(&l), "spaces": acc.grants_of(&l)}), 200)?
                     }
                     (Method::Get, "/studio/api/profiles", Some(l)) => {
                         // I2: your account, profiles, connections (refs only) and findings; never someone else's

@@ -117,3 +117,56 @@ pub fn state_matches(query_state: &str, cookie_state: Option<&str>) -> bool {
     query_state.starts_with(STATE_PREFIX) && query_state.len() > STATE_PREFIX.len() + 16
         && cookie_state.is_some_and(|c| ct_eq(c.as_bytes(), query_state.as_bytes()))
 }
+
+// ---- Google and email sign-in (18 Nov 2026) ----
+// People without GitHub sign in with a verified email, through Google or a one-time email link. Their login is
+// derived from the email, so the same address gives the same account either way, and the raw address is never
+// stored: invites and grants on the record carry only its SHA-256 (as I2 requires).
+
+/// Login prefix for email-based accounts. GitHub sign-ins with this prefix are refused unless allow-listed.
+pub const EMAIL_LOGIN_PREFIX: &str = "e-";
+/// How long an emailed sign-in link works.
+pub const LINK_TTL_MS: i64 = 15 * 60 * 1000;
+
+/// The email as I2 stores identities: SHA-256 of the trimmed, lowercased address, in hex.
+pub fn email_hash(email: &str) -> String {
+    hex::encode(Sha256::digest(email.trim().to_ascii_lowercase().as_bytes()))
+}
+
+/// The account login for an email: "e-" plus the first 16 hex characters of its hash.
+pub fn email_login(email: &str) -> String {
+    format!("{EMAIL_LOGIN_PREFIX}{}", &email_hash(email)[..16])
+}
+
+/// The login an invite (by email hash) refers to.
+pub fn login_for_hash(hash: &str) -> Option<String> {
+    let h = hash.trim().to_ascii_lowercase();
+    (h.len() == 64 && h.bytes().all(|b| b.is_ascii_hexdigit())).then(|| format!("{EMAIL_LOGIN_PREFIX}{}", &h[..16]))
+}
+
+/// A plausible email address (one @, a dot in the domain, no spaces), at most 254 characters.
+pub fn plausible_email(e: &str) -> bool {
+    let e = e.trim();
+    e.len() <= 254 && !e.contains(char::is_whitespace) && e.matches('@').count() == 1
+        && e.split_once('@').is_some_and(|(u, d)| !u.is_empty() && d.contains('.') && !d.starts_with('.') && !d.ends_with('.'))
+}
+
+/// A sign-in link token for `login`, valid for LINK_TTL_MS. Signed separately from sessions ("link:"), so a
+/// session cookie can never be used as a link or the reverse.
+pub fn mint_link(key: &[u8; 32], login: &str, now: i64) -> Option<String> {
+    if !valid_login(login) { return None; }
+    let payload = format!("{login}.{}", now + LINK_TTL_MS);
+    let sig = hex::encode(hmac_sha256(key, format!("link:{payload}").as_bytes()));
+    Some(format!("{payload}.{sig}"))
+}
+
+/// The login a link token was minted for, if it's genuine and unexpired.
+pub fn verify_link(key: &[u8; 32], token: &str, now: i64) -> Option<String> {
+    let mut parts = token.rsplitn(2, '.');
+    let sig = parts.next()?;
+    let payload = parts.next()?;
+    let (login, exp) = payload.split_once('.')?;
+    let exp: i64 = exp.parse().ok()?;
+    let want = hex::encode(hmac_sha256(key, format!("link:{payload}").as_bytes()));
+    (ct_eq(sig.as_bytes(), want.as_bytes()) && exp > now && valid_login(login)).then(|| login.to_string())
+}

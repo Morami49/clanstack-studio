@@ -102,3 +102,27 @@ fn studio_sign_in_state_must_match_its_cookie() {
     // a prefix with nothing random after it is refused
     assert!(!state_matches(STATE_PREFIX, Some(STATE_PREFIX)));
 }
+
+#[test]
+fn email_accounts_are_derived_from_the_address_and_never_store_it() {
+    assert_eq!(email_login(" Nassar@Example.com "), email_login("nassar@example.com"), "same address, same account");
+    assert!(email_login("a@b.co").starts_with("e-") && email_login("a@b.co").len() == 18);
+    assert!(valid_login(&email_login("a@b.co")));
+    assert_eq!(login_for_hash(&email_hash("a@b.co")), Some(email_login("a@b.co")));
+    assert_eq!(login_for_hash("not-a-hash"), None);
+    assert!(plausible_email("nassar@insydr.co.uk"));
+    for bad in ["nassar", "a@b", "a@@b.co", "a b@c.co", "@b.co", "a@.co"] { assert!(!plausible_email(bad), "{bad}"); }
+}
+
+#[test]
+fn sign_in_links_expire_and_cant_be_used_as_sessions() {
+    let k = session_key("secret-a");
+    let l = email_login("nassar@example.com");
+    let t = mint_link(&k, &l, NOW).unwrap();
+    assert_eq!(verify_link(&k, &t, NOW + 60_000).as_deref(), Some(l.as_str()));
+    assert_eq!(verify_link(&k, &t, NOW + LINK_TTL_MS + 1), None, "expired");
+    assert_eq!(verify_link(&session_key("other"), &t, NOW), None, "another hub's key");
+    assert_eq!(verify(&k, &t, NOW, &[l.clone()]), None, "a link is not a session");
+    let s = mint(&k, &l, NOW).unwrap();
+    assert_eq!(verify_link(&k, &s, NOW), None, "a session is not a link");
+}

@@ -13,7 +13,7 @@
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const KINDS: [&str; 2] = ["access.grant", "access.revoke"];
+pub const KINDS: [&str; 4] = ["access.grant", "access.revoke", "access.invite", "access.uninvite"];
 
 #[derive(Default, Clone, Debug)]
 struct Grant {
@@ -25,6 +25,8 @@ struct Grant {
 pub struct State {
     owners: Vec<String>,
     grants: BTreeMap<String, Grant>,
+    /// Email accounts an owner invited: login → the label the owner gave them (never the address).
+    invites: BTreeMap<String, String>,
 }
 
 fn lc(s: &str) -> String { s.trim().to_ascii_lowercase() }
@@ -48,7 +50,7 @@ fn strings(v: Option<&Value>) -> Vec<String> {
 
 impl State {
     pub fn fold(owners: &[String], events: &[Value]) -> State {
-        let mut st = State { owners: owners.iter().map(|o| lc(o)).filter(|o| !o.is_empty()).collect(), grants: BTreeMap::new() };
+        let mut st = State { owners: owners.iter().map(|o| lc(o)).filter(|o| !o.is_empty()).collect(), grants: BTreeMap::new(), invites: BTreeMap::new() };
         for ev in events { st.observe(ev); }
         st
     }
@@ -59,6 +61,17 @@ impl State {
         // only an owner's grant counts, whatever got onto the record
         if !author_login(ev).map(|a| self.is_owner(&a)).unwrap_or(false) { return; }
         let body = ev.get("body").cloned().unwrap_or(Value::Null);
+        if kind == "access.invite" || kind == "access.uninvite" {
+            // invites name an email only by its hash: {email_sha256, label}
+            let Some(login) = body.get("email_sha256").and_then(Value::as_str).and_then(crate::session::login_for_hash) else { return };
+            if kind == "access.invite" {
+                let label = body.get("label").and_then(Value::as_str).unwrap_or("").chars().take(80).collect::<String>();
+                self.invites.insert(lc(&login), label);
+            } else {
+                self.invites.remove(&lc(&login));
+            }
+            return;
+        }
         let Some(who) = body.get("login").and_then(Value::as_str).map(lc).filter(|s| !s.is_empty()) else { return };
         let g = self.grants.entry(who).or_default();
         let items = strings(body.get("items"));
@@ -100,6 +113,14 @@ impl State {
             None => Err("this needs an item inside a space you've been given".into()),
         }
     }
+
+    /// Email logins currently invited (sign-in allowed for them).
+    pub fn invited_logins(&self) -> Vec<String> { self.invites.keys().cloned().collect() }
+
+    pub fn is_invited(&self, login: &str) -> bool { self.invites.contains_key(&lc(login)) }
+
+    /// The label an owner gave an invited account, if any.
+    pub fn label_of(&self, login: &str) -> Option<String> { self.invites.get(&lc(login)).cloned().filter(|l| !l.is_empty()) }
 
     /// What a member was given, for /studio/api/me.
     pub fn grants_of(&self, login: &str) -> Value {
@@ -144,6 +165,21 @@ mod tests {
         assert!(!st.granted("nassar", "D-nodach-org-model"));
         assert!(!st.granted("nassar", "X-1"));
         assert!(st.granted("nassar", "X-2"));
+    }
+
+    #[test]
+    fn invites_carry_a_hash_and_label_never_an_address() {
+        let owners = vec!["morami49".to_string()];
+        let h = crate::session::email_hash("nassar@example.com");
+        let inv = ev("morami49", "access.invite", None, json!({"email_sha256": h, "label": "Nassar (Insydr)"}));
+        let forged = ev("nassar", "access.invite", None, json!({"email_sha256": crate::session::email_hash("x@y.co")}));
+        let st = State::fold(&owners, &[inv.clone(), forged]);
+        let login = crate::session::email_login("nassar@example.com");
+        assert!(st.is_invited(&login));
+        assert_eq!(st.label_of(&login).as_deref(), Some("Nassar (Insydr)"));
+        assert_eq!(st.invited_logins().len(), 1, "a non-owner's invite doesn't count");
+        let un = ev("morami49", "access.uninvite", None, json!({"email_sha256": h}));
+        assert!(!State::fold(&owners, &[inv, un]).is_invited(&login));
     }
 
     #[test]
