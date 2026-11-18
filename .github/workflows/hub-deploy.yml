@@ -98,8 +98,9 @@ jobs:
           NODE_SECRET_GEMINI: ${{ secrets.NODE_SECRET_GEMINI }}
           NODE_SECRET_ADZUNA_ID: ${{ secrets.NODE_SECRET_ADZUNA_ID }}
           NODE_SECRET_ADZUNA_KEY: ${{ secrets.NODE_SECRET_ADZUNA_KEY }}
+          NODE_SECRET_HOME_AREA: ${{ secrets.NODE_SECRET_HOME_AREA }}   # Shift Scout's starting area, kept out of the public repo
         run: |
-          for n in NODE_SECRET_REED NODE_SECRET_GEMINI NODE_SECRET_ADZUNA_ID NODE_SECRET_ADZUNA_KEY; do
+          for n in NODE_SECRET_REED NODE_SECRET_GEMINI NODE_SECRET_ADZUNA_ID NODE_SECRET_ADZUNA_KEY NODE_SECRET_HOME_AREA; do
             v="${!n}"; [ -n "$v" ] && printf '%s' "$v" | npx -y wrangler@4.158.0 secret put "$n" || true
           done
       - if: steps.go.outputs.run == 'yes'

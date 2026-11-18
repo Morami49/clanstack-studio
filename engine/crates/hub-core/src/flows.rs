@@ -261,6 +261,15 @@ pub fn render(template: &str, item: &Value) -> String {
     out
 }
 
+/// An Ask AI step may name private values to use in its prompt (18 Nov): `vars: {"home": "HOME_AREA"}` reads
+/// the hub secret NODE_SECRET_HOME_AREA and renders it as `{{vars.home}}`. The value is used for the prompt only and
+/// never written into the items, the run record or the template, so a personal detail stays out of shared data.
+pub fn with_vars(item: &Value, vars: &serde_json::Map<String, Value>) -> Value {
+    let mut view = item.clone();
+    if let Some(m) = view.as_object_mut() { m.insert("vars".into(), Value::Object(vars.clone())); }
+    view
+}
+
 /// Secrets a step may name: letters, digits and _, read from the hub's `NODE_SECRET_<NAME>` secrets.
 /// Anything else is refused, so a flow can never read the hub's own secrets.
 pub fn secret_var(name: &str) -> Option<String> {
