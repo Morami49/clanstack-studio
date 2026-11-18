@@ -355,3 +355,10 @@ modelling. Phase 1 (rails) is built; voice is next. Owner: Nowed.
 ## Open questions for the owner
 Open questions now live in Clanstack Studio → Ask (Q1–Q9 plus proposed terms T1… and stories P1…).
 Read `events` there for answers; new decisions continue at D-053.
+
+- **2026-11-18 — M1 d: spreadsheet import page.** `GET /studio/import` reads an .xlsx in the browser (`studio/xlsx-lite.js`, no
+  library: zip via DecompressionStream, shared/inline strings, booleans, dates from cell styles) and sends chosen tabs to
+  `POST /studio/api/private/batch` (same whole-batch checks as `write_private_batch`, `via: studio-import`). Rows land at
+  `data/users/<login>/work-lane/<tab>` keyed by a hash of their cells, so re-runs repeat and edited rows become new versions;
+  each import writes `import.snapshot` (ordered keys) and `import.manifest` (file sha256, per-tab counts, batch checksums,
+  held-back tabs) under `work-lane/imports`. People, LinkedIn and Messages can't be selected. Tests: xlsx-lite.test.mjs, import_page.py.

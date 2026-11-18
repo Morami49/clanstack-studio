@@ -1,0 +1,99 @@
+<main>
+<h1>Import a spreadsheet into your Private tier</h1>
+<p class=note>M1 d. In Google Sheets choose <b>File → Download → Microsoft Excel (.xlsx)</b>, then pick the file here.
+The file is read in this browser; only the rows you choose are sent, in checked batches of 200, to your Private tier
+(encrypted, never the shared record). Running it again is safe: rows already there are counted as repeats. An edited row
+is kept as a new version next to the old one, and every import leaves a manifest and a snapshot so any past state can be rebuilt.</p>
+<p><input type=file id=file accept=".xlsx"> <span id=who></span></p>
+<p><label>Source name <input id=source size=40></label></p>
+<div id=sheets></div>
+<p><button id=go disabled>Import selected tabs</button> <span id=status></span></p>
+<div id=report></div>
+</main>
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const HELD = ["people", "linkedin", "messages"]; // contact tabs wait for the named-people register (17 Nov)
+  const BATCH = 200, SNAP = 1000;
+  const slug = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "sheet";
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const hex = (b) => [...new Uint8Array(b)].map((x) => x.toString(16).padStart(2, "0")).join("");
+  const sha = async (s) => hex(await crypto.subtle.digest("SHA-256", typeof s === "string" ? new TextEncoder().encode(s) : s));
+  let login = null, book = null, fileHash = "", fileName = "";
+
+  async function api(path, body) {
+    const r = await fetch("/studio/api/" + path, body ? { method: "POST", credentials: "same-origin",
+      headers: { "content-type": "application/json", "x-nodach-studio": "1" }, body: JSON.stringify(body) } : { credentials: "same-origin" });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw Object.assign(new Error(j.error || "hub answered " + r.status), { detail: j });
+    return j;
+  }
+
+  api("me").then((m) => { login = m.login; $("who").textContent = "signed in as " + login; }).catch((e) => { $("who").textContent = e.message; });
+
+  $("file").onchange = async () => {
+    const f = $("file").files[0]; if (!f) return;
+    $("status").textContent = "reading…"; $("report").innerHTML = "";
+    try {
+      const buf = await f.arrayBuffer();
+      fileHash = await sha(buf); fileName = f.name;
+      book = await XlsxLite.read(buf);
+      $("source").value = $("source").value || f.name.replace(/\.xlsx$/i, "");
+      $("sheets").innerHTML = "<table><tr><th></th><th>Tab</th><th>Rows</th><th>Columns</th></tr>" + book.sheets.map((s, i) => {
+        const t = XlsxLite.table(s.rows); s.table = t;
+        const held = HELD.includes(slug(s.name));
+        return `<tr><td><input type=checkbox data-i=${i} ${held || !t.records.length ? "" : "checked"} ${held ? "disabled" : ""}></td>` +
+          `<td>${esc(s.name)}${held ? ' <span class=note>held back until the named-people register exists</span>' : ""}</td>` +
+          `<td>${t.records.length}</td><td class=note>${esc(t.headers.slice(0, 6).join(", "))}${t.headers.length > 6 ? "…" : ""}</td></tr>`;
+      }).join("") + "</table>";
+      $("go").disabled = !login;
+      $("status").textContent = `${book.sheets.length} tabs read; nothing has been sent yet.`;
+    } catch (e) { $("status").textContent = "Couldn't read that file: " + e.message; }
+  };
+
+  $("go").onclick = async () => {
+    const chosen = [...document.querySelectorAll("#sheets input:checked")].map((c) => book.sheets[Number(c.dataset.i)]);
+    if (!chosen.length) return;
+    $("go").disabled = true;
+    const source = $("source").value.trim() || fileName;
+    const started = new Date().toISOString();
+    const importId = "imp-" + started.replace(/\D/g, "").slice(0, 17) + "-" + fileHash.slice(0, 8);
+    const base = `data/users/${login}/work-lane`;
+    const done = [];
+    try {
+      for (const s of chosen) {
+        const path = `${base}/${slug(s.name)}`;
+        const seen = {}, keys = [], items = [];
+        for (const rec of s.table.records) {
+          const h = (await sha(JSON.stringify(rec.cells))).slice(0, 20);
+          seen[h] = (seen[h] || 0) + 1;
+          const key = seen[h] > 1 ? `${h}~${seen[h]}` : h;
+          keys.push(key);
+          items.push({ path, key, event: { kind: "sheet.row", ts: started, source, sheet: s.name, row: rec.row, cells: rec.cells, import: importId } });
+        }
+        for (let i = 0; i < keys.length; i += SNAP) {
+          items.push({ path: `${base}/imports`, key: `snapshot:${importId}:${slug(s.name)}:${i / SNAP}`,
+            event: { kind: "import.snapshot", ts: started, import: importId, sheet: s.name, path, part: i / SNAP, keys: keys.slice(i, i + SNAP) } });
+        }
+        const sheetRes = { sheet: s.name, path, rows: s.table.records.length, new: 0, repeats: 0, batches: [] };
+        for (let i = 0; i < items.length; i += BATCH) {
+          $("status").textContent = `${s.name}: sending ${Math.min(i + BATCH, items.length)} of ${items.length}…`;
+          const r = await api("private/batch", { items: items.slice(i, i + BATCH) });
+          sheetRes.new += r.new; sheetRes.repeats += r.repeats; sheetRes.batches.push(r.batch_checksum);
+        }
+        sheetRes.keys_sha256 = await sha(keys.join("\n"));
+        done.push(sheetRes);
+      }
+      const manifest = { kind: "import.manifest", ts: new Date().toISOString(), import: importId, started, source, file: fileName,
+        file_sha256: fileHash, held_back: book.sheets.filter((s) => HELD.includes(slug(s.name))).map((s) => s.name), sheets: done };
+      const m = await api("private/batch", { items: [{ path: `${base}/imports`, key: `manifest:${importId}`, event: manifest }] });
+      $("status").textContent = "Done. Manifest stored (" + m.items[0].doc_id + ").";
+      $("report").innerHTML = "<table><tr><th>Tab</th><th>Rows</th><th>New</th><th>Repeats</th><th>Batch checksums</th></tr>" +
+        done.map((d) => `<tr><td>${esc(d.sheet)}</td><td>${d.rows}</td><td>${d.new}</td><td>${d.repeats}</td><td class=note>${d.batches.map((c) => c.slice(0, 12)).join(" ")}</td></tr>`).join("") +
+        `</table><p class=note>Import ${esc(importId)} · file sha256 ${fileHash.slice(0, 16)}… · counts include snapshot parts.</p>`;
+    } catch (e) {
+      $("status").textContent = "Stopped: " + e.message + (e.detail && e.detail.reasons ? " — " + e.detail.reasons.slice(0, 3).join("; ") : "") + ". Batches already sent are kept; running again repeats them safely.";
+    } finally { $("go").disabled = false; }
+  };
+})();
+</script>

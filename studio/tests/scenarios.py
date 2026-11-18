@@ -52,7 +52,9 @@ function query(path, dir, lim, filt){
         next({docs:a.map(snapOf), size:a.length, empty:!a.length, metadata:{fromCache:false}, docChanges:()=>[]}); };
       listeners.push(f); setTimeout(f, 30); return ()=>{}; },
     add: async d => { if (C.failWrites) throw {code:"unavailable", message:"offline"}; if (C.readOnly || !mine(path)) throw {code:"invalid_argument", message:"no"};
-      const e = {...d, _id:"e"+Date.now().toString(36)+(seq++)}; await window.__bridgeAdd(path, e); return {id:e._id}; },
+      // s13 root cause (18 Nov): ids were time + a per-page counter, so two pages writing in the same millisecond made
+      // the same id and each page kept only one answer. The real store's ids are unique; so are these now.
+      const e = {...d, _id:"e"+Date.now().toString(36)+Math.random().toString(36).slice(2, 8)+(seq++)}; await window.__bridgeAdd(path, e); return {id:e._id}; },
   };
   return q;
 }
