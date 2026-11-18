@@ -25,7 +25,8 @@ permissions: {contents: read}
 concurrency: hub-staging
 jobs:
   staging:
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    # B1 d (public repo): only runs of this repository's own pushes, never a fork's pull request, may use secrets
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.event == 'push')
     runs-on: ubuntu-latest
     defaults: {run: {working-directory: hub}}
     env:
