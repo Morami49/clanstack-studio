@@ -117,6 +117,12 @@ pub struct BatchItem {
 /// owner owns, an event with `kind` and `ts` (at most 64 KB) and an idempotency key unique in the batch.
 /// Any bad item rejects the whole batch with every reason listed, so an import never half-lands silently.
 pub fn plan_batch(login: &str, args: &serde_json::Value) -> Result<(Vec<BatchItem>, String), Vec<String>> {
+    plan_batch_via(login, args, "claude-connector")
+}
+
+/// Same checks as `plan_batch`, stamping `via` with the route the batch came in on (the connector, or Studio's
+/// spreadsheet import page, M1 d), so a row's history says how it arrived.
+pub fn plan_batch_via(login: &str, args: &serde_json::Value, via: &str) -> Result<(Vec<BatchItem>, String), Vec<String>> {
     let items = match args.get("items").and_then(serde_json::Value::as_array) {
         Some(a) if !a.is_empty() && a.len() <= MAX_BATCH => a,
         _ => return Err(vec![format!("items: 1 to {MAX_BATCH} entries of {{path, event, key}}")]),
@@ -135,7 +141,7 @@ pub fn plan_batch(login: &str, args: &serde_json::Value) -> Result<(Vec<BatchIte
         }
         if size > MAX_EVENT_BYTES { errs.push(format!("items[{i}]: event too large (64 KB max)")); continue; }
         let mut ev = ev;
-        if let Some(o) = ev.as_object_mut() { o.insert("via".into(), "claude-connector".into()); }
+        if let Some(o) = ev.as_object_mut() { o.insert("via".into(), via.into()); }
         out.push(BatchItem { key: key.into(), path: path.into(), doc_id: doc_id_for(login, path, key), checksum: checksum(&ev), event: ev });
     }
     if !errs.is_empty() { return Err(errs); }
@@ -247,6 +253,9 @@ mod tests {
         let errs = plan_batch("Morami49", &bad).unwrap_err();
         assert_eq!(errs.len(), 4, "{errs:?}");
         assert!(plan_batch("Morami49", &json!({"items": []})).is_err());
+        let (studio, _) = plan_batch_via("Morami49", &ok, "studio-import").unwrap();
+        assert_eq!(studio[0].event["via"], "studio-import");
+        assert_eq!(studio[0].doc_id, doc_id_for("morami49", p, "Roles/2"), "the route does not change which item a row is");
         let many: Vec<_> = (0..=MAX_BATCH).map(|i| json!({"path": p, "key": format!("k{i}"), "event": ev(i as u32)})).collect();
         assert!(plan_batch("Morami49", &json!({"items": many})).is_err());
     }

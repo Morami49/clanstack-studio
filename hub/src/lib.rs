@@ -30,6 +30,8 @@
 //! POST /studio/api/events   {doc_id, event}: one Studio event, imported with the importer key like Studio Web's sync.
 //! GET  /studio/api/private  ?path=data/users/<you>/... → {events:[{doc_id,event}]}: your private items (I1, Q53 A)
 //! POST /studio/api/private  {path, doc_id, event}: one private event, sealed with your own key (hub_core::private)
+//! POST /studio/api/private/batch  {items:[{path, key, event}]}: up to 200 private events, checked whole (M1 d)
+//! GET  /studio/import        the spreadsheet import page (reads .xlsx in the browser, sends batches above)
 //! GET  /studio/api/private/export  every private item you own, decrypted, grouped by path (your backup)
 //!                           Needs the x-nodach-studio header (cross-site pages cannot send it). Private items never come here.
 
@@ -44,6 +46,8 @@ use worker::*;
 /// The Studio page, its host shim and its genesis seed, built into the Worker (one file each in studio/).
 const STUDIO_HTML: &str = include_str!("../../studio/index.html");
 const STUDIO_SHIM: &str = include_str!("../../studio/standalone.js");
+const STUDIO_IMPORT: &str = include_str!("../../studio/import.html");
+const XLSX_LITE: &str = include_str!("../../studio/xlsx-lite.js");
 const STUDIO_GENESIS: &str = include_str!("../../studio/tests/genesis.json");
 /// React + React Flow for the canvas (D-172), one pinned bundle (studio/vendor/package.json), so no CDN can mix versions.
 const CANVAS_LIB: &str = include_str!("../../studio/vendor/canvas-lib.js");
@@ -113,6 +117,23 @@ fn valid_doc_id(id: &str) -> bool {
 }
 
 /// `env` is "production" or "staging"; the page uses it and the build to show a staging ribbon and a reload banner.
+/// M1 d: the spreadsheet import page. The .xlsx file is read in the browser (studio/xlsx-lite.js); rows go to
+/// POST /studio/api/private/batch, so nothing but the chosen rows leaves the browser.
+fn import_page() -> Result<Response> {
+    let html = format!(
+        "<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1\">\
+         <title>Nodach Studio · import</title><style>body{{margin:0 auto;max-width:960px;padding:16px;font:14px system-ui}}\
+         table{{border-collapse:collapse;margin:8px 0}}td,th{{border-bottom:1px solid #ddd;padding:4px 8px;text-align:left}}.note{{color:#666;font-size:12px}}</style>\
+         <script>{XLSX_LITE}</script></head><body>{STUDIO_IMPORT}</body></html>");
+    let h = Headers::new();
+    h.set("content-type", "text/html; charset=utf-8")?;
+    h.set("cache-control", "no-store")?;
+    h.set("x-frame-options", "DENY")?;
+    h.set("referrer-policy", "no-referrer")?;
+    h.set("x-content-type-options", "nosniff")?;
+    Ok(Response::ok(html)?.with_headers(h))
+}
+
 fn studio_page(env: &str) -> Result<Response> {
     let env = if env == "staging" { "staging" } else { "production" };
     let build = mcp::BUILD;
@@ -633,13 +654,40 @@ impl Record {
                 let r = page("Signed out", "You are signed out of Nodach Studio on this browser.", 200)?;
                 Ok(Some((with_cookies(r, &[session::session_set_cookie(None)])?, "-".into())))
             }
-            (_, p) if p == "/studio" || p == "/studio/" || p.starts_with("/studio/api/") => {
+            (_, p) if p == "/studio" || p == "/studio/" || p == "/studio/import" || p.starts_with("/studio/api/") => {
                 let login = self.signed_in(req, &cfg, now);
                 let who = login.clone().unwrap_or_else(|| "-".into());
                 let env = self.env.var("NODACH_ENV").map(|v| v.to_string()).unwrap_or_default();
                 let r = match (method, p, login) {
                     (Method::Get, "/studio" | "/studio/", None) => Response::redirect(Url::parse(&format!("{}/studio/login", cfg.issuer))?)?,
                     (Method::Get, "/studio" | "/studio/", Some(_)) => studio_page(&env)?,
+                    (Method::Get, "/studio/import", None) => Response::redirect(Url::parse(&format!("{}/studio/login", cfg.issuer))?)?,
+                    (Method::Get, "/studio/import", Some(_)) => import_page()?,
+                    (Method::Post, "/studio/api/private/batch", Some(l)) => {
+                        // M1 d: the import page's batches; same whole-batch checks and checksums as the connector's tool
+                        if req.headers().get(session::CSRF_HEADER).ok().flatten().as_deref() != Some("1") {
+                            json_status(&serde_json::json!({"error": "missing x-nodach-studio header"}), 403)?
+                        } else if !self.private_ready() {
+                            json_status(&serde_json::json!({"error": "the private store isn't set up on this hub yet (PRIVATE_SEED)"}), 503)?
+                        } else {
+                            let args: serde_json::Value = req.json().await.unwrap_or(serde_json::Value::Null);
+                            match hub_core::private::plan_batch_via(&l, &args, "studio-import") {
+                                Err(errs) => json_status(&serde_json::json!({"error": "batch rejected; nothing was stored", "reasons": errs}), 400)?,
+                                Ok((items, whole)) => {
+                                    let mut rows = vec![];
+                                    let mut added_n = 0;
+                                    for it in &items {
+                                        let added = self.private_put(&l, &it.path, &it.doc_id, &it.event)?;
+                                        if added { added_n += 1; }
+                                        rows.push(serde_json::json!({"key": it.key, "doc_id": it.doc_id, "checksum": it.checksum, "repeat": !added}));
+                                    }
+                                    self.log(now, "/studio/api/private/batch", "private batch", &format!("ok {added_n}/{}", items.len()), &l);
+                                    json_status(&serde_json::json!({"count": items.len(), "new": added_n, "repeats": items.len() - added_n,
+                                        "batch_checksum": whole, "items": rows}), 200)?
+                                }
+                            }
+                        }
+                    }
                     (_, _, None) => json_status(&serde_json::json!({"error": "sign in at /studio/login"}), 401)?,
                     (Method::Get, "/studio/api/me", Some(l)) => json_status(&serde_json::json!({
                         // owner-only allow-list for now (F-44), so everyone signed in is the owner
