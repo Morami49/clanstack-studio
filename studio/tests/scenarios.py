@@ -116,10 +116,14 @@ class Store:
         for p in self.pages:
             if path.startswith("data/users/") and not path.startswith(f"data/users/{p.me}/"):
                 continue
-            try:
-                await p.evaluate("([path, evs]) => window.__push(path, evs)", [path, list(self.paths[path])])
-            except Exception:
-                pass
+            # F-nodach s13 (17 Nov): a delivery that failed was dropped silently, so a page could keep only its own
+            # answer. The real store re-sends its latest snapshot until a listener has it, so retry a few times.
+            for attempt in range(5):
+                try:
+                    await p.evaluate("([path, evs]) => window.__push(path, evs)", [path, list(self.paths[path])])
+                    break
+                except Exception:
+                    await asyncio.sleep(0.1 * (attempt + 1))
 
 
 async def open_page(browser, store: Store, cfg: dict, width=1440, height=900, name="p"):
@@ -286,7 +290,7 @@ async def s13_two_people_at_once(b):
     for pg, txt in ((a, "A from Nowed"), (c, "B from Rad")):
         await pg.evaluate("select('Q-delegation')"); await pg.fill("#reply", txt)
     await asyncio.gather(a.click("#sendAnswer"), c.click("#sendAnswer"))
-    for _ in range(30):   # both writes travel to both pages; slow runners need more than 500 ms (CI flake 8 Nov)
+    for _ in range(80):   # both writes travel to both pages; slow runners need more than 3 s (CI flakes 8 and 17 Nov)
         await a.wait_for_timeout(100)
         na = await a.evaluate("F.items.get('Q-delegation').answers.length"); nc = await c.evaluate("F.items.get('Q-delegation').answers.length")
         if na == 2 and nc == 2:
