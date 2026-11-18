@@ -27,6 +27,7 @@ on:
         default: preview
 permissions:
   contents: write
+  pull-requests: read   # to skip branches that open PRs are based on (17 Nov: #20 lost its base)
 concurrency: branch-cleanup
 jobs:
   cleanup:
@@ -56,11 +57,16 @@ jobs:
       - name: Find merged b-* branches
         if: steps.go.outputs.run == 'yes'
         id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           git fetch --prune origin '+refs/heads/*:refs/remotes/origin/*'
-          : > merged.txt
+          # a branch that an open PR targets is never deleted: GitHub closes such PRs instead of retargeting them
+          gh api "repos/${{ github.repository }}/pulls?state=open&per_page=100" --paginate --jq '.[].base.ref' | sort -u > bases.txt || { echo "::error::could not list open PRs; deleting nothing"; exit 1; }
+          : > merged.txt; : > kept.txt
           for ref in $(git for-each-ref --format='%(refname:strip=3)' 'refs/remotes/origin/b-*'); do
             case "$ref" in main|dependabot/*) continue;; esac
+            if grep -qxF "$ref" bases.txt; then echo "$ref" >> kept.txt; continue; fi
             if git merge-base --is-ancestor "origin/$ref" origin/main; then
               echo "$ref $(git rev-parse --short "origin/$ref")" >> merged.txt
             fi
@@ -78,6 +84,7 @@ jobs:
             while read -r b sha; do echo "| $b | $sha |"; done < merged.txt
             echo
             echo "$(wc -l < merged.txt) merged branch(es) found."
+            if [ -s kept.txt ]; then echo; echo "Kept because an open pull request is based on them: $(paste -sd, kept.txt)"; fi
           } >> "$GITHUB_STEP_SUMMARY"
           cat merged.txt
           if [ "$MODE" = preview ]; then echo "::warning title=Preview only::Nothing was deleted. Run again with mode = delete to remove the $(wc -l < merged.txt) branch(es) listed."; fi
