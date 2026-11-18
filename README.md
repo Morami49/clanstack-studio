@@ -1,5 +1,7 @@
 # Clanstack Studio
 
+Licensed under the [GNU AGPL v3.0](LICENSE). "Nodach" and "Nodach Studio" are trademarks; see [TRADEMARKS.md](TRADEMARKS.md).
+
 The platform for building and running Clanstack (D-056, D-065).
 
 | Folder | Layer | What it is |
