@@ -274,6 +274,13 @@ impl Record {
 
     /// The owner's data keys by version. `create` makes version 1 if the owner has none yet.
     fn owner_deks(&self, owner: &str, create: bool) -> Result<Vec<(u32, [u8; 32])>> {
+        Ok(self.owner_keys(owner, create)?.0)
+    }
+
+    /// The owner's openable data keys by version, and how many versions can't be opened (19 Nov: a deploy replaced
+    /// PRIVATE_SEED, so older keys stay stored but sealed). Those are never deleted: the old seed may yet be found.
+    /// With `create`, a fresh version is added above every stored one when the newest can't be opened, so writes go on.
+    fn owner_keys(&self, owner: &str, create: bool) -> Result<(Vec<(u32, [u8; 32])>, usize)> {
         use hub_core::private::{kek, unwrap_dek, wrap_dek};
         let cur = kek(&self.secret_opt("PRIVATE_SEED").ok_or_else(|| Error::RustError("PRIVATE_SEED is not set".into()))?);
         let prev = self.secret_opt("PRIVATE_SEED_PREVIOUS").map(|s| kek(&s));
@@ -282,9 +289,10 @@ impl Record {
         #[derive(Deserialize)]
         struct K { version: f64, wrapped: String }
         let rows: Vec<K> = sql.exec("SELECT version, wrapped FROM private_keys WHERE owner = ? ORDER BY version", vec![o.clone().into()])?.to_array()?;
-        let mut out = vec![];
+        let (mut out, mut sealed, mut top) = (vec![], 0usize, 0u32);
         for r in rows {
             let v = r.version as u32;
+            top = top.max(v);
             if let Some(d) = unwrap_dek(&cur, &o, v, &r.wrapped) {
                 out.push((v, d));
             } else if let Some(d) = prev.as_ref().and_then(|p| unwrap_dek(p, &o, v, &r.wrapped)) {
@@ -292,29 +300,39 @@ impl Record {
                 sql.exec("UPDATE private_keys SET wrapped = ? WHERE owner = ? AND version = ?", vec![w.into(), o.clone().into(), (v as f64).into()])?;
                 out.push((v, d));
             } else {
-                return Err(Error::RustError("a private data key can't be opened with PRIVATE_SEED or PRIVATE_SEED_PREVIOUS".into()));
+                sealed += 1;
             }
         }
-        if out.is_empty() && create {
+        let newest_open = out.last().map(|(v, _)| *v == top).unwrap_or(false);
+        if create && !newest_open {
+            let v = top + 1;
             let mut d = [0u8; 32];
             getrandom::getrandom(&mut d).map_err(|e| Error::RustError(e.to_string()))?;
-            let w = wrap_dek(&cur, &Self::nonce()?, &o, 1, &d);
-            sql.exec("INSERT OR IGNORE INTO private_keys (owner, version, wrapped) VALUES (?, 1, ?)", vec![o.into(), w.into()])?;
-            out.push((1, d));
+            let w = wrap_dek(&cur, &Self::nonce()?, &o, v, &d);
+            sql.exec("INSERT OR IGNORE INTO private_keys (owner, version, wrapped) VALUES (?, ?, ?)", vec![o.into(), (v as f64).into(), w.into()])?;
+            out.push((v, d));
         }
-        Ok(out)
+        Ok((out, sealed))
     }
 
     /// Store one private event. Ok(false) if that doc id is already there (a repeat is harmless).
     fn private_put(&self, owner: &str, path: &str, doc_id: &str, event: &serde_json::Value) -> Result<bool> {
         let o = owner.to_ascii_lowercase();
         let sql = self.private_tables()?;
+        let keys = self.owner_deks(owner, true)?;
         #[derive(Deserialize)]
-        struct N { n: f64 }
-        let before: Vec<N> = sql.exec("SELECT COUNT(*) AS n FROM private WHERE owner = ? AND path = ? AND doc_id = ?",
+        struct E { key_version: f64 }
+        let before: Vec<E> = sql.exec("SELECT key_version FROM private WHERE owner = ? AND path = ? AND doc_id = ?",
             vec![o.clone().into(), path.into(), doc_id.into()])?.to_array()?;
-        if before.first().map(|r| r.n > 0.0).unwrap_or(false) { return Ok(false); }
-        let (v, dek) = *self.owner_deks(owner, true)?.last().expect("created above");
+        if let Some(e) = before.first() {
+            if keys.iter().any(|(v, _)| *v == e.key_version as u32) { return Ok(false); }   // a readable repeat
+            // the old copy is sealed under a lost key: park it (kept whole, in case the old seed turns up), then store anew
+            sql.exec("CREATE TABLE IF NOT EXISTS private_sealed (seq INTEGER PRIMARY KEY AUTOINCREMENT, owner TEXT, key_version INTEGER, path TEXT, doc_id TEXT, blob TEXT)", None)?;
+            sql.exec("INSERT INTO private_sealed (owner, key_version, path, doc_id, blob) SELECT owner, key_version, path, doc_id, blob FROM private WHERE owner = ? AND path = ? AND doc_id = ?",
+                vec![o.clone().into(), path.into(), doc_id.into()])?;
+            sql.exec("DELETE FROM private WHERE owner = ? AND path = ? AND doc_id = ?", vec![o.clone().into(), path.into(), doc_id.into()])?;
+        }
+        let (v, dek) = *keys.last().expect("created above");
         let plain = serde_json::to_vec(event).map_err(|e| Error::RustError(e.to_string()))?;
         let blob = hub_core::private::seal(&dek, &Self::nonce()?, &o, v, path, doc_id, &plain);
         sql.exec("INSERT OR IGNORE INTO private (owner, key_version, path, doc_id, blob) VALUES (?, ?, ?, ?, ?)",
