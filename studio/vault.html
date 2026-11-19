@@ -1,0 +1,73 @@
+<main>
+<h1>Your settings</h1>
+<p class=note>Personal space · Private tier (encrypted, never the shared record). Flows read these by name, so you change
+a value here instead of in code. Every change is kept as a new version; nothing is overwritten, and the history shows
+what each setting was at any time.</p>
+<p><span id=who></span></p>
+<table id=list><thead><tr><th>Setting</th><th>What uses it</th><th>Value</th><th>Changed</th><th></th></tr></thead><tbody></tbody></table>
+<h2>Change or add a setting</h2>
+<p><label>Name <input id=name size=24 placeholder="HOME_AREA" pattern="[A-Z][A-Z0-9_]{1,40}"></label>
+<label>Value <input id=value size=32></label> <button id=save>Save</button> <span id=status></span></p>
+<p class=note>Names are CAPITALS_WITH_UNDERSCORES. A flow step uses one as <code>{{vars.home}}</code> after mapping it in the step (e.g. home → HOME_AREA).</p>
+<h2>History</h2>
+<div id=history class=note></div>
+</main>
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const KNOWN = { HOME_AREA: "Shift Scout: travel cost and time are measured from here" };
+  const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  let login = null, path = "";
+  async function api(p, body) {
+    const r = await fetch("/studio/api/" + p, body ? { method: "POST", credentials: "same-origin",
+      headers: { "content-type": "application/json", "x-nodach-studio": "1" }, body: JSON.stringify(body) } : { credentials: "same-origin" });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || "hub answered " + r.status);
+    return j;
+  }
+  const field = (ev, k) => ev[k] ?? ev.body?.[k];
+  async function load() {
+    const me = await api("me"); login = me.login; path = `data/users/${login}/vault/vars`;
+    $("who").textContent = "signed in as " + login;
+    const r = await api("private?path=" + encodeURIComponent(path));
+    const evs = (r.events || []).map((x) => x.event).filter((e) => field(e, "name"));
+    evs.sort((a, b) => String(a.ts).localeCompare(String(b.ts)));
+    const cur = {};
+    for (const e of evs) cur[field(e, "name")] = e.kind === "vault.unset" ? null : { value: field(e, "value"), ts: e.ts };
+    for (const k of Object.keys(KNOWN)) if (!(k in cur)) cur[k] = undefined;
+    $("list").tBodies[0].innerHTML = Object.keys(cur).sort().map((k) => {
+      const c = cur[k];
+      const val = c ? `<span class=v data-v="${esc(c.value)}">••••••</span> <button class=link data-show>show</button>` : `<span class=note>${c === null ? "removed" : "not set"}</span>`;
+      return `<tr><td><b>${esc(k)}</b></td><td class=note>${esc(KNOWN[k] || "")}</td><td>${val}</td><td class=note>${c ? esc(c.ts) : ""}</td>
+        <td><button data-edit="${esc(k)}">change</button>${c ? ` <button data-unset="${esc(k)}">remove</button>` : ""}</td></tr>`;
+    }).join("");
+    $("history").innerHTML = evs.length ? evs.slice().reverse().map((e) => `${esc(e.ts)} · ${esc(e.kind === "vault.unset" ? "removed" : "set")} <b>${esc(field(e, "name"))}</b> · via ${esc(e.via || "connector")}`).join("<br>") : "No changes yet.";
+    if (r.unreadable) $("history").innerHTML += `<br>${r.unreadable} older setting(s) can't be opened (sealed under a lost key, INC-261118-seed).`;
+  }
+  async function write(kind, name, value) {
+    if (!/^[A-Z][A-Z0-9_]{1,40}$/.test(name)) throw new Error("use CAPITALS_WITH_UNDERSCORES for the name");
+    const ts = new Date().toISOString();
+    const event = { kind, ts, name, via: "studio-vault" };
+    if (kind === "vault.set") event.value = value;
+    const doc_id = ("v-" + name + "-" + ts.replace(/[^0-9]/g, "")).slice(0, 100);
+    await api("private", { path, doc_id, event });
+  }
+  document.addEventListener("click", async (e) => {
+    const t = e.target;
+    if (t.matches("[data-show]")) { const v = t.previousElementSibling; v.textContent = v.textContent.startsWith("•") ? v.dataset.v : "••••••"; }
+    if (t.dataset.edit) { $("name").value = t.dataset.edit; $("value").focus(); }
+    if (t.dataset.unset) {
+      if (t.dataset.armed !== "1") { t.dataset.armed = "1"; t.textContent = "press again to remove"; return; }
+      try { await write("vault.unset", t.dataset.unset); $("status").textContent = "Removed " + t.dataset.unset + " (kept in history)."; await load(); }
+      catch (err) { $("status").textContent = err.message; }
+    }
+  });
+  $("save").onclick = async () => {
+    const name = $("name").value.trim(), value = $("value").value.trim();
+    if (!value) { $("status").textContent = "Give a value."; return; }
+    try { await write("vault.set", name, value); $("status").textContent = "Saved " + name + " (new version)."; $("value").value = ""; await load(); }
+    catch (err) { $("status").textContent = err.message; }
+  };
+  load().catch((err) => { $("status").textContent = err.message; });
+})();
+</script>

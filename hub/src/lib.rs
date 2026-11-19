@@ -56,6 +56,8 @@ const SITE_PRIVACY: &str = include_str!("../../site/privacy.html");
 const SITE_TERMS: &str = include_str!("../../site/terms.html");
 const LOGIN_PAGE: &str = include_str!("../../studio/login.html");
 const STUDIO_IMPORT: &str = include_str!("../../studio/import.html");
+/// 6.1 a: personal settings (the vault) changed in the platform, not in code
+const STUDIO_VAULT: &str = include_str!("../../studio/vault.html");
 const XLSX_LITE: &str = include_str!("../../studio/xlsx-lite.js");
 const STUDIO_GENESIS: &str = include_str!("../../studio/tests/genesis.json");
 /// React + React Flow for the canvas (D-172), one pinned bundle (studio/vendor/package.json), so no CDN can mix versions.
@@ -128,6 +130,20 @@ fn valid_doc_id(id: &str) -> bool {
 /// `env` is "production" or "staging"; the page uses it and the build to show a staging ribbon and a reload banner.
 /// M1 d: the spreadsheet import page. The .xlsx file is read in the browser (studio/xlsx-lite.js); rows go to
 /// POST /studio/api/private/batch, so nothing but the chosen rows leaves the browser.
+fn vault_page() -> Result<Response> {
+    let html = format!(
+        "<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1\">\
+         <title>Nodach Studio · settings</title><style>body{{margin:0 auto;max-width:960px;padding:16px;font:14px system-ui}}\
+         table{{border-collapse:collapse;margin:8px 0}}td,th{{border-bottom:1px solid #ddd;padding:4px 8px;text-align:left}}.note{{color:#666;font-size:12px}}\
+         button.link{{background:none;border:0;color:#06c;cursor:pointer;padding:0}}</style></head><body>{STUDIO_VAULT}</body></html>");
+    let h = Headers::new();
+    h.set("content-type", "text/html; charset=utf-8")?;
+    h.set("cache-control", "no-store")?;
+    h.set("referrer-policy", "no-referrer")?;
+    h.set("x-content-type-options", "nosniff")?;
+    Ok(Response::ok(html)?.with_headers(h))
+}
+
 fn import_page() -> Result<Response> {
     let html = format!(
         "<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1\">\
@@ -958,7 +974,7 @@ impl Record {
                 let r = page("Signed out", "You are signed out of Nodach Studio on this browser.", 200)?;
                 Ok(Some((with_cookies(r, &[session::session_set_cookie(None)])?, "-".into())))
             }
-            (_, p) if p == "/studio" || p == "/studio/" || p == "/studio/import" || p.starts_with("/studio/api/") => {
+            (_, p) if p == "/studio" || p == "/studio/" || p == "/studio/import" || p == "/studio/vault" || p.starts_with("/studio/api/") => {
                 let login = self.signed_in(req, &cfg, now);
                 let who = login.clone().unwrap_or_else(|| "-".into());
                 let env = self.env.var("NODACH_ENV").map(|v| v.to_string()).unwrap_or_default();
@@ -967,6 +983,8 @@ impl Record {
                     (Method::Get, "/studio" | "/studio/", Some(_)) => studio_page(&env)?,
                     (Method::Get, "/studio/import", None) => Response::redirect(Url::parse(&format!("{}/studio/login", cfg.issuer))?)?,
                     (Method::Get, "/studio/import", Some(_)) => import_page()?,
+                    (Method::Get, "/studio/vault", None) => Response::redirect(Url::parse(&format!("{}/studio/login", cfg.issuer))?)?,
+                    (Method::Get, "/studio/vault", Some(_)) => vault_page()?,
                     (Method::Post, "/studio/api/private/batch", Some(l)) => {
                         // M1 d: the import page's batches; same whole-batch checks and checksums as the connector's tool
                         if req.headers().get(session::CSRF_HEADER).ok().flatten().as_deref() != Some("1") {
