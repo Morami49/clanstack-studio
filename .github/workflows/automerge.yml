@@ -3,6 +3,11 @@ name: automerge
 # its required checks and the staging deploy have passed. Anything touching workflows, hub or engine code, sign-in,
 # secrets, the watch baseline or legal pages waits for Nowed. A merge made with GITHUB_TOKEN doesn't start other
 # workflows, so this job starts the production deploy itself, for the same tree that passed CI.
+# Hold (F-automerge-overrode-hold, 19 Nov): a draft PR, a PR labelled "hold", or one whose body contains <!-- hold -->
+# never merges itself; scripts/should_automerge.py decides and the log says why.
+# Staged (F-staging-one-branch): hub-staging deploys a train of several PRs and uploads its list (artifact
+# "staging-train"). A PR counts as staged when its current head SHA is in the list of a successful hub-staging run;
+# runs without the list (Cloudflare not set up yet) count only their own head SHA, as before.
 on:
   workflow_run:
     workflows: [hub-staging]
@@ -15,27 +20,43 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Find the pull request staging just deployed
-        id: pr
-        env: {GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}", R: "${{ github.repository }}", SHA: "${{ github.event.workflow_run.head_sha }}"}
+      - name: Which heads did this staging run include
+        env: {GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}", R: "${{ github.repository }}", RUN: "${{ github.event.workflow_run.id }}", SHA: "${{ github.event.workflow_run.head_sha }}"}
         run: |
-          n=$(gh api "repos/$R/commits/$SHA/pulls" --jq '[.[] | select(.state=="open" and .base.ref=="main" and .head.sha==env.SHA)][0].number // empty')
-          [ -n "$n" ] || { echo "no open PR has $SHA as its head: nothing to do"; exit 0; }
-          echo "n=$n" >> "$GITHUB_OUTPUT"
-      - name: Classify, check, merge, deploy
-        if: steps.pr.outputs.n != ''
-        env: {GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}", R: "${{ github.repository }}", SHA: "${{ github.event.workflow_run.head_sha }}", N: "${{ steps.pr.outputs.n }}"}
+          if gh run download "$RUN" -R "$R" -n staging-train -D "$RUNNER_TEMP/st" 2>/dev/null && [ -s "$RUNNER_TEMP/st/train.json" ]; then
+            jq -r '.included[].sha' "$RUNNER_TEMP/st/train.json" > staged.txt
+            echo "staging run $RUN ($(jq -r .mode "$RUNNER_TEMP/st/train.json")) included: $(tr '\n' ' ' < staged.txt)"
+          else
+            echo "no staging-train list on run $RUN: only its own head $SHA counts as staged"
+            echo "$SHA" > staged.txt
+          fi
+      - name: Classify, check hold, merge, deploy
+        env: {GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}", R: "${{ github.repository }}", RUN: "${{ github.event.workflow_run.id }}"}
         run: |
-          gh api "repos/$R/pulls/$N/files" --paginate --jq '.[].filename' > files.txt
-          verdict=$(python3 scripts/risk_class.py < files.txt)
-          echo "PR #$N: $verdict risk"
-          [ "$verdict" = "low" ] || { echo "waits for Nowed (high-risk files above)"; exit 0; }
-          for c in engine hub studio actionmap scripts; do
-            ok=$(gh api "repos/$R/commits/$SHA/check-runs?per_page=100" --jq "[.check_runs[] | select(.name==\"$c\" and .conclusion==\"success\")] | length")
-            [ "$ok" != "0" ] || { echo "required check $c hasn't passed on $SHA: not merging"; exit 0; }
+          last=""; merged_prs=""
+          for sha in $(cat staged.txt); do
+            nums=$(gh api "repos/$R/commits/$sha/pulls" --jq ".[] | select(.state==\"open\" and .base.ref==\"main\" and .head.sha==\"$sha\" and .head.repo.full_name==\"$R\") | .number") || nums=""
+            [ -n "$nums" ] || { echo "$sha: no open PR has it as its head (merged, moved on or not a PR): nothing to do"; continue; }
+            for N in $nums; do
+              gh api "repos/$R/pulls/$N" > pr.json
+              gh api "repos/$R/pulls/$N/files" --paginate --jq '.[].filename' > files.txt
+              verdict=$(python3 scripts/risk_class.py < files.txt)
+              gh api "repos/$R/commits/$sha/check-runs?per_page=100" --jq '[.check_runs[] | {name, conclusion}]' > checks.json
+              decision=$(jq -n --arg v "$verdict" --slurpfile pr pr.json --slurpfile c checks.json \
+                '{verdict: $v, labels: $pr[0].labels, draft: $pr[0].draft, body: $pr[0].body, checks: $c[0]}' | python3 scripts/should_automerge.py)
+              echo "PR #$N at $sha: $decision"
+              case "$decision" in merge:*) ;; *) continue ;; esac
+              merged=$(gh api -X PUT "repos/$R/pulls/$N/merge" -f merge_method=merge -f sha="$sha" \
+                -f commit_title="Merge pull request #$N (auto: low risk, CI and staging passed)" --jq .sha) \
+                || { echo "PR #$N: GitHub refused the merge (head moved or conflicts with main now): left for later"; continue; }
+              echo "merged #$N as $merged"
+              gh api "repos/$R/issues/$N/comments" -f body="Auto-merged under AS2 3e: every changed file is low risk, nothing holds it, required checks passed on $sha and it was in staging run $GITHUB_SERVER_URL/$R/actions/runs/$RUN. Production deploy follows for the latest merge." >/dev/null
+              last=$merged; merged_prs="$merged_prs #$N"
+            done
           done
-          merged=$(gh api -X PUT "repos/$R/pulls/$N/merge" -f merge_method=merge -f sha="$SHA" \
-            -f commit_title="Merge pull request #$N (auto: low risk, CI and staging passed)" --jq .sha)
-          echo "merged as $merged"
-          gh api -X POST "repos/$R/actions/workflows/hub-deploy.yml/dispatches" -f ref=main -f "inputs[sha]=$merged"
-          gh api "repos/$R/issues/$N/comments" -f body="Auto-merged under AS2 3e: every changed file is low risk, required checks and staging passed on $SHA. Production deploy started for $merged." >/dev/null
+          if [ -n "$last" ]; then
+            gh api -X POST "repos/$R/actions/workflows/hub-deploy.yml/dispatches" -f ref=main -f "inputs[sha]=$last"
+            echo "production deploy started for $last (merged:$merged_prs)"
+          else
+            echo "nothing merged"
+          fi

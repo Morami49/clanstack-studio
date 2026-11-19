@@ -39,6 +39,8 @@ jobs:
       - run: python scripts/test_check_no_seed_making.py
       - run: python scripts/test_check_reliability.py
       - run: python scripts/test_risk_class.py
+      - run: python scripts/test_should_automerge.py
+      - run: python scripts/test_staging_train.py
   studio:
     runs-on: ubuntu-latest
     steps:
