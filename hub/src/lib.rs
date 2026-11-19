@@ -283,8 +283,12 @@ impl Record {
     /// With `create`, a fresh version is added above every stored one when the newest can't be opened, so writes go on.
     fn owner_keys(&self, owner: &str, create: bool) -> Result<(Vec<(u32, [u8; 32])>, usize)> {
         use hub_core::private::{kek, unwrap_dek, wrap_dek};
+        // SD1 a: PRIVATE_SEED_NEXT is the seed Nowed also keeps offline. When set, it wraps every key: new ones at once,
+        // older ones the next time they're opened (the watch job's /reliability call opens them all).
         let cur = kek(&self.secret_opt("PRIVATE_SEED").ok_or_else(|| Error::RustError("PRIVATE_SEED is not set".into()))?);
+        let next = self.secret_opt("PRIVATE_SEED_NEXT").filter(|s| s.trim().chars().count() >= 32).map(|s| kek(&s));
         let prev = self.secret_opt("PRIVATE_SEED_PREVIOUS").map(|s| kek(&s));
+        let wrap_with = next.unwrap_or(cur);
         let o = owner.to_ascii_lowercase();
         let sql = self.private_tables()?;
         #[derive(Deserialize)]
@@ -294,14 +298,19 @@ impl Record {
         for r in rows {
             let v = r.version as u32;
             top = top.max(v);
-            if let Some(d) = unwrap_dek(&cur, &o, v, &r.wrapped) {
-                out.push((v, d));
-            } else if let Some(d) = prev.as_ref().and_then(|p| unwrap_dek(p, &o, v, &r.wrapped)) {
-                let w = wrap_dek(&cur, &Self::nonce()?, &o, v, &d);   // rotation: re-wrap with the current secret
-                sql.exec("UPDATE private_keys SET wrapped = ? WHERE owner = ? AND version = ?", vec![w.into(), o.clone().into(), (v as f64).into()])?;
-                out.push((v, d));
-            } else {
-                sealed += 1;
+            let on_target = unwrap_dek(&wrap_with, &o, v, &r.wrapped);
+            let opened = on_target.map(|d| (d, false)).or_else(|| {
+                [Some(cur), prev].into_iter().flatten().find_map(|k| unwrap_dek(&k, &o, v, &r.wrapped)).map(|d| (d, true))
+            });
+            match opened {
+                Some((d, rewrap)) => {
+                    if rewrap {   // rotation: re-wrap with the seed that wraps from now on
+                        let w = wrap_dek(&wrap_with, &Self::nonce()?, &o, v, &d);
+                        sql.exec("UPDATE private_keys SET wrapped = ? WHERE owner = ? AND version = ?", vec![w.into(), o.clone().into(), (v as f64).into()])?;
+                    }
+                    out.push((v, d));
+                }
+                None => sealed += 1,
             }
         }
         let newest_open = out.last().map(|(v, _)| *v == top).unwrap_or(false);
@@ -309,7 +318,7 @@ impl Record {
             let v = top + 1;
             let mut d = [0u8; 32];
             getrandom::getrandom(&mut d).map_err(|e| Error::RustError(e.to_string()))?;
-            let w = wrap_dek(&cur, &Self::nonce()?, &o, v, &d);
+            let w = wrap_dek(&wrap_with, &Self::nonce()?, &o, v, &d);
             sql.exec("INSERT OR IGNORE INTO private_keys (owner, version, wrapped) VALUES (?, ?, ?)", vec![o.into(), (v as f64).into(), w.into()])?;
             out.push((v, d));
         }
@@ -318,7 +327,7 @@ impl Record {
 
     /// Health of the stores a deploy can break (P1 a). Counts and flags only.
     fn reliability(&self) -> Result<serde_json::Value> {
-        let seeds: serde_json::Map<String, serde_json::Value> = ["IMPORTER_SEED", "CONNECTOR_SEED", "PRIVATE_SEED"].iter()
+        let seeds: serde_json::Map<String, serde_json::Value> = ["IMPORTER_SEED", "CONNECTOR_SEED", "PRIVATE_SEED", "PRIVATE_SEED_NEXT"].iter()
             .map(|n| (n.to_string(), serde_json::Value::Bool(self.secret_opt(n).is_some()))).collect();
         let (mut rows, mut sealed, mut owners, mut sealed_keys) = (0u64, 0u64, 0u64, 0u64);
         if self.private_ready() {
@@ -686,18 +695,25 @@ impl Record {
         Ok(summary)
     }
 
+    /// SD1 a: a root seed is 64 hex characters (as made before 19 Nov) or any passphrase of 32+ characters made in
+    /// Nowed's password manager, hashed to 32 bytes. Existing hex seeds keep giving exactly the same keys.
+    fn seed_bytes(&self, name: &str) -> Result<[u8; 32]> {
+        let s = self.env.secret(name)?.to_string();
+        let t = s.trim();
+        if let Some(b) = hex::decode(t).ok().and_then(|v| <[u8; 32]>::try_from(v).ok()) { return Ok(b); }
+        if t.chars().count() < 32 { return Err(Error::RustError(format!("{name} must be 64 hex characters or a passphrase of 32+ characters"))); }
+        use sha2::Digest;
+        let mut h = sha2::Sha256::new();
+        h.update(b"nodach-seed-v1\0"); h.update(name.as_bytes()); h.update(b"\0"); h.update(t.as_bytes());
+        Ok(h.finalize().into())
+    }
+
     fn importer_key(&self) -> Result<KeyPair> {
-        let seed_hex = self.env.secret("IMPORTER_SEED")?.to_string();
-        let seed: [u8; 32] = hex::decode(seed_hex.trim()).ok().and_then(|v| v.try_into().ok())
-            .ok_or_else(|| Error::RustError("IMPORTER_SEED must be 64 hex chars".into()))?;
-        Ok(KeyPair::from_seed(seed))
+        Ok(KeyPair::from_seed(self.seed_bytes("IMPORTER_SEED")?))
     }
 
     fn connector_key(&self) -> Result<KeyPair> {
-        let seed_hex = self.env.secret("CONNECTOR_SEED")?.to_string();
-        let seed: [u8; 32] = hex::decode(seed_hex.trim()).ok().and_then(|v| v.try_into().ok())
-            .ok_or_else(|| Error::RustError("CONNECTOR_SEED must be 64 hex chars".into()))?;
-        Ok(KeyPair::from_seed(seed))
+        Ok(KeyPair::from_seed(self.seed_bytes("CONNECTOR_SEED")?))
     }
 
     fn session_key(&self) -> Option<[u8; 32]> {
@@ -1422,9 +1438,7 @@ impl DurableObject for Record {
             }
             (Method::Post, "/import") => {
                 if !self.authorised(&req) { return Response::error("unauthorised", 401); }
-                let seed_hex = self.env.secret("IMPORTER_SEED")?.to_string();
-                let seed: [u8; 32] = hex::decode(seed_hex.trim()).ok().and_then(|v| v.try_into().ok())
-                    .ok_or_else(|| Error::RustError("IMPORTER_SEED must be 64 hex chars".into()))?;
+                let seed = self.seed_bytes("IMPORTER_SEED")?;
                 let docs: Vec<Doc> = req.json().await?;
                 let now = Date::now().as_millis() as i64;
                 let made = self.hub.borrow_mut().as_mut().unwrap()
