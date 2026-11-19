@@ -278,10 +278,13 @@ pub fn secret_var(name: &str) -> Option<String> {
 }
 
 /// Only https, and never the hub's own hosts (a flow can't call its own API with someone else's rights).
+/// The hub answers on its workers.dev addresses and on nodach.com and every subdomain (studio., staging., …).
 pub fn url_allowed(url: &str) -> bool {
     let Some(rest) = url.strip_prefix("https://") else { return false };
     let host = rest.split(['/', '?', '#']).next().unwrap_or("").to_ascii_lowercase();
-    !host.is_empty() && !host.contains('@') && !host.ends_with(".workers.dev") && host != "localhost" && !host.starts_with("127.")
+    let host = host.split(':').next().unwrap_or("").trim_end_matches('.');
+    let own = host.ends_with(".workers.dev") || host == "nodach.com" || host.ends_with(".nodach.com");
+    !host.is_empty() && !rest.split(['/', '?', '#']).next().unwrap_or("").contains('@') && !own && host != "localhost" && !host.starts_with("127.")
 }
 
 pub fn base64(bytes: &[u8]) -> String {

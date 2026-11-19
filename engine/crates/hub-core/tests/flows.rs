@@ -102,8 +102,11 @@ fn flows_cannot_reach_hub_secrets_or_the_hub_itself() {
     assert_eq!(secret_var("reed").as_deref(), Some("NODE_SECRET_REED"));
     for bad in ["", "HUB WRITE", "../x", "a-b"] { assert!(secret_var(bad).is_none(), "{bad}"); }
     assert!(url_allowed("https://www.reed.co.uk/api/1.0/search?keywords=temp"));
+    assert!(url_allowed("https://notnodach.com/x"), "a different domain that merely ends in nodach.com is allowed");
     for bad in ["http://plain.example", "https://clanstack-hub.ndab-utube.workers.dev/studio/api/events", "https://localhost/x",
-                "https://user@evil.example/", "ftp://x", "https://127.0.0.1/"] {
+                "https://user@evil.example/", "ftp://x", "https://127.0.0.1/",
+                "https://studio.nodach.com/studio/api/events", "https://staging.nodach.com/x", "https://nodach.com/",
+                "https://STUDIO.NODACH.COM/x", "https://studio.nodach.com./x", "https://studio.nodach.com:443/x"] {
         assert!(!url_allowed(bad), "{bad}");
     }
 }
