@@ -88,8 +88,12 @@ jobs:
           done
           # 19 Nov: a flaky `secret list` once made these checks think the seeds were missing, and PRIVATE_SEED was
           # replaced (older private items sealed). Seeds are never made here now: a failed or odd list stops the deploy.
-          list=$(npx -y wrangler@4.158.0 secret list --env="") || { echo "::error::wrangler secret list failed; seeds untouched"; exit 1; }
-          echo "$list" | grep -q HUB_WRITE_TOKEN || { echo "::error::secret list looks wrong (no HUB_WRITE_TOKEN); seeds untouched"; exit 1; }
+          # The list is eventually consistent right after the puts above (19 Nov run 44533863819), so ask up to 6 times.
+          for i in 1 2 3 4 5 6; do
+            list=$(npx -y wrangler@4.158.0 secret list --env="" 2>/dev/null) && echo "$list" | grep -q HUB_WRITE_TOKEN && break
+            echo "secret list not settled yet ($i/6)"; list=""; sleep 10
+          done
+          [ -n "$list" ] || { echo "::error::secret list never looked right; seeds untouched"; exit 1; }
           for n in IMPORTER_SEED CONNECTOR_SEED PRIVATE_SEED; do
             echo "$list" | grep -q "\"$n\"\|$n" || { echo "::error::$n is missing on the worker. Make it once by hand (openssl rand -hex 32 | wrangler secret put $n); never in CI."; exit 1; }
           done
