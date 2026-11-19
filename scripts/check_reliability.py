@@ -22,5 +22,6 @@ def problems(env: str, got: dict, baseline: dict) -> list[str]:
 if __name__ == "__main__":
     env, answer, base = sys.argv[1], json.load(open(sys.argv[2])), json.load(open(sys.argv[3]))
     found = problems(env, answer, base)
-    print("\n".join(found) if found else f"{env}: reliability ok ({json.dumps(answer.get('private'))})")
+    seeds = ", ".join(f"{k}={'set' if v else 'unset'}" for k, v in sorted((answer.get("seeds") or {}).items()))
+    print("\n".join(found) if found else f"{env}: reliability ok ({json.dumps(answer.get('private'))}; seeds: {seeds})")
     sys.exit(1 if found else 0)
