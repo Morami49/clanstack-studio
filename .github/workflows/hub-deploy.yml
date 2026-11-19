@@ -77,25 +77,22 @@ jobs:
         name: Set hub secrets (only when provided)
         env: {HUB_WRITE_TOKEN: "${{ secrets.HUB_WRITE_TOKEN }}", HUB_READ_TOKEN: "${{ secrets.HUB_READ_TOKEN }}", GH_OAUTH_CLIENT_ID: "${{ secrets.GH_OAUTH_CLIENT_ID }}", GH_OAUTH_CLIENT_SECRET: "${{ secrets.GH_OAUTH_CLIENT_SECRET }}", GOOGLE_OAUTH_CLIENT_ID: "${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}", GOOGLE_OAUTH_CLIENT_SECRET: "${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}", RESEND_API_KEY: "${{ secrets.RESEND_API_KEY }}"}
         run: |
-          [ -n "$HUB_WRITE_TOKEN" ] && printf '%s' "$HUB_WRITE_TOKEN" | npx -y wrangler@4.158.0 secret put HUB_WRITE_TOKEN || true
-          [ -n "$HUB_READ_TOKEN" ] && printf '%s' "$HUB_READ_TOKEN" | npx -y wrangler@4.158.0 secret put HUB_READ_TOKEN || true
-          if ! npx -y wrangler@4.158.0 secret list | grep -q IMPORTER_SEED; then
-            openssl rand -hex 32 | npx -y wrangler@4.158.0 secret put IMPORTER_SEED
-          fi
+          [ -n "$HUB_WRITE_TOKEN" ] && printf '%s' "$HUB_WRITE_TOKEN" | npx -y wrangler@4.158.0 secret put --env="" HUB_WRITE_TOKEN || true
+          [ -n "$HUB_READ_TOKEN" ] && printf '%s' "$HUB_READ_TOKEN" | npx -y wrangler@4.158.0 secret put --env="" HUB_READ_TOKEN || true
           # Claude connector (D-128): GitHub OAuth App for sign-in; CONNECTOR_SEED signs connector writes
-          [ -n "$GH_OAUTH_CLIENT_ID" ] && printf '%s' "$GH_OAUTH_CLIENT_ID" | npx -y wrangler@4.158.0 secret put GH_OAUTH_CLIENT_ID || true
-          [ -n "$GH_OAUTH_CLIENT_SECRET" ] && printf '%s' "$GH_OAUTH_CLIENT_SECRET" | npx -y wrangler@4.158.0 secret put GH_OAUTH_CLIENT_SECRET || true
+          [ -n "$GH_OAUTH_CLIENT_ID" ] && printf '%s' "$GH_OAUTH_CLIENT_ID" | npx -y wrangler@4.158.0 secret put --env="" GH_OAUTH_CLIENT_ID || true
+          [ -n "$GH_OAUTH_CLIENT_SECRET" ] && printf '%s' "$GH_OAUTH_CLIENT_SECRET" | npx -y wrangler@4.158.0 secret put --env="" GH_OAUTH_CLIENT_SECRET || true
           # Studio sign-in for invited people without GitHub (18 Nov): Google OAuth client, and Resend for emailed links
           for n in GOOGLE_OAUTH_CLIENT_ID GOOGLE_OAUTH_CLIENT_SECRET RESEND_API_KEY; do
-            v="${!n}"; [ -n "$v" ] && printf '%s' "$v" | npx -y wrangler@4.158.0 secret put "$n" || true
+            v="${!n}"; [ -n "$v" ] && printf '%s' "$v" | npx -y wrangler@4.158.0 secret put --env="" "$n" || true
           done
-          if ! npx -y wrangler@4.158.0 secret list | grep -q CONNECTOR_SEED; then
-            openssl rand -hex 32 | npx -y wrangler@4.158.0 secret put CONNECTOR_SEED
-          fi
-          # I1: root of the Private-tier keys. Made once; never rotated (rotating it makes private items unreadable).
-          if ! npx -y wrangler@4.158.0 secret list | grep -q PRIVATE_SEED; then
-            openssl rand -hex 32 | npx -y wrangler@4.158.0 secret put PRIVATE_SEED
-          fi
+          # 19 Nov: a flaky `secret list` once made these checks think the seeds were missing, and PRIVATE_SEED was
+          # replaced (older private items sealed). Seeds are never made here now: a failed or odd list stops the deploy.
+          list=$(npx -y wrangler@4.158.0 secret list --env="") || { echo "::error::wrangler secret list failed; seeds untouched"; exit 1; }
+          echo "$list" | grep -q HUB_WRITE_TOKEN || { echo "::error::secret list looks wrong (no HUB_WRITE_TOKEN); seeds untouched"; exit 1; }
+          for n in IMPORTER_SEED CONNECTOR_SEED PRIVATE_SEED; do
+            echo "$list" | grep -q "\"$n\"\|$n" || { echo "::error::$n is missing on the worker. Make it once by hand (openssl rand -hex 32 | wrangler secret put $n); never in CI."; exit 1; }
+          done
       - if: steps.go.outputs.run == 'yes'
         name: Step secrets for runnable flows (D-174; only when provided)
         # A flow step names a secret (e.g. REED); the hub reads NODE_SECRET_REED. Flows can't read any other secret.
@@ -106,7 +103,7 @@ jobs:
           NODE_SECRET_ADZUNA_KEY: ${{ secrets.NODE_SECRET_ADZUNA_KEY }}
         run: |
           for n in NODE_SECRET_REED NODE_SECRET_GEMINI NODE_SECRET_ADZUNA_ID NODE_SECRET_ADZUNA_KEY; do
-            v="${!n}"; [ -n "$v" ] && printf '%s' "$v" | npx -y wrangler@4.158.0 secret put "$n" || true
+            v="${!n}"; [ -n "$v" ] && printf '%s' "$v" | npx -y wrangler@4.158.0 secret put --env="" "$n" || true
           done
       - if: steps.go.outputs.run == 'yes'
         name: Check health and import Studio Web's export

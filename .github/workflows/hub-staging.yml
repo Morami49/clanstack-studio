@@ -67,11 +67,11 @@ jobs:
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
         run: |
           W="npx -y wrangler@4.158.0"
-          have=$($W secret list --env staging)
-          echo "$have" | grep -q IMPORTER_SEED || openssl rand -hex 32 | $W secret put IMPORTER_SEED --env staging
-          echo "$have" | grep -q CONNECTOR_SEED || openssl rand -hex 32 | $W secret put CONNECTOR_SEED --env staging
-          # I1: root of the Private-tier keys. Made once; never rotated (rotating it makes private items unreadable).
-          echo "$have" | grep -q PRIVATE_SEED || openssl rand -hex 32 | $W secret put PRIVATE_SEED --env staging
+          have=$($W secret list --env staging) || { echo "::error::secret list failed; seeds untouched"; exit 1; }
+          echo "$have" | grep -q "\"name\"" || { echo "::error::secret list looks wrong; seeds untouched"; exit 1; }
+          for n in IMPORTER_SEED CONNECTOR_SEED PRIVATE_SEED; do
+            echo "$have" | grep -q "$n" || { echo "::error::$n is missing on staging. Make it once by hand; never in CI (19 Nov)."; exit 1; }
+          done
           [ -n "$GH_ID" ] && printf '%s' "$GH_ID" | $W secret put GH_OAUTH_CLIENT_ID --env staging || true
           [ -n "$GH_SECRET" ] && printf '%s' "$GH_SECRET" | $W secret put GH_OAUTH_CLIENT_SECRET --env staging || true
           [ -n "$TOKEN" ] && printf '%s' "$TOKEN" | $W secret put HUB_WRITE_TOKEN --env staging || true
