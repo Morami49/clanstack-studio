@@ -18,6 +18,11 @@ def test_missing_seed_and_broken_chain():
     assert len(problems("production", bad, BASE)) == 2
 
 
+def test_escrow_seed_is_optional():
+    ok = dict(GOOD, seeds={"PRIVATE_SEED": True, "PRIVATE_SEED_NEXT": False})
+    assert problems("production", ok, BASE) == []
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

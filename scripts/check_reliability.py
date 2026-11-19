@@ -6,7 +6,7 @@ import sys
 def problems(env: str, got: dict, baseline: dict) -> list[str]:
     out = []
     for name, present in (got.get("seeds") or {}).items():
-        if not present:
+        if not present and not name.endswith("_NEXT"):   # *_NEXT is the optional escrow seed (SD1 a)
             out.append(f"{env}: {name} is missing")
     priv = got.get("private") or {}
     if not priv.get("ready"):
