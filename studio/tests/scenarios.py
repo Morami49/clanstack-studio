@@ -693,6 +693,7 @@ async def s40_point_mode(b):
     await p.fill("#pointNote textarea", "Make this tab bigger"); await p.press("#pointNote textarea", "Enter"); await p.wait_for_timeout(300)
     made = [e for e in st.events if e.get("kind") == "item.create" and (e.get("body") or {}).get("source") == "point"]
     pt = (made[0]["body"].get("point") if made else {}) or {}
+    await p.wait_for_selector("#pointNote", state="detached", timeout=3000)  # the save finishes before Esc (CI run 1 was flaky)
     await p.keyboard.press("Escape"); await p.wait_for_timeout(150)
     off = await p.evaluate("document.querySelector('#pointBtn').getAttribute('aria-pressed')")
     ok = (len(made) == 1 and pt.get("part") == "studio.tabs" and pt.get("schema") == "pointer.v1" and view_after_click == "map"
