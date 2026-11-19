@@ -26,6 +26,7 @@ pub mod private;
 pub mod profiles;
 pub mod guard;
 pub mod access;
+pub mod digest;
 
 pub const IMPORT_KIND: &str = "studio.event";
 /// A Studio-shaped write made on a node other than Studio Web (PC, phone, an AI via the hub).
@@ -217,6 +218,12 @@ impl Hub {
         if acc.is_owner(login) { return (docs, next, total, skipped); }
         let mine: Vec<Value> = docs.into_iter().filter(|d| d.get("event").map(|e| acc.visible(login, e)).unwrap_or(false)).collect();
         (mine, next, total, skipped)
+    }
+
+    /// The resume digest for `login`: active rules, open questions, latest replies (see digest.rs).
+    pub fn digest_for(&self, login: &str) -> serde_json::Value {
+        let (docs, _, _, _) = self.studio_events_for(login, 0, usize::MAX);
+        digest::fold(docs.iter().filter_map(|d| d.get("event")))
     }
 
     /// Session claims and Studio branches (multi-chat guard), folded from every Studio-shaped event in order.

@@ -1,7 +1,7 @@
 name: hub-staging
 # Staging hub (Q24 B, Q26 C): every branch that passes ci is deployed to a second Worker with its own Durable
 # Object, so its own test record. Production (hub-deploy) still deploys only from main. Open
-# https://clanstack-hub-staging.ndab-utube.workers.dev/studio to try a branch before it reaches anyone.
+# https://staging.nodach.com/studio (also still at clanstack-hub-staging.ndab-utube.workers.dev) to try a branch before it reaches anyone.
 #
 # Owner setup (GitHub → Settings → Secrets and variables → Actions → Secrets), all optional:
 #   GH_OAUTH_CLIENT_ID_STAGING / GH_OAUTH_CLIENT_SECRET_STAGING  a second GitHub OAuth App whose callback is
