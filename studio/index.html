@@ -52,6 +52,12 @@ nav button[aria-current="true"]{background:var(--ink);color:var(--surface)}
 .spacer{flex:1}
 .rail{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .rail label{font-size:12px;color:var(--mute)}
+#pointBtn[aria-pressed="true"]{background:var(--ink);color:var(--surface)}
+#pointBox{position:fixed;pointer-events:none;border:2px solid #e0457b;border-radius:4px;z-index:30;display:none}
+#pointTag{position:fixed;pointer-events:none;z-index:31;font:11px var(--mono,monospace);background:#e0457b;color:#fff;padding:1px 6px;border-radius:3px;display:none}
+#pointNote{position:fixed;z-index:32;background:var(--surface);color:var(--ink);border:1px solid var(--mute);border-radius:8px;padding:10px;width:min(360px,calc(100% - 24px));box-shadow:0 6px 24px rgba(0,0,0,.2)}
+#pointNote textarea{width:100%;box-sizing:border-box;min-height:70px}
+body.pointing, body.pointing *{cursor:crosshair!important}
 #asof{width:160px;accent-color:var(--accent)}
 .status{font:500 11px var(--mono);padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--mute)}
 .status.live{color:var(--ok);border-color:var(--ok)}
@@ -135,9 +141,9 @@ pre.pack{white-space:pre-wrap;background:var(--raise);border:1px solid var(--lin
 @media (prefers-reduced-motion: reduce){*{transition:none!important;animation:none!important}}
 </style>
 
-<header>
+<header data-nodach-part="studio.header">
   <div class="brand"><h1>Nodach Studio</h1><span class="ver" id="ver">v1.1</span></div>
-  <nav id="tabs" aria-label="Views">
+  <nav id="tabs" aria-label="Views" data-nodach-part="studio.tabs">
     <button data-v="map" aria-current="true">Map</button>
     <button data-v="command">Command</button>
     <button data-v="list">List</button>
@@ -153,17 +159,18 @@ pre.pack{white-space:pre-wrap;background:var(--raise);border:1px solid var(--lin
   </nav>
   <form id="goForm" class="row" style="gap:4px" role="search"><input id="goAddr" class="mono" placeholder="Go to: D-063@2 · R-261105-2#3.1 · repo/sha:path#L10" aria-label="Go to an address" style="width:300px;max-width:100%"><button>Go</button></form>
   <span class="spacer"></span>
-  <div class="rail">
+  <div class="rail" data-nodach-part="studio.rail">
     <label for="branch">branch</label>
     <select id="branch"><option value="main">main</option></select>
     <label for="asof">as of</label>
     <input id="asof" type="range" min="0" max="0" value="0" aria-label="View as of an earlier change">
     <span class="status live" id="when">live</span>
     <span class="status" id="conn">connecting…</span>
+    <button id="pointBtn" aria-pressed="false" title="Point mode: click any part of Studio and leave a note on it. Esc stops.">⌖ Point</button>
     <button id="theme" aria-label="Toggle theme" title="Toggle theme">◐</button>
   </div>
 </header>
-<div id="banners" aria-live="polite"></div>
+<div id="banners" aria-live="polite" data-nodach-part="studio.banners"></div>
 
 <main>
   <section class="view" id="v-map">
@@ -1689,6 +1696,69 @@ for (const id of ["calcAmt","calcSales","calcClass"]) $("#"+id).oninput = render
   else { $("#capPrivate").disabled = true; $("#capPrivate").checked = false; }
 })();
 addEventListener("resize", () => { if (S.view==="capture") sizePad(); });
+
+/* ---------------------------------------------------------------- point mode (R-261119-visual-builder, U1)
+   Click any part of Studio and leave a note on it. Saves an idea item (append-only, like every write) whose
+   source is "point" and whose body says exactly where you pointed: the named region (data-nodach-part, stable
+   across renames and edits), the element and its text, the view, and the screen position. Same meaning as a
+   desktop pointer event (pointer.v1), so every way of pointing lands in one place. Esc or the button stops. */
+(() => {
+  const btn = $("#pointBtn"); if (!btn) return;
+  document.querySelectorAll("main > section.view[id^='v-']").forEach(sec => { if (!sec.dataset.nodachPart) sec.dataset.nodachPart = "view." + sec.id.slice(2); });
+  const box = document.createElement("div"); box.id = "pointBox";
+  const tag = document.createElement("div"); tag.id = "pointTag";
+  document.body.append(box, tag);
+  let on = false, cur = null, note = null;
+  const ours = el => el && (el.closest("#pointNote") || el === btn);
+  const partOf = el => el?.closest?.("[data-nodach-part]")?.dataset.nodachPart || "studio";
+  const describe = el => {
+    const t = el.tagName.toLowerCase(), id = el.id ? "#" + el.id : "";
+    const label = el.getAttribute("aria-label") || el.getAttribute("title") || (el.textContent || "").replace(/\s+/g, " ").trim();
+    return {element: t + id + (el.dataset.v ? `[data-v=${el.dataset.v}]` : ""), text: label.slice(0, 120)};
+  };
+  const hide = () => { box.style.display = tag.style.display = "none"; };
+  const mark = el => {
+    const r = el.getBoundingClientRect();
+    Object.assign(box.style, {display:"block", left:r.left-2+"px", top:r.top-2+"px", width:r.width+"px", height:r.height+"px"});
+    tag.textContent = partOf(el) + " · " + describe(el).element;
+    Object.assign(tag.style, {display:"block", left:Math.max(4, r.left-2)+"px", top:Math.max(4, r.top-20)+"px"});
+  };
+  const closeNote = () => { note?.remove(); note = null; };
+  const set = v => { on = v; btn.setAttribute("aria-pressed", String(v)); document.body.classList.toggle("pointing", v);
+    if (!v){ hide(); closeNote(); cur = null; } else toast("Point mode: click anything to leave a note on it. Esc stops."); };
+  btn.onclick = () => set(!on);
+  document.addEventListener("mousemove", e => { if (!on || note) return; const el = e.target; if (ours(el) || el === document.body) return hide(); cur = el; mark(el); }, true);
+  document.addEventListener("keydown", e => { if (on && e.key === "Escape"){ e.preventDefault(); note ? closeNote() : set(false); } }, true);
+  document.addEventListener("click", e => {
+    if (!on || ours(e.target)) return;
+    e.preventDefault(); e.stopPropagation();
+    if (note) return;
+    const el = e.target, r = el.getBoundingClientRect(), d = describe(el), part = partOf(el);
+    mark(el);
+    note = document.createElement("div"); note.id = "pointNote";
+    note.innerHTML = `<div class="mute" style="font-size:12px;margin-bottom:6px">${esc(part)} · ${esc(d.element)}${d.text ? " · “" + esc(d.text.slice(0, 50)) + "”" : ""}</div>
+      <textarea aria-label="What do you want here?" placeholder="What do you want here?"></textarea>
+      <div class="row" style="gap:6px;margin-top:6px"><button data-save>Save</button><button data-cancel>Cancel</button>
+      <span class="mute" style="font-size:12px">Enter saves · Shift+Enter new line · Esc cancels</span></div>`;
+    document.body.append(note);
+    Object.assign(note.style, {left: Math.min(innerWidth - 372, Math.max(12, r.left)) + "px", top: Math.min(innerHeight - 160, r.bottom + 8) + "px"});
+    const ta = note.querySelector("textarea"); ta.focus();
+    const save = async () => {
+      const text = ta.value.trim(); if (!text){ ta.focus(); return; }
+      const t = new Date(), pad = n => String(n).padStart(2, "0");
+      const id = `PT-${String(t.getUTCFullYear()).slice(2)}${pad(t.getUTCMonth()+1)}${pad(t.getUTCDate())}-${pad(t.getUTCHours())}${pad(t.getUTCMinutes())}${pad(t.getUTCSeconds())}-${Math.random().toString(36).slice(2, 6)}`;
+      const where = {schema:"pointer.v1", kind:"pointer.studio", part, element:d.element, text:d.text, view:S.view,
+                     rect:{left:Math.round(r.left), top:Math.round(r.top), right:Math.round(r.right), bottom:Math.round(r.bottom)},
+                     viewport:{w:innerWidth, h:innerHeight}};
+      const body = `${text}\n\nPointed at: ${part} › ${d.element}${d.text ? " (“" + d.text.slice(0, 80) + "”)" : ""} in the ${S.view} view.`;
+      const ok = await write("item.create", null, {id, type:"idea", title:("Point: " + text).slice(0, 80), body, refs:[], status:"open", source:"point", point:where});
+      if (ok){ closeNote(); toast(`Saved ${id}. Still pointing (Esc stops).`); }
+    };
+    note.querySelector("[data-save]").onclick = save;
+    note.querySelector("[data-cancel]").onclick = closeNote;
+    ta.onkeydown = ev => { if (ev.key === "Enter" && !ev.shiftKey){ ev.preventDefault(); save(); } };
+  }, true);
+})();
 </script>
 <script type="module">
 /* ---------------------------------------------------------------- canvas (D-172 C1, Q25 A, Q28 A)
