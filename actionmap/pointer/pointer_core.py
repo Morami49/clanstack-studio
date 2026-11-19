@@ -172,11 +172,18 @@ def captioned(img, text: str, width_chars: int = 110):
     take only the picture when both are on the clipboard (28a, 19 Nov), so the details travel inside it."""
     import textwrap
     from PIL import Image, ImageDraw, ImageFont
-    font = ImageFont.load_default()
+    font = None
+    for f in ("C:/Windows/Fonts/segoeui.ttf", "C:/Windows/Fonts/arial.ttf", "DejaVuSans.ttf"):
+        try:
+            font = ImageFont.truetype(f, 13)   # a real font draws dashes and arrows (the built-in one shows boxes)
+            break
+        except Exception:
+            continue
+    font = font or ImageFont.load_default()
     lines = []
     for raw in (text or "").splitlines():
         lines += textwrap.wrap(raw, width_chars) or [""]
-    line_h = 14
+    line_h = 17
     pad = 8
     w = max(img.width, 8 + 7 * min(width_chars, max((len(l) for l in lines), default=0)))
     h = img.height + pad * 2 + line_h * len(lines)
