@@ -992,12 +992,41 @@ async def s39_scheduled_steps(b):
     return ok, f"post only-new by default={only_new}, no schedule on wired-into step={no_sched_mid}, hours saved={hours}, badge shown={badge}, bad hour refused={refused}, errors={p.errors[:1]}"
 
 
+async def s45_my_queue(b):
+    """Back after a day away, opens My queue. Only what waits on him shows, oldest first: a decision pack, an unanswered
+    question, a re-asked one and a finding in his lane. Answered items and Claude-lane items stay out; nothing is written (AS3)."""
+    t = lambda h: f"2026-11-19T{h}:00:00.000Z"
+    st = Store([
+        ev("item.create", None, {"id": "Q-PACK-terms", "type": "decision-pack", "title": "PK1 pilot terms", "body": "a, b, c or d", "status": "draft-v1"}, ts=t("10")),
+        ev("item.create", None, {"id": "Q-open1", "type": "question", "title": "Open one", "status": "open"}, ts=t("11")),
+        ev("item.create", None, {"id": "Q-done1", "type": "question", "title": "Answered one", "status": "open"}, ts=t("09")),
+        ev("answer", "Q-done1", {"code": "Q-done1", "text": "b"}, ts=t("12")),
+        ev("item.create", None, {"id": "Q-reask", "type": "question", "title": "Re-asked one", "status": "open"}, ts=t("08")),
+        ev("answer", "Q-reask", {"code": "Q-reask", "text": "a"}, ts=t("09")),
+        ev("item.edit", "Q-reask", {"body": "re-posed with new options"}, ts=t("13")),
+        ev("item.create", None, {"id": "F-mine", "type": "finding", "title": "Lane nowed finding", "status": "open", "lane": "nowed"}, ts=t("07")),
+        ev("item.create", None, {"id": "Q-claude", "type": "question", "title": "Claude lane question", "status": "open", "lane": "claude"}, ts=t("07")),
+        ev("item.create", None, {"id": "Q-settled", "type": "question", "title": "Settled one", "status": "done"}, ts=t("07")),
+    ])
+    p = await open_page(b, st, {})
+    before = len(st.events)
+    await p.click('#tabs button[data-v="queue"]'); await p.wait_for_timeout(300)
+    ids = await p.evaluate("[...document.querySelectorAll('#queueList [data-q]')].map(x => x.dataset.q)")
+    mine = [i for i in ids if i in ("F-mine", "Q-PACK-terms", "Q-open1", "Q-reask", "Q-done1", "Q-claude", "Q-settled")]
+    want = ["F-mine", "Q-PACK-terms", "Q-open1", "Q-reask"]
+    badge = await p.inner_text("#queueBadge")
+    await p.click('#queueList [data-qopen="Q-PACK-terms"]'); await p.wait_for_timeout(200)
+    opened = await p.evaluate("S.sel")
+    ok = mine == want and badge.isdigit() and int(badge) == len(ids) and opened == "Q-PACK-terms" and len(st.events) == before and not p.errors
+    return ok, f"queue={mine} (want {want}), badge={badge}/{len(ids)}, opened={opened}, writes={len(st.events)-before}, errors={p.errors[:1]}"
+
+
 SCENARIOS = [s01_tired_misclick, s02_undo, s03_stable_codes, s04_past_view_lock, s05_branch_awareness, s06_view_only_client,
              s07_names, s08_long_history, s09_ai_relay, s10_keyboard_list, s11_offline_capture, s12_member_rights,
              s13_two_people_at_once, s14_phone, s15_undo_old_status, s16_overwhelm, s17_disagreement, s18_clock_skew, s19_private_area,
              s20_addresses, s21_money_settings, s22_duplicate_id, s23_same_order_everywhere,
              s24_hub_sync, s25_more_than_1000, s26_hub_not_connected, s27_read_on_open, s28_push_after_clean_runs, s29_runs_timeline, s30_builder_pipeline, s31_content_cycles, s32_private_files_and_views, s33_studio_edits_studio, s34_command_map, s35_history_words, s36_canvas, s37_classic_map_fallback, s38_runnable_steps, s39_scheduled_steps, s40_point_mode,
-             s41_multi_point, s42_show_record_save, s43_show_pause, s44_show_replay]
+             s41_multi_point, s42_show_record_save, s43_show_pause, s44_show_replay, s45_my_queue]
 
 
 async def main():
