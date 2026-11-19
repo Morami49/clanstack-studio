@@ -25,6 +25,12 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - run: python3 scripts/check_no_seed_making.py .github/workflows
+  worker-names:
+    # AUD-secrets-state (1): renaming a Worker or its Durable Object class makes the record seem to vanish.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - run: python3 scripts/check_worker_names.py hub/wrangler.toml
   main-guard:
     # Main may only move to a commit that already passed CI on a branch.
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
