@@ -1,5 +1,5 @@
 """
-Nodach Desktop Pointer (P-desktop-pointer) — v0.1.7
+Nodach Desktop Pointer (P-desktop-pointer) — v0.1.8
 ====================================================
 Point at any element in any Windows app and tell your agent what you want.
 
@@ -234,7 +234,7 @@ def ask_note(root, e: dict):
     win.geometry(f"+{e['cursor']['x'] + 20}+{e['cursor']['y'] + 20}")
     head = summary(e).split("\n")[1]
     if e.get("opaque"):
-        head += "\n(web view: the screenshot around the cursor will be on the clipboard)"
+        head += "\n(web view: the picture shows the area around the cursor)"
     if pending_batch:
         head += f"\n(+ {len(pending_batch)} batched element(s))"
     tk.Label(win, text=head, justify="left", wraplength=460).pack(padx=10, pady=(10, 4), anchor="w")
@@ -286,7 +286,7 @@ def handle(root, job: str) -> None:
     append(e)
     block = build_block(e)
     how = "text copied to clipboard"
-    if e.get("opaque") and img is not None and win32clipboard is not None:
+    if img is not None and win32clipboard is not None:
         try:
             copy_image_and_text(img, block)
             how = "IMAGE + text copied to clipboard"
@@ -297,12 +297,12 @@ def handle(root, job: str) -> None:
     else:
         root.clipboard_clear()
         root.clipboard_append(block)
-        if e.get("opaque") and win32clipboard is None:
+        if img is not None and win32clipboard is None:
             how += " (install pywin32 to also copy the image: pip install -r requirements.txt)"
     print(f"Saved {e['id']} — {how} — {to_actionmap(e)}")
     if how.startswith("IMAGE"):
-        print("  Web view: the screenshot around the cursor is on the clipboard. Paste (Ctrl+V) into the chat to")
-        print("  attach the image; apps that only take text get the text block instead.")
+        print("  The captioned picture is on the clipboard. Paste (Ctrl+V) into a chat to attach it;")
+        print("  apps that only take text get the text block instead.")
 
 
 def pump(root) -> None:

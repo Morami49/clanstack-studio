@@ -8,7 +8,7 @@ text to paste. test_pointer.py imports this module on any OS.
 import datetime as dt
 import uuid
 
-VERSION = "0.1.7"
+VERSION = "0.1.8"
 SCHEMA = "pointer.v1"
 PAD = 24                      # pixels of context around a normal element in the screenshot
 MAX_AREA = 4_000_000          # elements bigger than this (whole windows) get a cursor-centred crop

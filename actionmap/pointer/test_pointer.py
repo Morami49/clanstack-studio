@@ -143,7 +143,7 @@ def test_ids_and_version():
     t = core.utcnow()
     i = core.new_id(t)
     assert i.startswith("PE-") and len(i) == len("PE-261119-120000-abcd")
-    assert core.VERSION == "0.1.7" and core.SCHEMA == "pointer.v1"
+    assert core.VERSION == "0.1.8" and core.SCHEMA == "pointer.v1"
 
 
 def test_dib_bytes():
@@ -197,7 +197,7 @@ class _FakeClipboard:
 
 
 def test_handle_clipboard_routing():
-    """Opaque web view -> image + text in one clipboard session; named element -> text only (tk)."""
+    """Any element with a picture -> image + text in one clipboard session (v0.1.8); no pywin32 -> text."""
     import types
     import pointer
     saved = {k: getattr(pointer, k) for k in ("capture", "ask_note", "to_actionmap", "win32clipboard", "win32con")}
@@ -233,7 +233,9 @@ def test_handle_clipboard_routing():
         fake.log.clear()
         pointer.capture = cap(False)
         pointer.handle(root, "point")
-        assert fake.log == [] and root.clip.endswith("note: fix this") and "view:" not in root.clip
+        # v0.1.8: named elements also get the captioned picture.
+        assert root.clip is None and fake.log[2] == (8, b"DIBDATA")
+        assert fake.log[3][1].endswith("note: fix this") and "view:" not in fake.log[3][1]
 
         # No pywin32: opaque still falls back to text.
         pointer.win32clipboard = None
