@@ -1,0 +1,5 @@
+{
+  "_note": "INC-261118-seed baseline (19 Nov 2026). The watch job fails if sealed_rows rises above these, a seed goes missing, the Private tier isn't ready, or the record's chain doesn't verify. Lower a number only after a recovery decision (RB1); never raise one to silence an alarm.",
+  "production": {"sealed_rows": 12},
+  "staging": {"sealed_rows": 22}
+}
