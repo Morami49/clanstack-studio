@@ -1,14 +1,22 @@
 name: hub-staging
-# Staging hub (Q24 B, Q26 C): every branch that passes ci is deployed to a second Worker with its own Durable
+# Staging hub (Q24 B, Q26 C): branches that pass ci are deployed to a second Worker with its own Durable
 # Object, so its own test record. Production (hub-deploy) still deploys only from main. Open
 # https://staging.nodach.com/studio (also still at clanstack-hub-staging.ndab-utube.workers.dev) to try a branch before it reaches anyone.
+#
+# Staging train (F-staging-one-branch, 19 Nov): staging used to show one branch at a time, so parallel chats overwrote
+# each other. Each deploy now builds, in the runner only, origin/main plus every open non-draft PR branch of this
+# repository (never a fork) whose required checks passed on its head SHA, oldest PR first, plus the branch that
+# triggered the run (scripts/staging_train.py). A branch that conflicts is left out and its PR gets one comment saying
+# with what. The included PRs and SHAs go to the run summary and to the "staging-train" artifact, which automerge
+# reads to know which heads were staged. Nothing is pushed: the merged tree exists only in the runner.
+# Escape hatch: Actions -> hub-staging -> Run workflow with single = true deploys one branch/commit alone (old mode).
 #
 # Owner setup (GitHub → Settings → Secrets and variables → Actions → Secrets), all optional:
 #   GH_OAUTH_CLIENT_ID_STAGING / GH_OAUTH_CLIENT_SECRET_STAGING  a second GitHub OAuth App whose callback is
 #       https://clanstack-hub-staging.ndab-utube.workers.dev/callback (GitHub allows one callback per app).
 #       Without it, staging works but /studio/login says sign-in isn't set up.
 #   HUB_STAGING_TOKEN  a random string for staging's /push and /import (never reuse the production token)
-# Staging's IMPORTER_SEED and CONNECTOR_SEED are generated here on first deploy and live only in Cloudflare.
+# Staging's IMPORTER_SEED, CONNECTOR_SEED and PRIVATE_SEED are made once by hand and live only in Cloudflare.
 # Uses the same CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID as hub-deploy. Every run is recorded in Studio
 # (RUNS-hub-staging).
 on:
@@ -19,8 +27,13 @@ on:
   workflow_dispatch:
     inputs:
       sha:
-        description: "commit to put on staging (blank = this branch's latest)"
+        description: "commit of the triggering branch (blank = this branch's latest)"
         required: false
+      single:
+        description: "deploy only this branch/commit, without the train (the old one-branch mode)"
+        type: boolean
+        required: false
+        default: false
 permissions: {contents: read}
 concurrency: hub-staging
 jobs:
@@ -28,10 +41,15 @@ jobs:
     # B1 d (public repo): only runs of this repository's own pushes, never a fork's pull request, may use secrets
     if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.event == 'push')
     runs-on: ubuntu-latest
+    # read-only token: this job builds branch code, so it may list PRs and checks but never write
+    permissions: {contents: read, pull-requests: read, checks: read}
     defaults: {run: {working-directory: hub}}
+    outputs:
+      left_out: ${{ steps.train.outputs.left_out }}
     env:
       SHA: ${{ inputs.sha || github.event.workflow_run.head_sha || github.sha }}
       BRANCH: ${{ github.event.workflow_run.head_branch || github.ref_name }}
+      SINGLE: ${{ inputs.single && 'true' || 'false' }}
       URL: https://clanstack-hub-staging.ndab-utube.workers.dev
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -43,14 +61,57 @@ jobs:
           if [ -z "$CLOUDFLARE_API_TOKEN" ]; then echo "Cloudflare not set up yet: skipping."; echo "go=no" >> "$GITHUB_OUTPUT"; else echo "go=yes" >> "$GITHUB_OUTPUT"; fi
       - if: steps.ready.outputs.go == 'yes'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with: {ref: "${{ env.SHA }}"}
+        with: {fetch-depth: 0, persist-credentials: false}
+      - if: steps.ready.outputs.go == 'yes'
+        name: Build the staging train (or take one commit when single = true)
+        id: train
+        working-directory: .
+        env: {GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}", R: "${{ github.repository }}"}
+        run: |
+          T="$RUNNER_TEMP/train"; mkdir -p "$T"
+          # the scripts come from the checked-out workflow ref (main for ci-triggered runs), never from a PR branch
+          cp scripts/staging_train.py scripts/should_automerge.py "$T/"
+          gh api "repos/$R/pulls?state=open&base=main&per_page=100" --paginate --jq '.[]' | jq -s . > "$T/prs.json"
+          echo '{}' > "$T/checks.json"
+          if [ "$SINGLE" != true ]; then
+            for sha in $(jq -r '.[] | select(.head.repo.full_name == env.R and .draft == false) | .head.sha' "$T/prs.json") "$SHA"; do
+              runs=$(gh api "repos/$R/commits/$sha/check-runs?per_page=100" --jq '[.check_runs[] | {name, conclusion}]') || runs='[]'
+              jq --arg s "$sha" --argjson r "$runs" '.[$s] = $r' "$T/checks.json" > "$T/c.tmp" && mv "$T/c.tmp" "$T/checks.json"
+            done
+          fi
+          git cat-file -e "$SHA^{commit}" 2>/dev/null || git fetch -q origin "$SHA"
+          args=(--repo "$R" --base origin/main --prs "$T/prs.json" --checks "$T/checks.json" --trigger-branch "$BRANCH" --trigger-sha "$SHA" --out "$T/train.json")
+          [ "$SINGLE" = true ] && args+=(--single)
+          python3 "$T/staging_train.py" "${args[@]}" > /dev/null
+          head=$(jq -r .head "$T/train.json")
+          git checkout -q --detach "$head"
+          echo "DEPLOY_SHA=$head" >> "$GITHUB_ENV"
+          echo "TRAIN_NOTE=$(jq -r '"\(.mode): " + ([.included[] | (if .pr then "#\(.pr) " else "" end) + .branch + "@" + .sha[0:7]] | join(", ") | if . == "" then "main only" else . end) + (if (.left_out | length) > 0 then "; left out: " + ([.left_out[] | .branch + " (" + .why + ")"] | join(", ")) else "" end)' "$T/train.json")" >> "$GITHUB_ENV"
+          echo "left_out=$(jq -c '[.left_out[] | select(.pr != null and .comment != null) | {pr, comment}]' "$T/train.json")" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Staging $(jq -r .mode "$T/train.json"): $(echo "$head" | cut -c1-7)"
+            echo; echo "| PR | branch | head SHA |"; echo "|---|---|---|"
+            jq -r '.included[] | "| \(if .pr then "#\(.pr)" else "-" end) | \(.branch) | `\(.sha)` |"' "$T/train.json"
+            if [ "$(jq '.left_out | length' "$T/train.json")" != 0 ]; then
+              echo; echo "### Left out"
+              jq -r '.left_out[] | "- \(if .pr then "#\(.pr) " else "" end)\(.branch) `\(.sha[0:7])`: \(.why)\(if (.conflicts_with | length) > 0 then " with " + (.conflicts_with | join(", ")) else "" end)"' "$T/train.json"
+            fi
+            if [ "$(jq '.not_candidates // [] | length' "$T/train.json")" != 0 ]; then
+              echo; echo "### Not candidates"
+              jq -r '.not_candidates[] | "- #\(.pr // "-") \(.branch): \(.why)"' "$T/train.json"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          cat "$GITHUB_STEP_SUMMARY"
+      - if: always() && steps.train.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with: {name: staging-train, path: "${{ runner.temp }}/train/train.json", retention-days: 30}
       - if: steps.ready.outputs.go == 'yes'
         uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with: {toolchain: stable, targets: wasm32-unknown-unknown}
       - if: steps.ready.outputs.go == 'yes'
         name: Deploy to staging
         run: |
-          export BUILD_SHA=$(echo "$SHA" | cut -c1-7)
+          export BUILD_SHA=$(echo "$DEPLOY_SHA" | cut -c1-7)
           npx -y wrangler@4.158.0 deploy --env staging
       - if: steps.ready.outputs.go == 'yes'
         name: Staging secrets (generated once; OAuth and token only when provided)
@@ -90,7 +151,7 @@ jobs:
         name: Smoke-test staging
         run: |
           set -e
-          short=$(echo "$SHA" | cut -c1-7)
+          short=$(echo "$DEPLOY_SHA" | cut -c1-7)
           for i in $(seq 1 18); do curl -fsS "$URL/health" | grep -q "ok $short" && break; echo "not live yet ($i/18)"; sleep 10; done
           curl -fsS "$URL/health" | grep -q "ok $short"
           # Studio needs sign-in; its API refuses anyone who isn't signed in
@@ -99,7 +160,7 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$URL/studio/api/events" -d '{}')" = 401
           # the connector still starts sign-in
           test "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$URL/mcp" -d '{}')" = 401
-          echo "staging smoke test passed for $short ($BRANCH)"
+          echo "staging smoke test passed for $short ($TRAIN_NOTE)"
       - name: Record the run in Studio
         if: always() && steps.ready.outputs.go == 'yes'
         working-directory: .
@@ -108,9 +169,25 @@ jobs:
           HUB_TOKEN: ${{ secrets.HUB_WRITE_TOKEN }}
           STATUS: ${{ job.status }}
         run: |
-          short=$(echo "$SHA" | cut -c1-7)
-          if [ "$STATUS" = success ]; then text="Staging now runs $short from $BRANCH; smoke test passed. Try it: $URL/studio"; outcome=success
-          else text="Staging deploy of $short from $BRANCH $STATUS; production is unaffected."; outcome=failure; fi
-          RUN_SHA="$SHA" python3 scripts/run_record.py hub-staging --title "Staging deploys" --outcome "$outcome" --text "$text" \
+          short=$(echo "${DEPLOY_SHA:-$SHA}" | cut -c1-7)
+          if [ "$STATUS" = success ]; then text="Staging now runs $short (triggered by $BRANCH; $TRAIN_NOTE); smoke test passed. Try it: $URL/studio"; outcome=success
+          else text="Staging deploy of $short (triggered by $BRANCH; ${TRAIN_NOTE:-train not built}) $STATUS; production is unaffected."; outcome=failure; fi
+          RUN_SHA="${DEPLOY_SHA:-$SHA}" python3 scripts/run_record.py hub-staging --title "Staging deploys" --outcome "$outcome" --text "$text" \
             --policy auto --undo "Nothing to undo: staging has its own test record; production only changes from main." \
             --field "build=$short" --field "branch=$BRANCH" || echo "could not record the run (hub unreachable or no token)"
+  notify-left-out:
+    # one comment per left-out PR, never repeated; runs no branch code, so it alone may write to PRs
+    needs: staging
+    if: always() && needs.staging.outputs.left_out != '' && needs.staging.outputs.left_out != '[]'
+    runs-on: ubuntu-latest
+    permissions: {pull-requests: write, issues: write}
+    steps:
+      - name: Comment once on each PR left out of the train
+        env: {GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}", R: "${{ github.repository }}", LEFT_OUT: "${{ needs.staging.outputs.left_out }}"}
+        run: |
+          echo "$LEFT_OUT" | jq -c '.[]' | while read -r e; do
+            n=$(echo "$e" | jq -r .pr); body=$(echo "$e" | jq -r .comment)
+            have=$(gh api "repos/$R/issues/$n/comments?per_page=100" --paginate --jq '.[].body' | grep -cxF "$body" || true)
+            if [ "$have" != 0 ]; then echo "#$n already has: $body"; continue; fi
+            gh api "repos/$R/issues/$n/comments" -f body="$body" > /dev/null && echo "#$n: $body"
+          done
