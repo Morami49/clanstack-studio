@@ -76,6 +76,14 @@ fn tools() -> Value {
              "items": {"type": "array", "maxItems": 200, "items": {"type": "object", "required": ["path", "event", "key"], "properties": {
                  "path": {"type": "string"}, "event": {"type": "object"}, "key": {"type": "string", "maxLength": 200}}}}}},
          "annotations": {"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true}},
+        {"name": "send_invite", "title": "Invite someone by email",
+         "description": "Owner only. Invites a person to sign in to Studio with Google or an emailed link, optionally giving them spaces (id prefixes such as INSYDR-), and emails them a welcome with how to sign in. The address is used to send that email and is never stored: the record keeps only its SHA-256 fingerprint and the label you give.",
+         "inputSchema": {"type": "object", "required": ["email", "label"], "properties": {
+             "email": {"type": "string"}, "label": {"type": "string", "maxLength": 80, "description": "how they appear to you, e.g. 'Nassar (Insydr)'"},
+             "prefixes": {"type": "array", "maxItems": 10, "items": {"type": "string"}, "description": "spaces to give them, e.g. [\"INSYDR-\"]"},
+             "note": {"type": "string", "maxLength": 600, "description": "a line from you to include in the welcome email"},
+             "send_email": {"type": "boolean", "description": "default true; false records the invite without emailing"}}},
+         "annotations": {"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true}},
         {"name": "read_profiles", "title": "Read your profiles",
          "description": "The signed-in owner's account, linked sign-ins, profiles (Personal, Developer, ...), tool connections (where each secret lives, never its value), how many items each profile owns, and any profile events the hub ignored with the reason.",
          "inputSchema": {"type": "object", "properties": {}},
@@ -149,7 +157,7 @@ fn call(hub: &mut Hub, login: &str, key: &KeyPair, name: &str, args: &Value, now
             if let Some(o) = v.as_object_mut() { o.insert("build".into(), json!(BUILD)); }
             text_result(v, false)
         }
-        "hub_log" | "import_studio_events" | "read_private" | "write_private" | "write_private_batch" => text_result(json!({"error": format!("{name} is served by the node, not hub-core")}), true),
+        "hub_log" | "import_studio_events" | "read_private" | "write_private" | "write_private_batch" | "send_invite" => text_result(json!({"error": format!("{name} is served by the node, not hub-core")}), true),
         "read_profiles" => text_result(hub.profiles().view_for(login), false),
         "read_claims" => {
             let g = hub.guard();

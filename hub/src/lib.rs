@@ -25,7 +25,8 @@
 //! GET  /studio/login/github sends the person to GitHub; GitHub returns to the shared /callback with a studio- state
 //! GET  /studio/login/google sends the person to Google; Google returns to /studio/callback/google
 //! POST /studio/login/email  {email}: emails a 15-minute sign-in link if the address was invited
-//! GET  /studio/login/email?token=  signs in from that link
+//! GET  /studio/login/email?token=  shows a Sign in button (mail scanners open links before people do)
+//! POST /studio/login/email/confirm   signs in; each link works once
 //! GET  /studio/logout       clears the session
 //! POST /studio/api/run      {board, start}: run the canvas flow from that step (hub_core::flows; D-174 C2)
 //! GET  /studio/api/me       {login, id, owner}
@@ -654,6 +655,20 @@ impl Record {
         session::verify(&key, &c, now, &self.sign_in_allowed(cfg))
     }
 
+    /// Marks an emailed sign-in link as used; false if it already was. Only a hash of the token is kept, until it expires.
+    fn use_link_once(&self, token: &str, now: i64) -> Result<bool> {
+        let sql = self.state.storage().sql();
+        sql.exec("CREATE TABLE IF NOT EXISTS used_links (h TEXT PRIMARY KEY, exp INTEGER NOT NULL)", None)?;
+        sql.exec("DELETE FROM used_links WHERE exp < ?", vec![(now as f64).into()])?;
+        let h = hub_core::private::checksum(&serde_json::json!(token));
+        #[derive(Deserialize)]
+        struct N { n: f64 }
+        let seen: Vec<N> = sql.exec("SELECT COUNT(*) AS n FROM used_links WHERE h = ?", vec![h.clone().into()])?.to_array()?;
+        if seen.first().map(|r| r.n > 0.0).unwrap_or(false) { return Ok(false); }
+        sql.exec("INSERT INTO used_links (h, exp) VALUES (?, ?)", vec![h.into(), ((now + session::LINK_TTL_MS) as f64).into()])?;
+        Ok(true)
+    }
+
     /// Who may sign in to Studio: the GitHub allow-list plus email accounts an owner invited (18 Nov).
     fn sign_in_allowed(&self, cfg: &Config) -> Vec<String> {
         let _ = self.load();
@@ -706,11 +721,16 @@ impl Record {
 
     /// Sends the one-time sign-in link through Resend (RESEND_API_KEY secret, MAIL_FROM var).
     async fn send_sign_in_link(&self, to: &str, link: &str) -> std::result::Result<(), String> {
-        let key = self.secret_opt("RESEND_API_KEY").ok_or("email sign-in isn't set up yet (RESEND_API_KEY)")?;
+        let text = format!("Here's your link to sign in to Nodach Studio. It works once, for 15 minutes.\n\n{link}\n\nIf you didn't ask for this, you can ignore this email.");
+        self.send_mail(to, "Your Nodach Studio sign-in link", &text).await
+    }
+
+    /// Plain-text email through Resend (RESEND_API_KEY secret, MAIL_FROM var).
+    async fn send_mail(&self, to: &str, subject: &str, text: &str) -> std::result::Result<(), String> {
+        let key = self.secret_opt("RESEND_API_KEY").ok_or("email isn't set up yet (RESEND_API_KEY)")?;
         let from = self.env.var("MAIL_FROM").map(|v| v.to_string()).unwrap_or_default();
-        if from.is_empty() { return Err("email sign-in isn't set up yet (MAIL_FROM)".into()); }
-        let text = format!("Here's your link to sign in to Nodach Studio. It works for 15 minutes.\n\n{link}\n\nIf you didn't ask for this, you can ignore this email.");
-        let body = serde_json::json!({"from": from, "to": [to], "subject": "Your Nodach Studio sign-in link", "text": text}).to_string();
+        if from.is_empty() { return Err("email isn't set up yet (MAIL_FROM)".into()); }
+        let body = serde_json::json!({"from": from, "to": [to], "subject": subject, "text": text}).to_string();
         let h = Headers::new();
         h.set("authorization", &format!("Bearer {key}")).map_err(|e| e.to_string())?;
         h.set("content-type", "application/json").map_err(|e| e.to_string())?;
@@ -814,11 +834,33 @@ impl Record {
                 Ok(Some((done, "-".into())))
             }
             (Method::Get, "/studio/login/email") => {
+                // Mail scanners (e.g. Microsoft Safe Links) open links before people do, so opening the link only
+                // shows a button; signing in happens on the POST, and each link works once.
                 let token = url.query_pairs().find(|(k, _)| k == "token").map(|(_, v)| v.to_string()).unwrap_or_default();
-                match self.session_key().and_then(|k| session::verify_link(&k, &token, now)) {
-                    Some(login) => self.finish_sign_in(&cfg, &login, now, "email"),
-                    None => Ok(Some((page("Link expired", "Sign-in links work once for 15 minutes. Open /studio/login to get a new one.", 400)?, "-".into()))),
+                if self.session_key().and_then(|k| session::verify_link(&k, &token, now)).is_none() {
+                    return Ok(Some((page("Link expired", "Sign-in links work once, for 15 minutes. Open /studio/login to get a new one.", 400)?, "-".into())));
                 }
+                let html = format!("<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1\"><title>Sign in · Nodach Studio</title>\
+                    <style>body{{font:16px system-ui;max-width:26rem;margin:3rem auto;padding:0 1rem}}button{{width:100%;padding:.8rem;border-radius:8px;border:1px solid #222;background:#222;color:#fff;font:inherit;cursor:pointer}}</style></head>\
+                    <body><h1>Sign in to Nodach Studio</h1><form method=post action=\"/studio/login/email/confirm\"><input type=hidden name=token value=\"{}\"><button type=submit>Sign in</button></form></body></html>",
+                    token.replace('&', "&amp;").replace('"', "&quot;").replace('<', "&lt;"));
+                let h = Headers::new();
+                h.set("content-type", "text/html; charset=utf-8")?;
+                h.set("cache-control", "no-store")?;
+                h.set("referrer-policy", "no-referrer")?;
+                h.set("x-frame-options", "DENY")?;
+                Ok(Some((Response::ok(html)?.with_headers(h), "-".into())))
+            }
+            (Method::Post, "/studio/login/email/confirm") => {
+                let form = oauth::parse_form(&req.text().await.unwrap_or_default());
+                let token = form.get("token").cloned().unwrap_or_default();
+                let Some(login) = self.session_key().and_then(|k| session::verify_link(&k, &token, now)) else {
+                    return Ok(Some((page("Link expired", "Sign-in links work once, for 15 minutes. Open /studio/login to get a new one.", 400)?, "-".into())));
+                };
+                if !self.use_link_once(&token, now)? {
+                    return Ok(Some((page("Link already used", "Each sign-in link works once. Open /studio/login to get a new one.", 400)?, "-".into())));
+                }
+                self.finish_sign_in(&cfg, &login, now, "email")
             }
             (Method::Get, "/studio/login/github") => {
                 let Some(gh_id) = self.secret_opt("GH_OAUTH_CLIENT_ID") else {
@@ -1160,6 +1202,45 @@ impl Record {
                                         "batch_checksum": whole, "items": rows}), false)
                                 }
                             }
+                        };
+                        Some(serde_json::json!({"jsonrpc": "2.0", "id": m["id"], "result": v}))
+                    } else if tool == "send_invite" && m.get("id").is_some() {
+                        // An owner invites someone: fingerprint and grants go on the record, a welcome email goes to them,
+                        // and the address itself is dropped once the email is sent.
+                        let args = m.pointer("/params/arguments").cloned().unwrap_or_default();
+                        let email = args.get("email").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+                        let label: String = args.get("label").and_then(|v| v.as_str()).unwrap_or("").chars().take(80).collect();
+                        let note: String = args.get("note").and_then(|v| v.as_str()).unwrap_or("").chars().take(600).collect();
+                        let prefixes: Vec<String> = args.get("prefixes").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|x| x.as_str()).map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).take(10).collect()).unwrap_or_default();
+                        let send = args.get("send_email").and_then(|v| v.as_bool()).unwrap_or(true);
+                        let is_owner = self.hub.borrow().as_ref().unwrap().access().is_owner(&login);
+                        let v = if !is_owner {
+                            mcp::tool_result(serde_json::json!({"error": "only an owner can invite"}), true)
+                        } else if !session::plausible_email(&email) || label.trim().is_empty() {
+                            mcp::tool_result(serde_json::json!({"error": "need a valid email and a label"}), true)
+                        } else {
+                            let hash = session::email_hash(&email);
+                            let invitee = session::email_login(&email);
+                            let call = |kind: &str, body: serde_json::Value, idem: String| serde_json::json!({"jsonrpc": "2.0", "id": 0, "method": "tools/call",
+                                "params": {"name": "write_event", "arguments": {"kind": kind, "item": null, "body": body, "idempotency_key": idem}}});
+                            {
+                                let mut b = self.hub.borrow_mut();
+                                let h = b.as_mut().unwrap();
+                                mcp::handle(h, &login, &key, &call("access.invite", serde_json::json!({"email_sha256": hash, "label": label}), format!("invite/{}/{}", &hash[..16], label)), now);
+                                if !prefixes.is_empty() {
+                                    mcp::handle(h, &login, &key, &call("access.grant", serde_json::json!({"login": invitee, "prefixes": prefixes}), format!("grant/{}/{}", &hash[..16], prefixes.join(","))), now);
+                                }
+                            }
+                            let emailed = if send {
+                                let login_url = format!("{}/studio/login", cfg.issuer);
+                                let mut text = format!("You've been invited to Nodach Studio.\n\n");
+                                if !note.trim().is_empty() { text.push_str(&format!("{}\n\n", note.trim())); }
+                                text.push_str(&format!("To sign in, open {login_url}, then either choose \"Continue with Google\" (if this address is a Google account) or type this address under \"Email me a link\" and click the link we send you.\n\nPrivacy notice: https://nodach.com/privacy\nTerms: https://nodach.com/terms\n"));
+                                match self.send_mail(&email, "You're invited to Nodach Studio", &text).await { Ok(()) => "sent".to_string(), Err(e) => format!("not sent: {e}") }
+                            } else { "not requested".to_string() };
+                            self.log(now, "/mcp", "send_invite", &emailed, &invitee);
+                            mcp::tool_result(serde_json::json!({"invited": invitee, "label": label, "spaces": prefixes, "email": emailed,
+                                "stored": "the address's SHA-256 fingerprint only"}), false)
                         };
                         Some(serde_json::json!({"jsonrpc": "2.0", "id": m["id"], "result": v}))
                     } else if tool == "import_studio_events" && m.get("id").is_some() {

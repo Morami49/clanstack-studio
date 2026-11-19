@@ -178,7 +178,7 @@ fn mcp_initialize_list_and_tools() {
     assert!(handle(&mut hub, "Morami49", &key, &json!({"jsonrpc": "2.0", "method": "notifications/initialized"}), T0).is_none());
     let tools = handle(&mut hub, "Morami49", &key, &json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}), T0).unwrap();
     let names: Vec<&str> = tools["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
-    assert_eq!(names, ["hub_status", "read_events", "hub_log", "read_private", "write_private", "write_private_batch", "read_profiles", "begin_answer", "end_answer", "read_claims", "import_studio_events", "write_event"]);
+    assert_eq!(names, ["hub_status", "read_events", "hub_log", "read_private", "write_private", "write_private_batch", "send_invite", "read_profiles", "begin_answer", "end_answer", "read_claims", "import_studio_events", "write_event"]);
 
     let call = |hub: &mut Hub, name: &str, args: Value| handle(hub, "Morami49", &key, &json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": name, "arguments": args}}), T0 + 60_000).unwrap()["result"].clone();
     let w = call(&mut hub, "write_event", json!({"kind": "answer", "item": "Q-duress", "body": {"code": "Q86", "text": "A"}}));
