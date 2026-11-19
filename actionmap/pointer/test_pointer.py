@@ -133,6 +133,9 @@ def test_actionmap_event():
     except ImportError:
         print("  (jsonschema not installed: skipped ActionMap schema check)")
         return
+    if not schema_path.exists():  # e.g. running from the unzipped nodach-pointer folder
+        print("  (ActionMap schema not found next to this folder: skipped schema check)")
+        return
     jsonschema.validate(ev, json.loads(schema_path.read_text(encoding="utf-8")))
 
 
