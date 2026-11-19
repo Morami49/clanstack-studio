@@ -725,6 +725,14 @@ async def s41_multi_point(b):
     return ok, f"items={len(made)}, badges={badges}, targets={[t.get('element') for t in tg]}, badges left={left}, view={view}, errors={p.errors[:1]}"
 
 
+async def until(cond, timeout=8.0):
+    """Wait for a store condition instead of a fixed sleep (CI runners are slower than a laptop)."""
+    t = 0.0
+    while not cond() and t < timeout:
+        await asyncio.sleep(0.1); t += 0.1
+    await asyncio.sleep(0.2)
+
+
 def now_ts():
     from datetime import datetime, timezone
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
@@ -765,7 +773,8 @@ async def s42_show_record_save(b):
     await p.fill("#showNoteBox textarea", "Look here"); await p.press("#showNoteBox textarea", "Enter"); await p.wait_for_timeout(300)
     await w.wait_for_timeout(200); w_steps2 = await w.locator(".showlog li.step").count()
     await p.keyboard.press("Escape"); await p.wait_for_timeout(150)
-    await p.fill("#showTitle", "Tabs walkthrough"); await p.click("#showSave"); await p.wait_for_timeout(700)
+    await p.fill("#showTitle", "Tabs walkthrough"); await p.click("#showSave")
+    await until(lambda: any(e["kind"] == "status" and e["item"] == sid for e in st.events))   # CI run 1: a slow runner needed >700 ms
     live = [e for e in st.events if e["kind"] == "comment" and e["item"] == sid and (e["body"] or {}).get("step")]
     grants = [e for e in st.events if e["kind"] == "access.grant"]
     edits = [e for e in st.events if e["kind"] == "item.edit" and e["item"] == sid]
@@ -804,7 +813,8 @@ async def s43_show_pause(b):
     await p.click('#tabs button[data-v="ask"]'); await p.wait_for_timeout(300)
     await p.keyboard.press("Escape"); await p.wait_for_timeout(150)
     box = await exists(p, "#showInclPaused"); ticked = await p.is_checked("#showInclPaused") if box else None
-    await p.click("#showSave"); await p.wait_for_timeout(600)
+    await p.click("#showSave")
+    await until(lambda: any(e["kind"] == "status" and e["item"] == sid for e in st.events))
     live = [e["body"]["step"] for e in st.events if e["kind"] == "comment" and e["item"] == sid and e["body"].get("step")]
     edits = [e for e in st.events if e["kind"] == "item.edit" and e["item"] == sid]
     steps = ((edits[-1]["body"].get("show") if edits else {}) or {}).get("steps") or []
