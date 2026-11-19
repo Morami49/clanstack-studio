@@ -1,5 +1,5 @@
 """
-Nodach Desktop Pointer (P-desktop-pointer) — v0.1.0
+Nodach Desktop Pointer (P-desktop-pointer) — v0.1.4
 ====================================================
 Point at any element in any Windows app and tell your agent what you want.
 
@@ -14,21 +14,31 @@ Each capture writes:
   - a cropped screenshot to  <home>/shots/<id>.png
   - a prompt-ready block to the clipboard (paste into any AI chat)
 
+Web views (v0.1.4, F-pointer-webview): in apps drawn as web pages (the Claude app, the Copilot
+app, browsers) Windows only reports one big unnamed pane, so the text alone says nothing. For
+those the screenshot is a ~900x600 crop around the cursor, and the clipboard gets that IMAGE
+plus the same text block: pasting gives the image where the app accepts images, text elsewhere.
+
 <home> defaults to %USERPROFILE%\\nodach-pointer (override with NODACH_POINTER_HOME).
 pointer_mcp.py exposes the same events to Claude Desktop / Claude Code as MCP tools.
+The pure logic lives in pointer_core.py (tested on any OS by test_pointer.py).
 
 Privacy: the script never reads field values (so typed passwords are not captured),
 but screenshots show whatever is on screen. Don't point at things you wouldn't share.
 """
+from __future__ import annotations
+
 import ctypes
-import datetime as dt
 import json
 import os
 import queue
 import sys
 import urllib.request
-import uuid
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import pointer_core as core  # noqa: E402
+from pointer_core import SCHEMA, VERSION, build_block, new_id, summary, utcnow  # noqa: E402,F401
 
 # Physical-pixel coordinates so UI Automation rectangles and screenshots line up on scaled displays.
 try:
@@ -39,33 +49,37 @@ except Exception:
     except Exception:
         pass
 
-import tkinter as tk
+# Windows-only packages. Guarded so this module (and its tests) import on any OS; main() refuses
+# to run without them.
+try:
+    import tkinter as tk
+except Exception:
+    tk = None
+try:
+    import psutil
+    import uiautomation as auto
+    from PIL import ImageGrab
+    from pynput import keyboard
+except Exception as _err:  # ImportError, or OSError/AttributeError from ctypes.windll off Windows
+    psutil = auto = ImageGrab = keyboard = None
+    MISSING = str(_err)
+else:
+    MISSING = ""
+try:
+    import win32api
+    import win32clipboard
+    import win32con
+except Exception:
+    win32api = win32clipboard = win32con = None
 
-import psutil
-import uiautomation as auto
-from PIL import ImageGrab
-from pynput import keyboard
-
-VERSION = "0.1.3"
-SCHEMA = "pointer.v1"
 HOME = Path(os.environ.get("NODACH_POINTER_HOME", str(Path.home() / "nodach-pointer")))
 SHOTS = HOME / "shots"
 EVENTS = HOME / "events.jsonl"
-PAD = 24                      # pixels of context around the element in the screenshot
-MAX_AREA = 4_000_000          # elements bigger than this (whole windows) get a cursor-centred crop
 HOTKEYS = {"<ctrl>+<alt>+m": "point", "<ctrl>+<alt>+b": "batch", "<ctrl>+<alt>+q": "quit"}
 
 jobs: "queue.Queue[str]" = queue.Queue()
 pending_batch: list = []      # ids captured with Ctrl+Alt+B, waiting for a note
-
-
-def utcnow() -> dt.datetime:
-    return dt.datetime.now(dt.timezone.utc)
-
-
-def new_id(t: dt.datetime) -> str:
-    # Stable prefix "PE-" (pointer event); renaming views or categories never changes ids.
-    return f"PE-{t:%y%m%d-%H%M%S}-{uuid.uuid4().hex[:4]}"
+last_image = {}               # event id -> PIL image of its screenshot (for the image clipboard)
 
 
 def safe(fn, default=None):
@@ -98,13 +112,24 @@ def top_window(c):
         w = p
 
 
-def grab(eid: str, rect: dict, x: int, y: int):
-    l, t, r, b = rect["left"] - PAD, rect["top"] - PAD, rect["right"] + PAD, rect["bottom"] + PAD
-    if r - l < 8 or b - t < 8 or (r - l) * (b - t) > MAX_AREA:
-        l, t, r, b = x - 300, y - 200, x + 300, y + 200
+def monitor_rect(x: int, y: int) -> dict:
+    """The rectangle of the monitor under the cursor (primary screen if pywin32 is missing)."""
+    if win32api is not None:
+        try:
+            l, t, r, b = win32api.GetMonitorInfo(win32api.MonitorFromPoint((x, y), 2))["Monitor"]
+            return {"left": l, "top": t, "right": r, "bottom": b}
+        except Exception:
+            pass
+    u = ctypes.windll.user32
+    return {"left": 0, "top": 0, "right": u.GetSystemMetrics(0), "bottom": u.GetSystemMetrics(1)}
+
+
+def grab(eid: str, box: tuple):
     SHOTS.mkdir(parents=True, exist_ok=True)
     path = SHOTS / f"{eid}.png"
-    ImageGrab.grab(bbox=(l, t, r, b), all_screens=True).save(path)
+    img = ImageGrab.grab(bbox=box, all_screens=True)
+    img.save(path)
+    last_image[eid] = img
     return str(path)
 
 
@@ -118,9 +143,19 @@ def capture() -> dict | None:
     win = top_window(c)
     pid = safe(lambda: c.ProcessId)
     rect = safe(lambda: rect_of(c), {"left": x, "top": y, "right": x, "bottom": y})
+    element = {
+        "type": safe(lambda: c.ControlTypeName, ""),
+        "name": (safe(lambda: c.Name, "") or "")[:200],
+        "automation_id": safe(lambda: c.AutomationId, ""),
+        "class_name": safe(lambda: c.ClassName, ""),
+        "rect": rect,
+    }
+    mon = safe(lambda: monitor_rect(x, y), {"left": 0, "top": 0, "right": 1920, "bottom": 1080})
+    opaque = core.is_opaque_element(element, mon["right"] - mon["left"], mon["bottom"] - mon["top"])
+    box = core.crop_box((x, y), rect, mon) if opaque else core.element_box(rect, (x, y))
     shot, shot_error = None, None
     try:
-        shot = grab(eid, rect, x, y)
+        shot = grab(eid, box)
     except Exception as e:  # screenshot failure must not lose the element data
         shot_error = str(e)
     return {
@@ -131,13 +166,7 @@ def capture() -> dict | None:
         "kind": "pointer.desktop",
         "at": t.isoformat(),
         "cursor": {"x": x, "y": y},
-        "element": {
-            "type": safe(lambda: c.ControlTypeName, ""),
-            "name": (safe(lambda: c.Name, "") or "")[:200],
-            "automation_id": safe(lambda: c.AutomationId, ""),
-            "class_name": safe(lambda: c.ClassName, ""),
-            "rect": rect,
-        },
+        "element": element,
         "window": {
             "title": (safe(lambda: win.Name, "") or "")[:200],
             "class_name": safe(lambda: win.ClassName, ""),
@@ -145,6 +174,8 @@ def capture() -> dict | None:
         },
         "process": {"pid": pid, "name": safe(lambda: psutil.Process(pid).name())},
         "ancestors": ancestors(c),
+        "opaque": opaque,
+        "shot_box": list(box),
         "screenshot": shot,
         "screenshot_error": shot_error,
         "note": None,
@@ -167,16 +198,8 @@ def to_actionmap(e: dict) -> str:
     """Also record the point in ActionMap's spine (actionmap/event/v1) when it's running, so every
     tool that reads ActionMap (its map UI, its MCP connector) sees what you pointed at.
     The local events.jsonl line stays the source of truth; this never rewrites it."""
-    el, w, p = e["element"], e["window"], e["process"]
-    ev = {
-        "schema_version": 1, "session_id": "pointer", "node_id": os.environ.get("COMPUTERNAME", "win-desktop"),
-        "actor": {"kind": "human", "id": "human:" + os.environ.get("ACTIONMAP_HUMAN_ID", "local")}, "kind": "annotation", "action": "point",
-        "target": {"app": p["name"], "window": w["title"], "element": el["name"], "control_type": el["type"],
-                   "automation_id": el["automation_id"], "rect": el["rect"]},
-        "payload": {"pointer_id": e["id"], "note": e["note"], "batch_refs": e["batch_refs"],
-                    "screenshot_local": e["screenshot"], "ancestors": e["ancestors"], "pointer_schema": SCHEMA},
-        "causes": [],
-    }
+    ev = core.actionmap_event(e, os.environ.get("COMPUTERNAME", "win-desktop"),
+                              os.environ.get("ACTIONMAP_HUMAN_ID", "local"))
     req = urllib.request.Request(f"{ACTIONMAP_URL}/events", data=json.dumps(ev).encode(), method="POST",
                                  headers={"Content-Type": "application/json",
                                           **({"X-ActionMap-Token": ACTIONMAP_TOKEN} if ACTIONMAP_TOKEN else {})})
@@ -187,25 +210,27 @@ def to_actionmap(e: dict) -> str:
         return "ActionMap not running (saved locally only)"
 
 
-def summary(e: dict) -> str:
-    el, w, p = e["element"], e["window"], e["process"]
-    path = " > ".join(f'{a["type"]} "{a["name"]}"' if a["name"] else a["type"] for a in reversed(e["ancestors"]))
-    return (
-        f"[Nodach pointer {e['id']}] app={p['name']} window=\"{w['title']}\"\n"
-        f"element: {el['type']} \"{el['name']}\" (AutomationId={el['automation_id'] or '-'}, Class={el['class_name'] or '-'})\n"
-        f"path: {path or '-'}\n"
-        f"rect: {el['rect']}\n"
-        f"screenshot: {e['screenshot'] or e['screenshot_error']}"
-    )
+def copy_image_and_text(img, text: str) -> None:
+    """One clipboard session holding both CF_DIB (the image) and CF_UNICODETEXT (the block), so a
+    paste gives the image in apps that take images and the text everywhere else."""
+    win32clipboard.OpenClipboard()
+    try:
+        win32clipboard.EmptyClipboard()
+        win32clipboard.SetClipboardData(win32con.CF_DIB, core.dib_bytes(img))
+        win32clipboard.SetClipboardData(win32con.CF_UNICODETEXT, text)
+    finally:
+        win32clipboard.CloseClipboard()
 
 
-def ask_note(root: tk.Tk, e: dict):
+def ask_note(root, e: dict):
     """Returns (note, keep). keep=False when the user pressed Esc."""
     win = tk.Toplevel(root)
     win.title("Nodach pointer")
     win.attributes("-topmost", True)
     win.geometry(f"+{e['cursor']['x'] + 20}+{e['cursor']['y'] + 20}")
     head = summary(e).split("\n")[1]
+    if e.get("opaque"):
+        head += "\n(web view: the screenshot around the cursor will be on the clipboard)"
     if pending_batch:
         head += f"\n(+ {len(pending_batch)} batched element(s))"
     tk.Label(win, text=head, justify="left", wraplength=460).pack(padx=10, pady=(10, 4), anchor="w")
@@ -232,7 +257,7 @@ def ask_note(root: tk.Tk, e: dict):
     return result["note"], result["keep"]
 
 
-def handle(root: tk.Tk, job: str) -> None:
+def handle(root, job: str) -> None:
     if job == "quit":
         root.quit()
         return
@@ -243,26 +268,40 @@ def handle(root: tk.Tk, job: str) -> None:
     if job == "batch":
         e["mode"] = "batch-item"
         append(e)
+        last_image.pop(e["id"], None)
         pending_batch.append(e["id"])
         print(f"Batched {e['id']} ({len(pending_batch)} waiting)")
         return
     note, keep = ask_note(root, e)
+    img = last_image.pop(e["id"], None)
     if not keep:
         print(f"Discarded {e['id']}")
         return
     e.update(note=note, batch_refs=list(pending_batch), mode="point")
     pending_batch.clear()
     append(e)
-    block = summary(e)
-    if e["batch_refs"]:
-        block += f"\nbatch: {', '.join(e['batch_refs'])}"
-    block += f"\nnote: {note or '-'}"
-    root.clipboard_clear()
-    root.clipboard_append(block)
-    print(f"Saved {e['id']} — copied to clipboard — {to_actionmap(e)}")
+    block = build_block(e)
+    how = "text copied to clipboard"
+    if e.get("opaque") and img is not None and win32clipboard is not None:
+        try:
+            copy_image_and_text(img, block)
+            how = "IMAGE + text copied to clipboard"
+        except Exception as err:
+            root.clipboard_clear()
+            root.clipboard_append(block)
+            how = f"text copied to clipboard (image copy failed: {err})"
+    else:
+        root.clipboard_clear()
+        root.clipboard_append(block)
+        if e.get("opaque") and win32clipboard is None:
+            how += " (install pywin32 to also copy the image: pip install -r requirements.txt)"
+    print(f"Saved {e['id']} — {how} — {to_actionmap(e)}")
+    if how.startswith("IMAGE"):
+        print("  Web view: the screenshot around the cursor is on the clipboard. Paste (Ctrl+V) into the chat to")
+        print("  attach the image; apps that only take text get the text block instead.")
 
 
-def pump(root: tk.Tk) -> None:
+def pump(root) -> None:
     try:
         while True:
             handle(root, jobs.get_nowait())
@@ -274,6 +313,8 @@ def pump(root: tk.Tk) -> None:
 def main() -> None:
     if sys.platform != "win32":
         sys.exit("Nodach Desktop Pointer runs on Windows only.")
+    if MISSING or tk is None:
+        sys.exit(f"Missing packages ({MISSING or 'tkinter'}). Run: pip install -r requirements.txt")
     HOME.mkdir(parents=True, exist_ok=True)
     root = tk.Tk()
     root.withdraw()
@@ -281,6 +322,8 @@ def main() -> None:
     listener.start()
     print(f"Nodach Desktop Pointer {VERSION} — writing to {EVENTS}")
     print("Ctrl+Alt+M mark + note · Ctrl+Alt+B add to batch · Ctrl+Alt+Q quit")
+    if win32clipboard is None:
+        print("Note: pywin32 isn't installed, so web-view screenshots can't go on the clipboard (text still works).")
     root.after(50, pump, root)
     root.mainloop()
     listener.stop()

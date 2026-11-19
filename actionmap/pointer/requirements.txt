@@ -3,3 +3,4 @@ psutil>=5.9
 pillow>=10.0
 pynput>=1.7
 mcp>=1.2,<3
+pywin32; sys_platform == "win32"
