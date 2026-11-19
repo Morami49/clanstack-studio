@@ -143,7 +143,7 @@ def test_ids_and_version():
     t = core.utcnow()
     i = core.new_id(t)
     assert i.startswith("PE-") and len(i) == len("PE-261119-120000-abcd")
-    assert core.VERSION == "0.1.4" and core.SCHEMA == "pointer.v1"
+    assert core.VERSION == "0.1.5" and core.SCHEMA == "pointer.v1"
 
 
 def test_dib_bytes():
@@ -287,6 +287,14 @@ def test_pointer_mcp():
     # status.jsonl is append-only: the earlier state is still there.
     rows = (home / "status.jsonl").read_text(encoding="utf-8").splitlines()
     assert len(rows) == 1 and json.loads(rows[0])["status"] == "done"
+
+
+def test_named_huge_container_is_opaque():
+    from pointer_core import is_opaque_element
+    pane = {"type": "GroupControl", "name": "Primary pane", "class_name": "dframe-pane", "rect": {"left": 779, "top": 45, "right": 1817, "bottom": 1022}}
+    assert is_opaque_element(pane, 1920, 1080), "the Claude app's Primary pane should give a picture"
+    item = {"type": "ListItemControl", "name": "1.1 Update", "class_name": "", "rect": {"left": 434, "top": 281, "right": 1074, "bottom": 480}}
+    assert not is_opaque_element(item, 1920, 1080), "a named list item stays text-only"
 
 
 if __name__ == "__main__":

@@ -8,7 +8,7 @@ text to paste. test_pointer.py imports this module on any OS.
 import datetime as dt
 import uuid
 
-VERSION = "0.1.4"
+VERSION = "0.1.5"
 SCHEMA = "pointer.v1"
 PAD = 24                      # pixels of context around a normal element in the screenshot
 MAX_AREA = 4_000_000          # elements bigger than this (whole windows) get a cursor-centred crop
@@ -47,17 +47,21 @@ def _area(rect: dict) -> int:
     return max(0, rect["right"] - rect["left"]) * max(0, rect["bottom"] - rect["top"])
 
 
+CONTAINER_TYPES = {"PaneControl", "GroupControl", "DocumentControl", "WindowControl", "CustomControl"}
+
+
 def is_opaque_element(element: dict, screen_w: int, screen_h: int) -> bool:
     """True when UI Automation gave us nothing useful: an unnamed element covering more than
     25% of the screen, or any element whose class is a known web host."""
     if is_web_host_class(element.get("class_name")):
         return True
-    if (element.get("name") or "").strip():
-        return False
     rect = element.get("rect")
-    if not rect or screen_w <= 0 or screen_h <= 0:
-        return False
-    return _area(rect) > OPAQUE_SCREEN_SHARE * screen_w * screen_h
+    big = bool(rect) and screen_w > 0 and screen_h > 0 and _area(rect) > OPAQUE_SCREEN_SHARE * screen_w * screen_h
+    if not (element.get("name") or "").strip():
+        return big
+    # v0.1.5: a named but huge container (e.g. the Claude app's "Primary pane", PE-261119-223659-6505) says
+    # where you are, not what you mean, so the picture is still the useful part.
+    return big and (element.get("type") or "") in CONTAINER_TYPES
 
 
 def _fit(lo: int, hi: int, centre: int, size: int) -> tuple:
