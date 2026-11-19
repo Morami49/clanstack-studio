@@ -1,4 +1,4 @@
-# Nodach Desktop Pointer (v0.1.4)
+# Nodach Desktop Pointer (v0.1.5)
 
 Point at anything in any Windows app, type a note, and paste the result into any AI chat.
 Each point is also saved to a local log that Claude can read through MCP, and sent to ActionMap
@@ -31,7 +31,7 @@ again in the chat, or paste once more into a text-only place to see the block.
 Python must be on PATH: install it from <https://www.python.org/downloads/windows/> and tick
 **Add python.exe to PATH**.
 
-1. The zip holds one folder, `nodach-pointer`. Right-click `nodach-pointer-v0.1.4.zip` > **Extract All**, and
+1. The zip holds one folder, `nodach-pointer`. Right-click `nodach-pointer-v0.1.5.zip` > **Extract All**, and
    extract to `C:\Users\akabd`, so that `C:\Users\akabd\nodach-pointer\pointer.py` exists (not
    `nodach-pointer\nodach-pointer\pointer.py`; if that happens, move the inner files up one level).
 2. Open that folder in File Explorer, right-click an empty spot, choose **Open in Terminal**, and run:
@@ -39,7 +39,7 @@ Python must be on PATH: install it from <https://www.python.org/downloads/window
    pip install -r requirements.txt
    ```
    This installs pywin32 too (new in v0.1.4, needed for the image clipboard).
-3. Double-click `start-pointer.bat`. It should print `Nodach Desktop Pointer 0.1.4`.
+3. Double-click `start-pointer.bat`. It should print `Nodach Desktop Pointer 0.1.5`.
 4. Test: hover over a button, press **Ctrl+Alt+M**, type `test`, press Enter, and paste into Notepad.
    Then hover over the middle of a Claude app chat, do the same, and paste into a chat box: the image
    should attach.
@@ -95,6 +95,7 @@ whatever is on screen.
 ## Versions
 
 - 0.1.4: web views (F-pointer-webview): cursor-centred 900x600 crop, image + text on the clipboard, console hint; pywin32; pure logic split into `pointer_core.py` with tests.
+- 0.1.5: big named containers (e.g. the Claude app's "Primary pane") also take the picture path; small named elements stay text-only.
 - 0.1.3: hotkey Ctrl+Alt+M (ActionMap uses Ctrl+Alt+P); MCP server works with mcp 1.x and 2.x; points sent to ActionMap.
 - 0.1.1: `connect-to-claude.bat` config installer.
 - 0.1.0: first version.
