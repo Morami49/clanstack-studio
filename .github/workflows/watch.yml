@@ -1,0 +1,36 @@
+name: watch
+# P1 a (INC-261118-seed): daily, and after every deploy, check each hub's keys, Private tier and chain against
+# ops/reliability-baseline.json. Drift fails the job and opens an issue. Counts only; no private content is read.
+on:
+  schedule: [{cron: "41 6 * * *"}]
+  workflow_run:
+    workflows: [hub-deploy, hub-staging]
+    types: [completed]
+  workflow_dispatch:
+permissions: {contents: read, issues: write}
+jobs:
+  reliability:
+    if: github.event_name != 'workflow_run' || (github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {env: production, url: "https://studio.nodach.com", token: HUB_WRITE_TOKEN}
+          - {env: staging, url: "https://staging.nodach.com", token: HUB_STAGING_TOKEN}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Ask the hub
+        env: {TOKEN: "${{ secrets[matrix.token] }}", URL: "${{ matrix.url }}"}
+        run: |
+          [ -n "$TOKEN" ] || { echo "::warning::no token for ${{ matrix.env }}; skipped"; echo '{"skip":true}' > r.json; exit 0; }
+          curl -fsS --retry 3 -H "authorization: Bearer $TOKEN" "$URL/reliability" > r.json
+      - name: Compare with the baseline
+        id: cmp
+        run: |
+          if grep -q '"skip"' r.json; then exit 0; fi
+          python3 scripts/check_reliability.py "${{ matrix.env }}" r.json ops/reliability-baseline.json | tee out.txt
+      - if: failure() && steps.cmp.outcome == 'failure'
+        env: {GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}"}
+        run: |
+          gh issue create -R "${{ github.repository }}" --title "watch: ${{ matrix.env }} drifted" --body "$(cat out.txt) (see INC-261118-seed for the playbook)" || true

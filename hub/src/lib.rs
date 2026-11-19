@@ -316,6 +316,33 @@ impl Record {
         Ok((out, sealed))
     }
 
+    /// Health of the stores a deploy can break (P1 a). Counts and flags only.
+    fn reliability(&self) -> Result<serde_json::Value> {
+        let seeds: serde_json::Map<String, serde_json::Value> = ["IMPORTER_SEED", "CONNECTOR_SEED", "PRIVATE_SEED"].iter()
+            .map(|n| (n.to_string(), serde_json::Value::Bool(self.secret_opt(n).is_some()))).collect();
+        let (mut rows, mut sealed, mut owners, mut sealed_keys) = (0u64, 0u64, 0u64, 0u64);
+        if self.private_ready() {
+            let sql = self.private_tables()?;
+            #[derive(Deserialize)]
+            struct O { owner: String, n: f64 }
+            let os: Vec<O> = sql.exec("SELECT owner, COUNT(*) AS n FROM private GROUP BY owner", None)?.to_array()?;
+            for o in os {
+                owners += 1;
+                rows += o.n as u64;
+                let (open, bad) = self.owner_keys(&o.owner, false)?;
+                sealed_keys += bad as u64;
+                let open: std::collections::HashSet<u32> = open.into_iter().map(|(v, _)| v).collect();
+                #[derive(Deserialize)]
+                struct V { key_version: f64, n: f64 }
+                let vs: Vec<V> = sql.exec("SELECT key_version, COUNT(*) AS n FROM private WHERE owner = ? GROUP BY key_version", vec![o.owner.clone().into()])?.to_array()?;
+                sealed += vs.iter().filter(|v| !open.contains(&(v.key_version as u32))).map(|v| v.n as u64).sum::<u64>();
+            }
+        }
+        let st = self.hub.borrow().as_ref().map(|h| serde_json::to_value(h.status()).unwrap_or_default()).unwrap_or_default();
+        Ok(serde_json::json!({"build": mcp::BUILD, "seeds": seeds, "private": {"ready": self.private_ready(), "owners": owners,
+            "rows": rows, "sealed_rows": sealed, "sealed_keys": sealed_keys}, "record": st}))
+    }
+
     /// Where the owner's sealed rows sit (path, how many), so a lost key shows *what* is sealed, never the content.
     fn sealed_index(&self, owner: &str) -> Result<Vec<serde_json::Value>> {
         let open: std::collections::HashSet<u32> = self.owner_deks(owner, false)?.into_iter().map(|(v, _)| v).collect();
@@ -1372,7 +1399,9 @@ impl DurableObject for Record {
         }
         let q = |k: &str| url.query_pairs().find(|(a, _)| a == k).and_then(|(_, v)| v.parse::<usize>().ok());
         match (req.method(), req.path().as_str()) {
-            (Method::Get, "/status" | "/pull" | "/studio-export") if !self.can_read(&req) => Response::error("unauthorised", 401),
+            (Method::Get, "/status" | "/pull" | "/studio-export" | "/reliability") if !self.can_read(&req) => Response::error("unauthorised", 401),
+            // P1 a (INC-261118-seed): what the watch job compares with its baseline. Counts and flags only, never content.
+            (Method::Get, "/reliability") => Response::from_json(&self.reliability()?),
             (Method::Get, "/status") => Response::from_json(&self.hub.borrow().as_ref().unwrap().status()),
             (Method::Get, "/pull") => {
                 let page = self.hub.borrow().as_ref().unwrap().pull(q("after").unwrap_or(0), q("limit").unwrap_or(500).min(2000));
