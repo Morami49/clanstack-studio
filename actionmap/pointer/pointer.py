@@ -1,5 +1,5 @@
 """
-Nodach Desktop Pointer (P-desktop-pointer) — v0.1.5
+Nodach Desktop Pointer (P-desktop-pointer) — v0.1.6
 ====================================================
 Point at any element in any Windows app and tell your agent what you want.
 
