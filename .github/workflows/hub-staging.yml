@@ -67,8 +67,11 @@ jobs:
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
         run: |
           W="npx -y wrangler@4.158.0"
-          have=$($W secret list --env staging) || { echo "::error::secret list failed; seeds untouched"; exit 1; }
-          echo "$have" | grep -q "\"name\"" || { echo "::error::secret list looks wrong; seeds untouched"; exit 1; }
+          for i in 1 2 3 4 5 6; do
+            have=$($W secret list --env staging 2>/dev/null) && echo "$have" | grep -q PRIVATE_SEED && break
+            echo "secret list not settled yet ($i/6)"; have=""; sleep 10
+          done
+          [ -n "$have" ] || { echo "::error::secret list never showed the seeds; seeds untouched"; exit 1; }
           for n in IMPORTER_SEED CONNECTOR_SEED PRIVATE_SEED; do
             echo "$have" | grep -q "$n" || { echo "::error::$n is missing on staging. Make it once by hand; never in CI (19 Nov)."; exit 1; }
           done

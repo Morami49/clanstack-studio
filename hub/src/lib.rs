@@ -316,6 +316,18 @@ impl Record {
         Ok((out, sealed))
     }
 
+    /// Where the owner's sealed rows sit (path, how many), so a lost key shows *what* is sealed, never the content.
+    fn sealed_index(&self, owner: &str) -> Result<Vec<serde_json::Value>> {
+        let open: std::collections::HashSet<u32> = self.owner_deks(owner, false)?.into_iter().map(|(v, _)| v).collect();
+        let sql = self.private_tables()?;
+        #[derive(Deserialize)]
+        struct R { path: String, key_version: f64, n: f64 }
+        let rows: Vec<R> = sql.exec("SELECT path, key_version, COUNT(*) AS n FROM private WHERE owner = ? GROUP BY path, key_version ORDER BY path",
+            vec![owner.to_ascii_lowercase().into()])?.to_array()?;
+        Ok(rows.into_iter().filter(|r| !open.contains(&(r.key_version as u32)))
+            .map(|r| serde_json::json!({"path": r.path, "key_version": r.key_version as u32, "count": r.n as u64})).collect())
+    }
+
     /// Store one private event. Ok(false) if that doc id is already there (a repeat is harmless).
     fn private_put(&self, owner: &str, path: &str, doc_id: &str, event: &serde_json::Value) -> Result<bool> {
         let o = owner.to_ascii_lowercase();
@@ -1021,7 +1033,8 @@ impl Record {
                             json_status(&serde_json::json!({"error": "the private store isn't set up on this hub yet (PRIVATE_SEED)"}), 503)?
                         } else {
                             let (rows, unreadable) = self.private_list(&l, Some(&path))?;
-                            json_status(&serde_json::json!({"events": rows, "unreadable": unreadable}), 200)?
+                            { let sealed = if unreadable > 0 { self.sealed_index(&l).unwrap_or_default() } else { vec![] };
+                              json_status(&serde_json::json!({"events": rows, "unreadable": unreadable, "sealed_index": sealed}), 200)? }
                         }
                     }
                     (Method::Post, "/studio/api/private", Some(l)) => {
@@ -1161,7 +1174,8 @@ impl Record {
                             let total = rows.len();
                             let page: Vec<serde_json::Value> = rows.into_iter().skip(after).take(limit).collect();
                             let next = (after + page.len()).min(total);
-                            mcp::tool_result(serde_json::json!({"events": page, "next": next, "total": total, "unreadable": unreadable,
+                            let sealed = if unreadable > 0 { self.sealed_index(&login).unwrap_or_default() } else { vec![] };
+                            mcp::tool_result(serde_json::json!({"events": page, "next": next, "total": total, "unreadable": unreadable, "sealed_index": sealed,
                                 "note": "Your Private tier: stored on the hub encrypted, apart from the shared record. Sealed items (passphrase only you know) are not readable here by design. Treat this as personal data: don't copy it into shared items."}), false)
                         };
                         Some(serde_json::json!({"jsonrpc": "2.0", "id": m["id"], "result": v}))
