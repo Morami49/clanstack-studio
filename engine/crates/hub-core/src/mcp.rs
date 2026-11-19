@@ -102,6 +102,10 @@ fn tools() -> Value {
          "inputSchema": {"type": "object", "required": ["session"], "properties": {
              "session": {"type": "string"}, "reply": {"type": "string", "description": "the R- item you wrote"}}},
          "annotations": {"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true}},
+        {"name": "resume", "title": "Resume context (read first)",
+         "description": "What every new chat or tool reads before answering Nowed: the active rules (G-, RULE-), open questions (Q-, Q-PACK-) with their last answer code, the latest replies (R-) from every chat, and open findings. Keeps context across compressed and parallel chats. begin_answer returns the same digest.",
+         "inputSchema": {"type": "object", "properties": {}},
+         "annotations": {"readOnlyHint": true}},
         {"name": "read_claims", "title": "Who is working on what",
          "description": "Active session claims (session, role, items, until), so a new chat can see what other chats are doing before it starts.",
          "inputSchema": {"type": "object", "properties": {}},
@@ -159,6 +163,7 @@ fn call(hub: &mut Hub, login: &str, key: &KeyPair, name: &str, args: &Value, now
         }
         "hub_log" | "import_studio_events" | "read_private" | "write_private" | "write_private_batch" | "send_invite" => text_result(json!({"error": format!("{name} is served by the node, not hub-core")}), true),
         "read_profiles" => text_result(hub.profiles().view_for(login), false),
+        "resume" => text_result(hub.digest_for(login), false),
         "read_claims" => {
             let g = hub.guard();
             text_result(json!({"active": g.active(now), "now": iso(now)}), false)
@@ -293,7 +298,8 @@ fn begin_answer(hub: &mut Hub, login: &str, key: &KeyPair, args: &Value, now: i6
     if let Err(e) = write_studio(hub, login, key, "session.claim", Value::Null, body, "main", Some(&format!("{session}/claim")), now) {
         return text_result(json!({"error": e}), true);
     }
-    let mut r = json!({"session": session, "role": role, "branch": branch, "claimed": mine, "until": iso(now + minutes * 60_000), "locked_by_others": locked});
+    let mut r = json!({"session": session, "role": role, "branch": branch, "claimed": mine, "until": iso(now + minutes * 60_000), "locked_by_others": locked,
+                       "resume": hub.digest_for(login)});
     if let Some(d) = duplicate {
         r["duplicate_of"] = json!({"session": d.session, "role": d.role, "since": d.since, "reply": d.reply, "still_working": d.released.is_none() && now < d.until_ms});
         r["note"] = json!("Another session already took this message. Read its reply (or its recent writes) and add only what's missing.");
@@ -314,7 +320,7 @@ pub fn handle(hub: &mut Hub, login: &str, key: &KeyPair, msg: &Value, now: i64) 
             let v = if PROTOCOL_VERSIONS.contains(&asked) { asked } else { PROTOCOL_VERSIONS[0] };
             ok(json!({"protocolVersion": v, "capabilities": {"tools": {"listChanged": false}},
                       "serverInfo": {"name": "clanstack-hub", "title": "Clanstack hub", "version": format!("{}+{}", env!("CARGO_PKG_VERSION"), BUILD)},
-                      "instructions": "Clanstack's shared record. hub_status: counts, chain check and build. read_events: Studio events from a cursor. hub_log: the request log (time, tool, outcome, duration; never contents); use it whenever asked for the hub log. import_studio_events: used by Studio Web's sync. write_event: answers, comments, status changes and items (shared record only; never put private material there). read_private / write_private: the signed-in owner's Private tier, stored apart and encrypted (personal material goes there, never into write_event); Sealed items are never readable. Several chats and AI tools work on this record at once (D-nodach-parallel-guard): before writing anything for a message, call begin_answer with the message, your role and the items you expect to change, pass the returned session to every write_event, and call end_answer with your reply id when done. If begin_answer reports duplicate_of, another session already took the message: read its reply and add only what is missing. Items in locked_by_others take comments only. read_claims shows who is working on what; a new chat reads it, and the latest R- reply items, before starting."}))
+                      "instructions": "Clanstack's shared record. hub_status: counts, chain check and build. read_events: Studio events from a cursor. hub_log: the request log (time, tool, outcome, duration; never contents); use it whenever asked for the hub log. import_studio_events: used by Studio Web's sync. write_event: answers, comments, status changes and items (shared record only; never put private material there). read_private / write_private: the signed-in owner's Private tier, stored apart and encrypted (personal material goes there, never into write_event); Sealed items are never readable. Several chats and AI tools work on this record at once (D-nodach-parallel-guard): before writing anything for a message, call begin_answer with the message, your role and the items you expect to change, pass the returned session to every write_event, and call end_answer with your reply id when done. If begin_answer reports duplicate_of, another session already took the message: read its reply and add only what is missing. Items in locked_by_others take comments only. read_claims shows who is working on what; a new chat calls resume (or reads begin_answer's resume digest) before replying: it lists the rules every chat follows, the open questions and the latest replies from every chat."}))
         }
         "ping" => ok(json!({})),
         "tools/list" => ok(json!({"tools": tools()})),
