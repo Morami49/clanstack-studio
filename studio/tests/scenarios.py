@@ -681,6 +681,25 @@ async def s35_history_words(b):
     return ok, f"undefined shown={'undefined' in txt}, genesis line={'recorded from the chats' in txt}, typed link line={'(depends on)' in txt}"
 
 
+async def s40_point_mode(b):
+    """Points at a part of Studio and leaves a note. One idea item is written, saying where (named region, element,
+    view); clicking in point mode never triggers the thing under it; Esc leaves point mode (U1, pointer.v1)."""
+    st = Store(); p = await open_page(b, st, {})
+    await p.click("#pointBtn"); await p.wait_for_timeout(150)
+    await p.click('#tabs button[data-v="list"]'); await p.wait_for_timeout(200)
+    view_after_click = await p.evaluate("S.view")
+    if not await exists(p, "#pointNote textarea"):
+        return False, "no note box after clicking in point mode"
+    await p.fill("#pointNote textarea", "Make this tab bigger"); await p.press("#pointNote textarea", "Enter"); await p.wait_for_timeout(300)
+    made = [e for e in st.events if e.get("kind") == "item.create" and (e.get("body") or {}).get("source") == "point"]
+    pt = (made[0]["body"].get("point") if made else {}) or {}
+    await p.keyboard.press("Escape"); await p.wait_for_timeout(150)
+    off = await p.evaluate("document.querySelector('#pointBtn').getAttribute('aria-pressed')")
+    ok = (len(made) == 1 and pt.get("part") == "studio.tabs" and pt.get("schema") == "pointer.v1" and view_after_click == "map"
+          and off == "false" and not p.errors)
+    return ok, f"items={len(made)}, part={pt.get('part')}, view after click={view_after_click}, pressed after Esc={off}, errors={p.errors[:1]}"
+
+
 VENDOR = HERE.parent / "vendor"
 
 
@@ -828,7 +847,7 @@ SCENARIOS = [s01_tired_misclick, s02_undo, s03_stable_codes, s04_past_view_lock,
              s07_names, s08_long_history, s09_ai_relay, s10_keyboard_list, s11_offline_capture, s12_member_rights,
              s13_two_people_at_once, s14_phone, s15_undo_old_status, s16_overwhelm, s17_disagreement, s18_clock_skew, s19_private_area,
              s20_addresses, s21_money_settings, s22_duplicate_id, s23_same_order_everywhere,
-             s24_hub_sync, s25_more_than_1000, s26_hub_not_connected, s27_read_on_open, s28_push_after_clean_runs, s29_runs_timeline, s30_builder_pipeline, s31_content_cycles, s32_private_files_and_views, s33_studio_edits_studio, s34_command_map, s35_history_words, s36_canvas, s37_classic_map_fallback, s38_runnable_steps, s39_scheduled_steps]
+             s24_hub_sync, s25_more_than_1000, s26_hub_not_connected, s27_read_on_open, s28_push_after_clean_runs, s29_runs_timeline, s30_builder_pipeline, s31_content_cycles, s32_private_files_and_views, s33_studio_edits_studio, s34_command_map, s35_history_words, s36_canvas, s37_classic_map_fallback, s38_runnable_steps, s39_scheduled_steps, s40_point_mode]
 
 
 async def main():
