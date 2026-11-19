@@ -1,0 +1,41 @@
+name: automerge
+# AS2 3e (19 Nov): a pull request whose every changed file is low risk (scripts/risk_class.py) merges itself once
+# its required checks and the staging deploy have passed. Anything touching workflows, hub or engine code, sign-in,
+# secrets, the watch baseline or legal pages waits for Nowed. A merge made with GITHUB_TOKEN doesn't start other
+# workflows, so this job starts the production deploy itself, for the same tree that passed CI.
+on:
+  workflow_run:
+    workflows: [hub-staging]
+    types: [completed]
+permissions: {contents: write, pull-requests: write, actions: write, checks: read}
+concurrency: automerge
+jobs:
+  merge-low-risk:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Find the pull request staging just deployed
+        id: pr
+        env: {GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}", R: "${{ github.repository }}", SHA: "${{ github.event.workflow_run.head_sha }}"}
+        run: |
+          n=$(gh api "repos/$R/commits/$SHA/pulls" --jq '[.[] | select(.state=="open" and .base.ref=="main" and .head.sha==env.SHA)][0].number // empty')
+          [ -n "$n" ] || { echo "no open PR has $SHA as its head: nothing to do"; exit 0; }
+          echo "n=$n" >> "$GITHUB_OUTPUT"
+      - name: Classify, check, merge, deploy
+        if: steps.pr.outputs.n != ''
+        env: {GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}", R: "${{ github.repository }}", SHA: "${{ github.event.workflow_run.head_sha }}", N: "${{ steps.pr.outputs.n }}"}
+        run: |
+          gh api "repos/$R/pulls/$N/files" --paginate --jq '.[].filename' > files.txt
+          verdict=$(python3 scripts/risk_class.py < files.txt)
+          echo "PR #$N: $verdict risk"
+          [ "$verdict" = "low" ] || { echo "waits for Nowed (high-risk files above)"; exit 0; }
+          for c in engine hub studio actionmap scripts; do
+            ok=$(gh api "repos/$R/commits/$SHA/check-runs?per_page=100" --jq "[.check_runs[] | select(.name==\"$c\" and .conclusion==\"success\")] | length")
+            [ "$ok" != "0" ] || { echo "required check $c hasn't passed on $SHA: not merging"; exit 0; }
+          done
+          merged=$(gh api -X PUT "repos/$R/pulls/$N/merge" -f merge_method=merge -f sha="$SHA" \
+            -f commit_title="Merge pull request #$N (auto: low risk, CI and staging passed)" --jq .sha)
+          echo "merged as $merged"
+          gh api -X POST "repos/$R/actions/workflows/hub-deploy.yml/dispatches" -f ref=main -f "inputs[sha]=$merged"
+          gh api "repos/$R/issues/$N/comments" -f body="Auto-merged under AS2 3e: every changed file is low risk, required checks and staging passed on $SHA. Production deploy started for $merged." >/dev/null
