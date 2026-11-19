@@ -8,7 +8,7 @@ text to paste. test_pointer.py imports this module on any OS.
 import datetime as dt
 import uuid
 
-VERSION = "0.1.6"
+VERSION = "0.1.7"
 SCHEMA = "pointer.v1"
 PAD = 24                      # pixels of context around a normal element in the screenshot
 MAX_AREA = 4_000_000          # elements bigger than this (whole windows) get a cursor-centred crop
@@ -165,3 +165,25 @@ def dib_bytes(image) -> bytes:
     buf = io.BytesIO()
     image.convert("RGB").save(buf, "BMP")
     return buf.getvalue()[14:]
+
+
+def captioned(img, text: str, width_chars: int = 110):
+    """v0.1.7: the picture with the text block drawn underneath it. Claude's chat box (and most chat apps)
+    take only the picture when both are on the clipboard (28a, 19 Nov), so the details travel inside it."""
+    import textwrap
+    from PIL import Image, ImageDraw, ImageFont
+    font = ImageFont.load_default()
+    lines = []
+    for raw in (text or "").splitlines():
+        lines += textwrap.wrap(raw, width_chars) or [""]
+    line_h = 14
+    pad = 8
+    w = max(img.width, 8 + 7 * min(width_chars, max((len(l) for l in lines), default=0)))
+    h = img.height + pad * 2 + line_h * len(lines)
+    out = Image.new("RGB", (w, h), "white")
+    out.paste(img.convert("RGB"), (0, 0))
+    d = ImageDraw.Draw(out)
+    d.rectangle([0, img.height, w, h], fill=(24, 32, 31))
+    for i, l in enumerate(lines):
+        d.text((pad, img.height + pad + i * line_h), l, fill=(240, 240, 240), font=font)
+    return out

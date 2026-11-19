@@ -143,7 +143,7 @@ def test_ids_and_version():
     t = core.utcnow()
     i = core.new_id(t)
     assert i.startswith("PE-") and len(i) == len("PE-261119-120000-abcd")
-    assert core.VERSION == "0.1.6" and core.SCHEMA == "pointer.v1"
+    assert core.VERSION == "0.1.7" and core.SCHEMA == "pointer.v1"
 
 
 def test_dib_bytes():
@@ -303,6 +303,19 @@ def test_unnamed_container_any_size_is_opaque():
     assert is_opaque_element(side, 1920, 1080), "an unnamed section of the Claude app should give a picture"
     btn = {"type": "ButtonControl", "name": "", "class_name": "", "rect": {"left": 10, "top": 10, "right": 40, "bottom": 40}}
     assert not is_opaque_element(btn, 1920, 1080), "a small unnamed button stays text-only"
+
+
+def test_caption_is_drawn_under_the_picture():
+    try:
+        from PIL import Image
+    except ImportError:
+        print("skip caption (no pillow)"); return
+    from pointer_core import captioned
+    img = Image.new("RGB", (300, 200), "blue")
+    out = captioned(img, "[Nodach pointer PE-1] app=claude.exe\nnote: make this bigger")
+    assert out.width >= 300 and out.height > 200 + 20, out.size
+    assert out.getpixel((10, 10)) == (0, 0, 255), "the picture itself is untouched"
+    assert out.getpixel((2, 205)) != (0, 0, 255), "a caption band sits underneath"
 
 
 if __name__ == "__main__":

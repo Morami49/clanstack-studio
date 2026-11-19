@@ -1,5 +1,5 @@
 """
-Nodach Desktop Pointer (P-desktop-pointer) — v0.1.6
+Nodach Desktop Pointer (P-desktop-pointer) — v0.1.7
 ====================================================
 Point at any element in any Windows app and tell your agent what you want.
 
@@ -216,7 +216,11 @@ def copy_image_and_text(img, text: str) -> None:
     win32clipboard.OpenClipboard()
     try:
         win32clipboard.EmptyClipboard()
-        win32clipboard.SetClipboardData(win32con.CF_DIB, core.dib_bytes(img))
+        try:
+            pic = core.captioned(img, text)
+        except Exception:   # a caption must never cost the picture
+            pic = img
+        win32clipboard.SetClipboardData(win32con.CF_DIB, core.dib_bytes(pic))
         win32clipboard.SetClipboardData(win32con.CF_UNICODETEXT, text)
     finally:
         win32clipboard.CloseClipboard()
