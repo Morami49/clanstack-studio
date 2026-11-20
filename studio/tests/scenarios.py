@@ -849,6 +849,71 @@ async def s44_show_replay(b):
     return ok, f"overlay={on}, view={view}, badges={badges}, stroke points={pts!r}, closed by Esc={gone}, back to={back}, errors={p.errors[:1]}"
 
 
+FAKE_CLOCK = "window.__fake = 0; window.__clockNow = () => window.__fake;"
+
+
+async def s46_show_pause_clock(b):
+    """F-show-pause-clock (20 Nov, staging): pauses a show for five seconds on a fake clock. The timer freezes while paused,
+    and paused time is left out of every step's t_ms, the cursor trail and the saved duration; the save box holds it too."""
+    st = Store(); p = await open_page(b, st, {})
+    await p.evaluate(FAKE_CLOCK)
+    await p.click("#showBtn"); await p.wait_for_timeout(150)
+    await p.click("#showGo"); await p.wait_for_timeout(300)
+    sid = next(e["body"]["id"] for e in st.events if e["kind"] == "item.create")
+    await p.evaluate("window.__fake = 1000"); await p.mouse.move(400, 300); await p.wait_for_timeout(200)
+    await p.click('#tabs button[data-v="list"]'); await p.wait_for_timeout(150)
+    await p.click("#showPause"); await p.wait_for_timeout(100)
+    await p.evaluate("window.__fake = 6000"); await p.mouse.move(420, 320); await p.wait_for_timeout(400)
+    timer_paused = await p.inner_text("#showTime"); el_paused = (await p.evaluate("NodachShow.state()"))["elapsed_ms"]
+    await p.click("#showPause"); await p.wait_for_timeout(100)
+    await p.evaluate("window.__fake = 6500"); await p.mouse.move(440, 340); await p.wait_for_timeout(250)
+    await p.click('#tabs button[data-v="ask"]'); await p.wait_for_timeout(200)
+    await p.keyboard.press("Escape"); await p.wait_for_timeout(150)
+    await p.evaluate("window.__fake = 30000"); await p.wait_for_timeout(300)
+    timer_stop = await p.inner_text("#showTime")
+    await p.click("#showSave")
+    await until(lambda: any(e["kind"] == "status" and e["item"] == sid for e in st.events))
+    edits = [e for e in st.events if e["kind"] == "item.edit" and e["item"] == sid]
+    sh = (edits[-1]["body"].get("show") if edits else {}) or {}
+    t_ms = [s["t_ms"] for s in sh.get("steps") or []]
+    live = [e["body"]["step"]["t_ms"] for e in st.events if e["kind"] == "comment" and e["item"] == sid and e["body"].get("step")]
+    curs = [c[0] for c in sh.get("cursor") or []]
+    await p.evaluate("delete window.__clockNow")
+    ok = (timer_paused == "0:01" and el_paused == 1000 and t_ms == [1000, 1500] and live == [1000, 1500] and sh.get("duration_ms") == 1500
+          and timer_stop == "0:01" and curs and max(curs) <= 1500 and not p.errors)
+    return ok, f"timer while paused={timer_paused} (elapsed {el_paused}), step t_ms={t_ms}, live t_ms={live}, duration={sh.get('duration_ms')}, timer in save box={timer_stop}, cursor times={curs}, errors={p.errors[:1]}"
+
+
+async def s47_show_states(b):
+    """Show is an explicit state machine: open, cancel, open, start, pause, stop, keep (back to paused), resume, stop, discard.
+    NodachShow.state() reads the state and an ordered trace; an event the state doesn't take is refused and traced."""
+    st = Store(); p = await open_page(b, st, {})
+    seq = []
+    async def s(): seq.append((await p.evaluate("NodachShow.state().state")))
+    await s()
+    await p.click("#showBtn"); await p.wait_for_timeout(150); await s()
+    await p.click("#showCancel"); await p.wait_for_timeout(100); await s()
+    await p.click("#showBtn"); await p.wait_for_timeout(150)
+    await p.click("#showGo"); await p.wait_for_timeout(300); await s()
+    await p.click("#showPause"); await p.wait_for_timeout(100); await s()
+    await p.keyboard.press("Escape"); await p.wait_for_timeout(150); await s()
+    await p.click("#showResume"); await p.wait_for_timeout(100); await s()
+    rec_label = await p.inner_text("#showRec")
+    await p.click("#showPause"); await p.wait_for_timeout(100); await s()
+    await p.keyboard.press("Escape"); await p.wait_for_timeout(150)
+    await p.click("#showDiscard"); await p.wait_for_timeout(400); await s()
+    tr = await p.evaluate("NodachShow.state().trace")
+    events = [(t["event"], t["to"]) for t in tr if t["ok"]]
+    want = [("open", "ready"), ("cancel", "idle"), ("open", "ready"), ("start", "recording"), ("pause", "paused"), ("stop", "stopping"),
+            ("keep", "paused"), ("resume", "recording"), ("stop", "stopping"), ("discard", "idle")]
+    refused = await p.evaluate("(() => { const m = NodachFSM.machine('t', SHOW_TABLE, 'idle'); const a = m.send('pause'); return [a, m.state, m.trace()[0].ok]; })()")
+    edges = await p.evaluate("NodachShow.state().edges.length")
+    withdrawn = any(e["kind"] == "status" and e["body"].get("status") == "withdrawn" for e in st.events)
+    ok = (seq == ["idle", "ready", "idle", "recording", "paused", "stopping", "paused", "recording", "idle"] and events == want
+          and "paused" in rec_label and refused == [False, "idle", False] and edges >= 12 and withdrawn and not p.errors)
+    return ok, f"states={seq}, trace={events}, label after keep={rec_label!r}, refused={refused}, edges={edges}, withdrawn={withdrawn}, errors={p.errors[:1]}"
+
+
 VENDOR = HERE.parent / "vendor"
 
 
@@ -992,6 +1057,48 @@ async def s39_scheduled_steps(b):
     return ok, f"post only-new by default={only_new}, no schedule on wired-into step={no_sched_mid}, hours saved={hours}, badge shown={badge}, bad hour refused={refused}, errors={p.errors[:1]}"
 
 
+async def s48_show_marks_follow_canvas(b):
+    """F-show-replay-drift (20 Nov, staging): points at a node on the canvas and draws on another while showing, then drags
+    the map and moves the first node. Live and in the replay, each badge stays on the node it marked (map units and
+    node anchor kept), not at the old screen spot."""
+    st = Store([]); p = await open_canvas_page(b, st, {})
+    async def box(nid):
+        return await p.locator(f'.react-flow__node[data-id="{nid}"]').bounding_box()
+    def inside(pt, bb, pad=3):
+        return pt and bb and bb["x"] - pad <= pt[0] <= bb["x"] + bb["width"] + pad and bb["y"] - pad <= pt[1] <= bb["y"] + bb["height"] + pad
+    await p.click("#showBtn"); await p.wait_for_timeout(150)
+    await p.click("#showGo"); await p.wait_for_timeout(300)
+    sid = next(e["body"]["id"] for e in st.events if e["kind"] == "item.create")
+    a = await box("D-001"); await p.mouse.click(a["x"] + 20, a["y"] + 10); await p.wait_for_timeout(150)
+    c = await box("D-002"); await stroke(p, c["x"] + 15, c["y"] + 10, ((40, 0), (40, 25), (0, 25)))
+    vp = await p.evaluate("NodachCanvas.geo.viewport()")
+    await p.evaluate(f"NodachCanvas.geo.setViewport({{x:{vp['x'] + 180}, y:{vp['y'] + 110}, zoom:{vp['zoom']}}})"); await p.wait_for_timeout(250)
+    live_badge = await p.evaluate("(() => { const b = document.querySelector('#showLayer .ptBadge'); return b ? [parseFloat(b.style.left) + 9, parseFloat(b.style.top) + 9] : null; })()")
+    a_live = await box("D-001")
+    await p.keyboard.press("Escape"); await p.wait_for_timeout(150)
+    await p.fill("#showTitle", "Canvas marks"); await p.click("#showSave")
+    await until(lambda: any(e["kind"] == "status" and e["item"] == sid for e in st.events))
+    edits = [e for e in st.events if e["kind"] == "item.edit" and e["item"] == sid]
+    steps = ((edits[-1]["body"].get("show") if edits else {}) or {}).get("steps") or []
+    f1 = (steps[0].get("target") or {}).get("flow") if steps else None
+    f2 = steps[1].get("fpath") if len(steps) > 1 else None
+    # drag the map again and move D-001 somewhere else on the board
+    vp = await p.evaluate("NodachCanvas.geo.viewport()")
+    await p.evaluate(f"NodachCanvas.geo.setViewport({{x:{vp['x'] - 260}, y:{vp['y'] + 40}, zoom:{vp['zoom'] * 1.25}}})")
+    n1 = await p.evaluate("NodachCanvas.geo.node('D-001')")
+    await st.add("events", ev("canvas.layout", None, {"board": "main", "moves": {"D-001": [round(n1["x"]) + 300, round(n1["y"]) + 160]}}, ts=now_ts()))
+    await p.wait_for_timeout(600)
+    await p.evaluate(f"select('{sid}')"); await p.wait_for_timeout(200)
+    await p.click("#showReplayBtn"); await p.wait_for_timeout(1500)
+    rm = {m["n"]: (m["x"], m["y"]) for m in await p.evaluate("NodachShow.replayMarks()")}
+    a2, c2 = await box("D-001"), await box("D-002")
+    ok = (f1 and f1.get("node") == "D-001" and f2 and steps[1].get("anchor", {}).get("node") == "D-002"
+          and inside(live_badge, a_live) and inside(rm.get(1), a2) and inside(rm.get(2), c2) and not p.errors)
+    return ok, (f"flow kept={bool(f1)} node={f1 and f1.get('node')}, stroke map path={bool(f2)} anchor={steps[1].get('anchor') if len(steps) > 1 else None}, "
+                f"live badge {live_badge} on D-001 {a_live and (round(a_live['x']), round(a_live['y']))}={inside(live_badge, a_live)}, "
+                f"replay 1 {rm.get(1)} on moved D-001={inside(rm.get(1), a2)}, replay 2 {rm.get(2)} on D-002={inside(rm.get(2), c2)}, errors={p.errors[:1]}")
+
+
 async def s45_my_queue(b):
     """Back after a day away, opens My queue. Only what waits on him shows, oldest first: a decision pack, an unanswered
     question, a re-asked one and a finding in his lane. Answered items and Claude-lane items stay out; nothing is written (AS3)."""
@@ -1026,7 +1133,8 @@ SCENARIOS = [s01_tired_misclick, s02_undo, s03_stable_codes, s04_past_view_lock,
              s13_two_people_at_once, s14_phone, s15_undo_old_status, s16_overwhelm, s17_disagreement, s18_clock_skew, s19_private_area,
              s20_addresses, s21_money_settings, s22_duplicate_id, s23_same_order_everywhere,
              s24_hub_sync, s25_more_than_1000, s26_hub_not_connected, s27_read_on_open, s28_push_after_clean_runs, s29_runs_timeline, s30_builder_pipeline, s31_content_cycles, s32_private_files_and_views, s33_studio_edits_studio, s34_command_map, s35_history_words, s36_canvas, s37_classic_map_fallback, s38_runnable_steps, s39_scheduled_steps, s40_point_mode,
-             s41_multi_point, s42_show_record_save, s43_show_pause, s44_show_replay, s45_my_queue]
+             s41_multi_point, s42_show_record_save, s43_show_pause, s44_show_replay, s45_my_queue,
+             s46_show_pause_clock, s47_show_states, s48_show_marks_follow_canvas]
 
 
 async def main():
