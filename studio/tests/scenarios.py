@@ -1090,7 +1090,10 @@ async def s47_live_browser_speech_opt_in(b):
     await p.click("#liveBtn"); await p.wait_for_timeout(150)
     await p.click("#liveStart")
     await until(lambda: any(e["kind"] == "item.create" for e in st.events))
-    sid = await p.evaluate("NodachLive.session()")
+    sid = next(e["body"]["id"] for e in st.events if e["kind"] == "item.create")
+    # The store sees the event before the page's write() resolves and before its snapshot folds it in; on a slow CI
+    # runner a line spoken in that gap was refused as "Start a session first" (run 44745314132). Wait for the page.
+    await p.wait_for_function("id => NodachLive.session() === id && F.items.get(id)?.status === 'live'", arg=sid, timeout=15000)
     unticked = not await p.is_checked("#liveSpeechOk"); mic_off = await p.locator("#liveMic").is_disabled()
     starts0 = await p.evaluate("window.__speech.starts")
     note = await p.inner_text("#liveSpeechNote")
