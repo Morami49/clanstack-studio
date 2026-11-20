@@ -134,7 +134,9 @@ def session_event(me: dict, t: dt.datetime, title: str = "", branch: str = "main
     sid = stamp("LV", t)
     body = {"id": sid, "type": "idea", "title": (title or "Live session " + ts[:16].replace("T", " "))[:96],
             "body": "Live session in progress. Lines arrive as live.line events; replies as comments on this item.",
-            "refs": [], "status": "live", "source": "live", "live": {"schema": "live.v1", "started": ts, "audience": [], "via": "desktop"}}
+            "refs": [], "status": "live", "source": "live",
+            # 51a: instant replies (the hub's Live responder) start on for an owner's sessions; Studio's toggle changes it
+            "live": {"schema": "live.v1", "started": ts, "audience": [], "via": "desktop", "responder": bool(me.get("owner"))}}
     return {"ts": ts, "kind": "item.create", "item": None, "branch": branch, "body": body, "author": author(me)}
 
 

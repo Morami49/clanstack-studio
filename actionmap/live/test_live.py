@@ -74,6 +74,7 @@ def test_task_and_session_events():
     assert b["meta"] == {"kind": "build", "from_session": "LV-x", "from_line": "lvabc"} and b["id"].startswith("TK-261119-")
     s = core.session_event(OWNER, T)
     assert s["body"]["status"] == "live" and s["body"]["source"] == "live" and s["body"]["live"]["schema"] == "live.v1"
+    assert s["body"]["live"]["responder"] is True and core.session_event(MEMBER, T)["body"]["live"]["responder"] is False
     assert s["body"]["id"].startswith("LV-261119-123045-")
 
 
