@@ -222,8 +222,17 @@ class Live:
 class Voice:
     def __init__(self, live: Live, model: str):
         from faster_whisper import WhisperModel   # optional; ImportError → typed only
-        print(f"Loading the {model} speech model on this PC (first run downloads it once)…")
-        self.model = WhisperModel(model, device="cpu", compute_type="int8")
+        local = core.local_model_dir([Path(__file__).resolve().parent / "models", HOME / "models"], model)
+        if local:
+            print(f"Loading the {model} speech model from {local}…")
+            self.model = WhisperModel(str(local), device="cpu", compute_type="int8")
+        else:
+            print(f"Loading the {model} speech model on this PC (first run downloads it once)…")
+            try:
+                self.model = WhisperModel(model, device="cpu", compute_type="int8")
+            except Exception as e:
+                raise RuntimeError(f"couldn't download the {model} model ({type(e).__name__}). Put the folder "
+                                   f"faster-whisper-{model} (from the Nodach model zip) into {HOME / 'models'} and rerun") from None
         self.live = live
         self.talking = False
         self.always = False

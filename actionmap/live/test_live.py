@@ -187,3 +187,14 @@ def test_clean_token_accepts_real_shapes_and_rejects_bad_pastes():
     assert core.clean_token("") is None
     assert core.clean_token(f"Morami49.17950.{sig}") is None
     assert core.clean_token(None) is None
+
+
+def test_local_model_dir(tmp_path):
+    assert core.local_model_dir([tmp_path], "base") is None
+    d = tmp_path / "faster-whisper-base"
+    d.mkdir()
+    for f in core.MODEL_FILES[:-1]:
+        (d / f).write_text("x")
+    assert core.local_model_dir([tmp_path], "base") is None   # incomplete folder is ignored
+    (d / core.MODEL_FILES[-1]).write_text("x")
+    assert core.local_model_dir([tmp_path / "nope", tmp_path], "base") == d

@@ -17,9 +17,10 @@ from __future__ import annotations
 import datetime as dt
 import json
 import re
+from pathlib import Path
 import secrets
 
-VERSION = "0.1.1"
+VERSION = "0.1.2"
 LINE_KIND = "live.line"
 MAX_TEXT = 2000
 POINT_MAX_AGE_S = 120          # a pointer point older than this isn't attached to a new line
@@ -188,3 +189,16 @@ def clean_token(raw):
         t = t.split("=", 1)[1].strip()
     t = t.rstrip(";").strip()
     return t if TOKEN_RE.match(t) else None
+
+
+MODEL_FILES = ("config.json", "model.bin", "tokenizer.json", "vocabulary.txt")
+
+
+def local_model_dir(roots, model: str):
+    """A ready faster-whisper model folder (faster-whisper-<model>, all four files) under any root, else None.
+    Lets the model come from a zip when the PC can't reach the model host."""
+    for root in roots:
+        d = Path(root) / f"faster-whisper-{model}"
+        if all((d / f).is_file() for f in MODEL_FILES):
+            return d
+    return None
