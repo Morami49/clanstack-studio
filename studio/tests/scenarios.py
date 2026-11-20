@@ -1197,6 +1197,7 @@ async def s47_live_browser_speech_opt_in(b):
     await p.click("#liveBtn"); await p.wait_for_timeout(150)
     await p.click("#liveStart")
     await until(lambda: any(e["kind"] == "item.create" for e in st.events))
+    await p.wait_for_function("!!NodachLive.session()", timeout=8000)   # CI: the session id is set just after the write lands
     sid = await p.evaluate("NodachLive.session()")
     unticked = not await p.is_checked("#liveSpeechOk"); mic_off = await p.locator("#liveMic").is_disabled()
     starts0 = await p.evaluate("window.__speech.starts")
