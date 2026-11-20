@@ -2440,7 +2440,9 @@ const PTR = {
     if (!SRx || !panel?.querySelector("#liveSpeechOk")?.checked) return;
     const r = new SRx(); r.lang = "en-GB"; r.interimResults = false; r.continuous = true;
     r.onresult = e => { for (let i = e.resultIndex; i < e.results.length; i++) if (e.results[i].isFinal) send(e.results[i][0].transcript, {via:"browser-speech"}); };
-    r.onerror = e => { toast(e.error === "not-allowed" ? "Microphone not allowed for this page." : `Browser speech stopped (${e.error}).`); };
+    r.onerror = e => { toast(e.error === "not-allowed" ? "Microphone not allowed for this page."
+      : (e.error === "network" && navigator.brave) ? "Brave has no speech service, so browser speech can't work here. Use the desktop client (audio stays on your PC), or Chrome/Edge."
+      : `Browser speech stopped (${e.error}).`); };
     r.onend = () => { if (L.rec === r){ L.rec = null; render(); } };
     try { r.start(); L.rec = r; } catch { L.rec = null; }
     render();

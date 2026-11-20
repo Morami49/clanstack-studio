@@ -97,23 +97,54 @@ class Hub:
         return did
 
 
+def _clipboard() -> str:
+    try:
+        import tkinter
+        r = tkinter.Tk()
+        r.withdraw()
+        v = r.clipboard_get()
+        r.destroy()
+        return v
+    except Exception:
+        return ""
+
+
+def token_file(hub_url: str) -> Path:
+    host = urllib.parse.urlparse(hub_url).hostname or "hub"
+    return HOME / f"session-{host}.txt"
+
+
+def ask_token(hub_url: str) -> str:
+    host = urllib.parse.urlparse(hub_url).hostname or "hub"
+    print(f"Sign-in for {host}: copy the nodach_session Cookie Value in your browser (see README),")
+    print("then just press Enter here: it's read from your clipboard and never shown.")
+    for _ in range(3):
+        typed = getpass.getpass("Press Enter (or right-click to paste, then Enter): ")
+        t = core.clean_token(typed) or core.clean_token(_clipboard())
+        if t:
+            f = token_file(hub_url)
+            HOME.mkdir(parents=True, exist_ok=True)
+            f.write_text(t, encoding="utf-8")
+            try:
+                os.chmod(f, 0o600)
+            except OSError:
+                pass
+            print("  Sign-in value read.")
+            return t
+        print("  That isn't a nodach_session value (it looks like name.numbers.long-code). Copy it again and retry.")
+    raise SystemExit("No sign-in value; run start-live.bat again when you have it copied.")
+
+
 def load_token(hub_url: str) -> str:
-    t = os.environ.get("NODACH_LIVE_TOKEN", "").strip()
+    t = core.clean_token(os.environ.get("NODACH_LIVE_TOKEN", ""))
     if t:
         return t
-    host = urllib.parse.urlparse(hub_url).hostname or "hub"
-    f = HOME / f"session-{host}.txt"
+    f = token_file(hub_url)
     if f.exists():
-        return f.read_text(encoding="utf-8").strip()
-    print(f"Paste your Studio sign-in for {host} (the nodach_session cookie value; see README). It won't be shown.")
-    t = getpass.getpass("nodach_session: ").strip()
-    HOME.mkdir(parents=True, exist_ok=True)
-    f.write_text(t, encoding="utf-8")
-    try:
-        os.chmod(f, 0o600)
-    except OSError:
-        pass
-    return t
+        t = core.clean_token(f.read_text(encoding="utf-8"))
+        if t:
+            return t
+    return ask_token(hub_url)
 
 
 # ---------------------------------------------------------------- the session
@@ -291,9 +322,22 @@ def main(argv=None) -> int:
     try:
         me = hub.me()
     except Exception as e:
-        print(f"Couldn't sign in to {a.hub} ({e}). Sign in to Studio in your browser, copy nodach_session again, and delete "
-              f"{HOME}\\session-*.txt so you're asked for it.")
-        return 1
+        if "401" not in str(e):
+            print(f"Couldn't reach {a.hub} ({e}).")
+            return 1
+        # the stored value expired or was wrong: forget it and ask once more
+        print("The saved sign-in wasn't accepted (expired, or from a different sign-in).")
+        try:
+            token_file(a.hub).unlink()
+        except OSError:
+            pass
+        hub = Hub(a.hub, ask_token(a.hub))
+        try:
+            me = hub.me()
+        except Exception as e2:
+            print(f"Still couldn't sign in ({e2}). In the browser, open {a.hub}/studio, sign in with GitHub, "
+                  "reload, copy nodach_session again, and rerun.")
+            return 1
     sid = pick_session(hub, me, a.session, a.start)
     if not sid:
         return 1

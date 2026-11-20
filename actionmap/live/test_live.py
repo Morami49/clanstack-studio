@@ -175,3 +175,15 @@ if __name__ == "__main__":
         if name.startswith("test_") and callable(fn) and fn.__code__.co_argcount == 0:
             fn(); n += 1; print("ok", name)
     print(f"{n} passed")
+
+
+def test_clean_token_accepts_real_shapes_and_rejects_bad_pastes():
+    sig = "a" * 64
+    good = f"Morami49.1795000000000.{sig}"
+    assert core.clean_token(good) == good
+    assert core.clean_token(f'  "{good}"  ') == good
+    assert core.clean_token(f"nodach_session={good};") == good
+    assert core.clean_token("\x16") is None          # Ctrl+V in a Windows console
+    assert core.clean_token("") is None
+    assert core.clean_token(f"Morami49.17950.{sig}") is None
+    assert core.clean_token(None) is None

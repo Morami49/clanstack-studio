@@ -19,7 +19,7 @@ import json
 import re
 import secrets
 
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 LINE_KIND = "live.line"
 MAX_TEXT = 2000
 POINT_MAX_AGE_S = 120          # a pointer point older than this isn't attached to a new line
@@ -170,3 +170,21 @@ def segments(levels, threshold: float, frame_ms: int, silence_ms: int = 800, min
     if start is not None and (last_loud - start + 1) * frame_ms >= min_ms:
         out.append((start, last_loud + 1))
     return out
+
+
+TOKEN_RE = re.compile(r"^[A-Za-z0-9-]{1,39}\.\d{10,16}\.[0-9a-f]{64}$")
+
+
+def clean_token(raw):
+    """A pasted nodach_session value, tidied; None if it isn't one.
+
+    Windows consoles turn Ctrl+V into a control character instead of pasting, and DevTools copies can carry
+    quotes, spaces or the 'nodach_session=' prefix. Only a well-formed login.expires.signature is accepted,
+    so a bad paste is caught here instead of as a 401 from the hub."""
+    if not isinstance(raw, str):
+        return None
+    t = "".join(ch for ch in raw if ch.isprintable()).strip().strip('"').strip("'").strip()
+    if t.lower().startswith("nodach_session="):
+        t = t.split("=", 1)[1].strip()
+    t = t.rstrip(";").strip()
+    return t if TOKEN_RE.match(t) else None
