@@ -1,10 +1,13 @@
 """
-Nodach Live client (B-live-session) — v0.1.0
-=============================================
+Nodach Live client (B-live-session), command-line version
+=========================================================
+(The click-only window is live_gui.py, started by start-live.bat; this file is start-live-cli.bat. Both share the
+Hub, Live and speech-model code below.)
 Talk into a Nodach Studio live session from your Windows PC. Speech is transcribed HERE, on your own CPU
 (faster-whisper); the audio never leaves the PC. Only the text of each line is sent, to the hub, signed in as you.
 
-  Ctrl+Alt+Space  push to talk: press to start, press again to send what you said
+  Ctrl+Alt+J      push to talk: press to start, press again to send what you said
+                  (was Ctrl+Alt+Space, which the Claude desktop app uses for its quick-entry box)
   Ctrl+Alt+A      always-on: toggle listening; each phrase (a pause ends it) becomes a line
   Ctrl+Alt+L      send the pointer's latest point on its own (from the Nodach Desktop Pointer, Ctrl+Alt+M)
   or type in this window: a line + Enter sends it · /point · /always · /end ends the session · /quit
@@ -39,7 +42,7 @@ POINTER_EVENTS = Path(os.environ.get("NODACH_POINTER_HOME", str(Path.home() / "n
 DEFAULT_HUB = os.environ.get("NODACH_HUB", "https://staging.nodach.com")
 RATE = 16000
 FRAME_MS = 30
-HOTKEYS = {"<ctrl>+<alt>+<space>": "talk", "<ctrl>+<alt>+a": "always", "<ctrl>+<alt>+l": "point"}
+HOTKEYS = {core.GUI_HOTKEY: "talk", "<ctrl>+<alt>+a": "always", "<ctrl>+<alt>+l": "point"}
 
 # Optional packages, guarded so this module imports anywhere (tests, typed-only use).
 try:
@@ -57,10 +60,21 @@ except Exception:
 
 
 # ---------------------------------------------------------------- hub
+class HubError(RuntimeError):
+    """A hub answer that wasn't a success; .code is the HTTP status (0 when the hub couldn't be reached)."""
+    def __init__(self, msg: str, code: int = 0):
+        super().__init__(msg)
+        self.code = code
+
+
 class Hub:
     def __init__(self, base: str, token: str):
         self.base = base.rstrip("/")
         self._cookie = "nodach_session=" + token   # sent only to this hub, never printed
+        self.last_status = 0
+
+    def __repr__(self):   # never shows the sign-in value
+        return f"Hub({self.base!r})"
 
     def _req(self, method: str, path: str, body=None):
         data = json.dumps(body).encode() if body is not None else None
@@ -70,13 +84,18 @@ class Hub:
         req = urllib.request.Request(self.base + path, data=data, method=method, headers=h)
         try:
             with urllib.request.urlopen(req, timeout=20) as r:
+                self.last_status = r.status
                 return json.loads(r.read() or b"{}")
         except urllib.error.HTTPError as e:
+            self.last_status = e.code
             try:
                 msg = json.loads(e.read()).get("error", "")
             except Exception:
                 msg = ""
-            raise RuntimeError(f"hub said {e.code}{': ' + msg if msg else ''}") from None
+            raise HubError(f"hub said {e.code}{': ' + msg if msg else ''}", e.code) from None
+        except (urllib.error.URLError, OSError) as e:
+            self.last_status = 0
+            raise HubError(f"couldn't reach the hub ({type(getattr(e, 'reason', e)).__name__})", 0) from None
 
     def me(self) -> dict:
         return self._req("GET", "/studio/api/me")
@@ -114,6 +133,38 @@ def token_file(hub_url: str) -> Path:
     return HOME / f"session-{host}.txt"
 
 
+def save_token(hub_url: str, t: str) -> None:
+    """Keep the sign-in value in the one session file for this hub (the only place it is ever written)."""
+    f = token_file(hub_url)
+    HOME.mkdir(parents=True, exist_ok=True)
+    f.write_text(t, encoding="utf-8")
+    try:
+        os.chmod(f, 0o600)
+    except OSError:
+        pass
+
+
+def forget_token(hub_url: str) -> None:
+    try:
+        token_file(hub_url).unlink()
+    except OSError:
+        pass
+
+
+def stored_token(hub_url: str):
+    """The sign-in from NODACH_LIVE_TOKEN or the saved file, without asking; None if there isn't a good one."""
+    t = core.clean_token(os.environ.get("NODACH_LIVE_TOKEN", ""))
+    if t:
+        return t
+    f = token_file(hub_url)
+    if f.exists():
+        try:
+            return core.clean_token(f.read_text(encoding="utf-8"))
+        except OSError:
+            return None
+    return None
+
+
 def ask_token(hub_url: str) -> str:
     host = urllib.parse.urlparse(hub_url).hostname or "hub"
     print(f"Sign-in for {host}: copy the nodach_session Cookie Value in your browser (see README),")
@@ -122,13 +173,7 @@ def ask_token(hub_url: str) -> str:
         typed = getpass.getpass("Press Enter (or right-click to paste, then Enter): ")
         t = core.clean_token(typed) or core.clean_token(_clipboard())
         if t:
-            f = token_file(hub_url)
-            HOME.mkdir(parents=True, exist_ok=True)
-            f.write_text(t, encoding="utf-8")
-            try:
-                os.chmod(f, 0o600)
-            except OSError:
-                pass
+            save_token(hub_url, t)
             print("  Sign-in value read.")
             return t
         print("  That isn't a nodach_session value (it looks like name.numbers.long-code). Copy it again and retry.")
@@ -136,24 +181,22 @@ def ask_token(hub_url: str) -> str:
 
 
 def load_token(hub_url: str) -> str:
-    t = core.clean_token(os.environ.get("NODACH_LIVE_TOKEN", ""))
-    if t:
-        return t
-    f = token_file(hub_url)
-    if f.exists():
-        t = core.clean_token(f.read_text(encoding="utf-8"))
-        if t:
-            return t
-    return ask_token(hub_url)
+    return stored_token(hub_url) or ask_token(hub_url)
 
 
 # ---------------------------------------------------------------- the session
 class Live:
-    def __init__(self, hub: Hub, me: dict, session: str, attach_points: bool = True):
+    def __init__(self, hub: Hub, me: dict, session: str, attach_points: bool = True, report=None):
+        """report(step, outcome, detail, message): called after every send; default prints like the CLI always did."""
         self.hub, self.me, self.session, self.attach = hub, me, session, attach_points
+        self.report = report or (lambda step, outcome, detail, message: print("  " + message))
         self.used_points: set = set()
-        self.out: "queue.Queue[tuple]" = queue.Queue()
+        self.out: "queue.Queue" = queue.Queue()
         threading.Thread(target=self._sender, daemon=True).start()
+
+    def close(self) -> None:
+        """Let queued lines land, then stop this session's sender."""
+        self.out.put(None)
 
     def _log(self, row: dict) -> None:   # append-only local record of what was sent (or not)
         HOME.mkdir(parents=True, exist_ok=True)
@@ -177,63 +220,88 @@ class Live:
         if text:
             self.out.put(("line", text, via, self._point()))
 
-    def point_only(self) -> None:
+    def point_only(self) -> bool:
         p = self._point()
         if p:
             self.out.put(("line", "", "pointer", p))
-        else:
-            print("  No fresh pointer point (point with Ctrl+Alt+M in the Nodach pointer first).")
+            return True
+        self.report("point", "failed", "no fresh pointer point in the last 2 minutes",
+                    "No fresh pointer point (point with Ctrl+Alt+M in the Nodach pointer first).")
+        return False
 
     def _sender(self) -> None:
         while True:
-            _, text, via, point = self.out.get()
+            job = self.out.get()
+            if job is None:
+                self.out.task_done()
+                return
+            _, text, via, point = job
             t = core.utcnow()
             ev = core.line_event(self.session, self.me, text, t, via, point)
             try:
                 did = self.hub.post(ev)
+                status = self.hub.last_status
                 task = core.parse_task(text)
-                drafted = ""
+                drafted = draft_id = ""
                 if task and self.me.get("owner"):
                     tev = core.task_event(self.session, did, task, self.me, core.utcnow())
                     self.hub.post(tev)
-                    drafted = f"  → draft {tev['body']['id']}"
-                print(f"  sent{' + point' if point else ''}: {text or '(point)'}{drafted}")
+                    draft_id = tev["body"]["id"]
+                    drafted = f"  → draft {draft_id}"
                 self._log({"ts": ev["ts"], "session": self.session, "doc_id": did, "text": text, "via": via, "sent": True})
+                self.report("send", "ok", core.send_detail(status, len(text), bool(point), draft_id),
+                            f"sent{' + point' if point else ''}: {text or '(point)'}{drafted}")
             except Exception as e:
-                print(f"  NOT sent ({e}). Kept in {HOME / 'lines.jsonl'}.")
                 self._log({"ts": ev["ts"], "session": self.session, "text": text, "via": via, "sent": False, "error": str(e)[:200]})
+                self.report("send", "failed", core.send_detail(getattr(e, "code", 0), len(text), bool(point), error=str(e)[:80]),
+                            f"NOT sent ({e}). Kept in {HOME / 'lines.jsonl'}.")
             finally:
                 self.out.task_done()
 
-    def end(self) -> None:
+    def end(self) -> bool:
         self.out.join()   # every line lands before the session closes
         t = core.iso(core.utcnow())
         if not self.me.get("owner"):
-            print("  Only an owner can end a session.")
-            return
+            self.report("session", "failed", "only an owner can end a session", "Only an owner can end a session.")
+            return False
         au = core.author(self.me)
         self.hub.post({"ts": t, "kind": "item.edit", "item": self.session, "branch": "main", "author": au,
                        "body": {"live": {"ended": t}, "body": f"Live session ended {t[:16].replace('T', ' ')} UTC from the desktop client."}})
         self.hub.post({"ts": t, "kind": "status", "item": self.session, "branch": "main", "author": au, "body": {"status": "open"}})
-        print(f"  Ended {self.session}.")
+        self.report("session", "ok", f"ended {self.session} · hub {self.hub.last_status}", f"Ended {self.session}.")
+        return True
 
 
 # ---------------------------------------------------------------- voice (optional)
+def model_roots():
+    return [Path(__file__).resolve().parent / "models", HOME / "models"]
+
+
+def load_model(model: str, say=print):
+    """(WhisperModel, where-it-came-from). A local faster-whisper-<model> folder wins; else it downloads once."""
+    from faster_whisper import WhisperModel   # optional; ImportError → typed only
+    local = core.local_model_dir(model_roots(), model)
+    if local:
+        say(f"Loading the {model} speech model from {local}…")
+        return WhisperModel(str(local), device="cpu", compute_type="int8"), f"local folder {local}"
+    say(f"Loading the {model} speech model on this PC (first run downloads it once)…")
+    try:
+        return WhisperModel(model, device="cpu", compute_type="int8"), "downloaded"
+    except Exception as e:
+        raise RuntimeError(f"couldn't download the {model} model ({type(e).__name__}). Put the folder "
+                           f"faster-whisper-{model} (from the Nodach model zip) into {HOME / 'models'} and rerun") from None
+
+
+def transcribe(model, audio) -> str:
+    segs, _ = model.transcribe(audio, language="en", vad_filter=True, beam_size=1)
+    return core.clean_text(" ".join(s.text for s in segs))
+
+
 class Voice:
     def __init__(self, live: Live, model: str):
-        from faster_whisper import WhisperModel   # optional; ImportError → typed only
-        local = core.local_model_dir([Path(__file__).resolve().parent / "models", HOME / "models"], model)
-        if local:
-            print(f"Loading the {model} speech model from {local}…")
-            self.model = WhisperModel(str(local), device="cpu", compute_type="int8")
-        else:
-            print(f"Loading the {model} speech model on this PC (first run downloads it once)…")
-            try:
-                self.model = WhisperModel(model, device="cpu", compute_type="int8")
-            except Exception as e:
-                raise RuntimeError(f"couldn't download the {model} model ({type(e).__name__}). Put the folder "
-                                   f"faster-whisper-{model} (from the Nodach model zip) into {HOME / 'models'} and rerun") from None
+        self.model, _ = load_model(model)
         self.live = live
+        self._last_toggle = 0.0
         self.talking = False
         self.always = False
         self.buf: list = []
@@ -248,10 +316,16 @@ class Voice:
                 self.buf.append(data[:, 0].copy())
 
     def _transcribe(self, audio, via: str) -> None:
-        if audio is None or len(audio) < RATE * 0.3:
+        secs = 0 if audio is None else len(audio) / RATE
+        if secs < 0.3:
+            if via == "voice":   # say so instead of dropping it silently (0.1.2 looked like it ignored the key)
+                print(f"  Nothing to send: only {secs:.1f} s was recorded. Press once to start, speak, press again.")
             return
-        segs, _ = self.model.transcribe(audio, language="en", vad_filter=True, beam_size=1)
-        self.live.say(" ".join(s.text for s in segs), via)
+        text = transcribe(self.model, audio)
+        if text:
+            self.live.say(text, via)
+        elif via == "voice":
+            print(f"  No speech heard in {secs:.1f} s (check the microphone, or speak closer).")
 
     def _take(self, upto=None):
         with self.lock:
@@ -259,6 +333,10 @@ class Voice:
         return np.concatenate(frames) if frames else None
 
     def toggle_talk(self) -> None:
+        now = time.monotonic()
+        if now - self._last_toggle < 0.4:   # one physical press can arrive twice; ignore the echo
+            return
+        self._last_toggle = now
         if self.always:
             print("  Always-on is listening already (Ctrl+Alt+A turns it off).")
             return
@@ -266,7 +344,7 @@ class Voice:
             with self.lock:
                 self.buf = []
             self.talking = True
-            print("  ● listening… (Ctrl+Alt+Space again to send)")
+            print("  ● listening… (Ctrl+Alt+J again to send)")
         else:
             self.talking = False
             audio = self._take()
@@ -336,10 +414,7 @@ def main(argv=None) -> int:
             return 1
         # the stored value expired or was wrong: forget it and ask once more
         print("The saved sign-in wasn't accepted (expired, or from a different sign-in).")
-        try:
-            token_file(a.hub).unlink()
-        except OSError:
-            pass
+        forget_token(a.hub)
         hub = Hub(a.hub, ask_token(a.hub))
         try:
             me = hub.me()
@@ -364,7 +439,7 @@ def main(argv=None) -> int:
     if voice and keyboard is not None:
         jobs = {"talk": voice.toggle_talk, "always": voice.toggle_always, "point": live.point_only}
         keyboard.GlobalHotKeys({k: jobs[j] for k, j in HOTKEYS.items()}).start()
-        print("Ctrl+Alt+Space talk/send · Ctrl+Alt+A always-on · Ctrl+Alt+L send latest point · or type below")
+        print("Ctrl+Alt+J talk/send · Ctrl+Alt+A always-on · Ctrl+Alt+L send latest point · or type below")
     else:
         print("Type a line and press Enter. /point sends the pointer's latest point · /end · /quit")
     while True:

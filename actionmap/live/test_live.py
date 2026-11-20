@@ -198,3 +198,248 @@ def test_local_model_dir(tmp_path):
     assert core.local_model_dir([tmp_path], "base") is None   # incomplete folder is ignored
     (d / core.MODEL_FILES[-1]).write_text("x")
     assert core.local_model_dir([tmp_path / "nope", tmp_path], "base") == d
+
+
+# ---------------------------------------------------------------- 0.2.0: the window's pure logic
+GOOD_TOKEN = "Morami49.1795000000000." + "b" * 64
+
+
+def test_version_and_hotkey_does_not_clash():
+    assert core.VERSION == "0.2.0"
+    assert core.GUI_HOTKEY == "<ctrl>+<alt>+j" and core.hotkey_clash(core.GUI_HOTKEY) is None
+    assert "Claude" in core.hotkey_clash("<ctrl>+<alt>+<space>")
+    for k in ("m", "b", "q", "p", "l"):
+        assert core.hotkey_clash(f"<ctrl>+<alt>+{k}")
+    import live_client
+    assert "<ctrl>+<alt>+<space>" not in live_client.HOTKEYS and all(core.hotkey_clash(k) is None or v != "talk" for k, v in live_client.HOTKEYS.items())
+
+
+def test_activity_rows_and_details():
+    r = core.activity_row("send", "ok", core.send_detail(200, 42, point=True, draft="TK-1"), T)
+    assert r["step"] == "send" and r["outcome"] == "ok" and r["ts"] == core.iso(T) and len(r["time"]) == 8
+    assert r["detail"] == "hub 200 · 42 chars · with pointer point · draft TK-1"
+    assert core.activity_row("weird", "maybe", "", T)["step"] == "?weird"
+    assert core.activity_row("send", "failed", "x" * 500, T)["detail"] == "x" * 160
+    assert core.send_detail(0, 0, error="boom") == "hub unreachable · no text · boom"
+    assert core.record_detail(4.24, 0.312) == "4.2 s recorded, peak level 0.31"
+    assert core.transcribe_detail(2.0, 17, 0.84) == "2.0 s of audio -> 17 chars in 0.8 s"
+    line = core.format_row(r)
+    assert line.startswith(r["time"]) and "send" in line and line.endswith("draft TK-1")
+
+
+def test_level_meter_and_talk_label():
+    assert core.level_fraction(0) == 0 and core.level_fraction(None) == 0
+    assert core.level_fraction(1.0) == 1.0 and core.level_fraction(5) == 1.0
+    assert abs(core.level_fraction(0.001) - 0.0) < 1e-9          # -60 dB
+    assert 0.4 < core.level_fraction(0.03) < 0.6                 # about -30 dB, a normal voice
+    assert core.talk_label(False) == "● Talk"
+    assert core.talk_label(True, 7.9) == "■ Stop and send  0:07"
+    assert core.talk_label(True, 75, always=True) == "■ Stop listening  1:15"
+
+
+def test_input_devices_like_windows():
+    hostapis = [{"name": "MME"}, {"name": "Windows DirectSound"}, {"name": "Windows WASAPI"}]
+    devs = [
+        {"name": "Microsoft Sound Mapper - Input", "max_input_channels": 2, "hostapi": 0},
+        {"name": "Microphone (Realtek(R) Audio)", "max_input_channels": 2, "hostapi": 0},
+        {"name": "Headset (Jabra)  ", "max_input_channels": 1, "hostapi": 0},
+        {"name": "Speakers (Realtek(R) Audio)", "max_input_channels": 0, "hostapi": 0},
+        {"name": "Microphone (Realtek(R) Audio)", "max_input_channels": 2, "hostapi": 1},
+        {"name": "Microphone (Realtek(R) Audio)", "max_input_channels": 2, "hostapi": 2},
+    ]
+    out = core.input_devices(devs, 1, hostapis)
+    assert [d["label"] for d in out] == ["Microphone (Realtek(R) Audio)", "Microsoft Sound Mapper - Input", "Headset (Jabra)"]
+    assert out[0] == {"index": 1, "label": "Microphone (Realtek(R) Audio)", "default": True}
+    # no default known: every microphone, sound system named when they differ, duplicates dropped
+    out2 = core.input_devices(devs, -1, hostapis)
+    assert len(out2) == 3 and not any(d["default"] for d in out2) and "(MME)" in out2[0]["label"]
+    assert core.input_devices([], 0) == [] and core.input_devices([{"name": "Out", "max_input_channels": 0}], 0) == []
+
+
+def _ev(kind, item, body, who="github:Morami49", ts="2026-11-19T10:00:00.000Z"):
+    return {"doc_id": "d" + ts + kind, "event": {"kind": kind, "item": item, "body": body, "ts": ts, "author": {"id": who}}}
+
+
+def test_session_list_live_first_newest_first():
+    docs = [_ev("item.create", None, {"id": "LV-a", "source": "live", "status": "live", "live": {"started": "2026-11-18T09:00:00.000Z"}}, ts="2026-11-18T09:00:00.000Z"),
+            _ev("item.create", None, {"id": "LV-b", "source": "live", "status": "live", "live": {"started": "2026-11-19T09:00:00.000Z"}}, ts="2026-11-19T09:00:00.000Z"),
+            _ev("item.create", None, {"id": "LV-c", "source": "live", "status": "live", "live": {"started": "2026-11-20T09:00:00.000Z"}}, ts="2026-11-20T09:00:00.000Z"),
+            _ev("status", "LV-c", {"status": "open"}, ts="2026-11-20T10:00:00.000Z"),
+            _ev("item.create", None, {"id": "LV-other", "source": "live", "status": "live", "live": {"audience": ["github:x"]}}, who="github:x", ts="2026-11-20T11:00:00.000Z"),
+            _ev("item.create", None, {"id": "SH-1", "source": "show", "status": "live"})]
+    rows = core.session_list(docs, "github:Morami49", owner=True)
+    assert [(r["id"], r["state"]) for r in rows] == [("LV-other", "live"), ("LV-b", "live"), ("LV-a", "live"), ("LV-c", "open")]
+    assert rows[1]["label"] == "LV-b · live"
+    member = core.session_list(docs, "github:Morami49", owner=False)
+    assert "LV-other" not in [r["id"] for r in member]
+    assert core.session_list([], "x") == []
+
+
+def test_scrub_keeps_secrets_and_outside_paths_out():
+    s = core.scrub(f"token {GOOD_TOKEN} nodach_session=x a.person@example.com "
+                   r"C:\Users\Al\Downloads\nodach-live\models\faster-whisper-base and C:\Users\Al\Documents\cv.docx "
+                   "/home/al/nodach-live/lines.jsonl " + "f" * 64)
+    assert GOOD_TOKEN not in s and "b" * 64 not in s and "example.com" not in s and "nodach_session" not in s
+    assert "nodach-live/models/faster-whisper-base" in s and "Documents" not in s and "Users" not in s and "[path]" in s
+    assert "nodach-live/lines.jsonl" in s and "f" * 64 not in s
+
+
+def test_report_has_the_facts_and_nothing_private():
+    rows = [core.activity_row("record", "ok", f"row {i}", T) for i in range(40)]
+    rows.append(core.activity_row("send", "failed", f"hub 401 · {GOOD_TOKEN} · C:\\Users\\Al\\secret\\x.txt", T))
+    info = {"version": "0.2.0", "os": "Windows-11-10.0.22631-SP0", "python": "3.12.4", "hub": "staging (https://staging.nodach.com)",
+            "role": "owner", "session": "LV-261120-101010-abcd", "mic": "Microphone (Realtek(R) Audio)",
+            "model": r"base · local folder C:\Users\Al\Downloads\nodach-live\models\faster-whisper-base", "model_status": "ready",
+            "settings": {"keep_listening": False, "attach_point": True, "speech_level": 0.015}}
+    rep = core.build_report(info, rows)
+    for want in ("client 0.2.0", "Windows-11", "staging", "signed in: owner", "LV-261120-101010-abcd", "Realtek",
+                 "nodach-live/models/faster-whisper-base", "ready", "keep_listening=off", "attach_point=on", "speech_level=0.015",
+                 "last 30 rows, 1 failed"):
+        assert want in rep, want
+    assert rep.count("\n") == 10 + 30 and "row 10" not in rep.split("detail\n", 1)[1].split("\n")[0] and "row 11" in rep
+    assert GOOD_TOKEN not in rep and "secret" not in rep and "Users" not in rep and "@" not in rep
+    empty = core.build_report({}, [])
+    assert "not signed in" in empty and "(nothing yet)" in empty
+
+
+def test_report_event_is_a_comment_on_the_session():
+    e = core.report_event("LV-x", OWNER, "report text " + GOOD_TOKEN, T)
+    assert e["kind"] == "comment" and e["item"] == "LV-x" and e["ts"] == core.iso(T)
+    assert e["body"] == {"text": "report text [sign-in value]", "report": True}
+    assert e["author"]["role"] == "owner" and "@" not in json.dumps(e)
+
+
+# ---------------------------------------------------------------- 0.2.0: shared client pieces (stand-in hub)
+def _stand_in_hub(status=200, sessions=()):
+    import http.server
+    import threading
+    got = []
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def _send(self, code, obj):
+            self.send_response(code); self.send_header("content-type", "application/json"); self.end_headers()
+            self.wfile.write(json.dumps(obj).encode())
+
+        def do_GET(self):
+            got.append({"method": "GET", "path": self.path, "cookie": self.headers.get("cookie")})
+            if status != 200:
+                return self._send(status, {"error": "no"})
+            if self.path.startswith("/studio/api/me"):
+                return self._send(200, {"id": "github:Morami49", "login": "Morami49", "owner": True})
+            ev = list(sessions)
+            return self._send(200, {"events": ev, "next": len(ev), "total": len(ev)})
+
+        def do_POST(self):
+            n = int(self.headers.get("content-length", 0))
+            got.append({"method": "POST", "path": self.path, "cookie": self.headers.get("cookie"), "body": json.loads(self.rfile.read(n))})
+            self._send(status, {"imported": 1} if status == 200 else {"error": "signed out"})
+
+    srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv, got, f"http://127.0.0.1:{srv.server_address[1]}"
+
+
+def test_live_reports_each_send_with_the_hub_status(tmp_path, monkeypatch):
+    import live_client
+    monkeypatch.setattr(live_client, "HOME", tmp_path)
+    monkeypatch.setattr(live_client, "POINTER_EVENTS", tmp_path / "none.jsonl")
+    for status, outcome in ((200, "ok"), (401, "failed")):
+        srv, got, url = _stand_in_hub(status)
+        rows = []
+        hub = live_client.Hub(url, GOOD_TOKEN)
+        assert GOOD_TOKEN not in repr(hub)
+        live = live_client.Live(hub, OWNER, "LV-x", report=lambda *a: rows.append(a))
+        live.say("hello there", "typed")
+        live.out.join()
+        live.close()
+        srv.shutdown()
+        assert rows and rows[0][0] == "send" and rows[0][1] == outcome and f"hub {status}" in rows[0][2], rows
+        assert GOOD_TOKEN not in json.dumps(rows)
+    try:
+        live_client.Hub("http://127.0.0.1:9", GOOD_TOKEN).me()
+    except live_client.HubError as e:
+        assert e.code == 0 and GOOD_TOKEN not in str(e)
+    else:
+        raise AssertionError("expected HubError")
+
+
+def test_saved_sign_in_round_trip(tmp_path, monkeypatch):
+    import live_client
+    monkeypatch.setattr(live_client, "HOME", tmp_path)
+    monkeypatch.delenv("NODACH_LIVE_TOKEN", raising=False)
+    url = "https://staging.nodach.com"
+    assert live_client.stored_token(url) is None
+    live_client.save_token(url, GOOD_TOKEN)
+    assert live_client.stored_token(url) == GOOD_TOKEN
+    assert [p.name for p in tmp_path.iterdir()] == ["session-staging.nodach.com.txt"]
+    live_client.forget_token(url)
+    assert live_client.stored_token(url) is None
+    monkeypatch.setenv("NODACH_LIVE_TOKEN", f'"{GOOD_TOKEN}"')
+    assert live_client.stored_token(url) == GOOD_TOKEN
+
+
+# ---------------------------------------------------------------- 0.2.0: the window itself (only where a display exists)
+def test_gui_end_to_end_against_a_stand_in_hub(tmp_path, monkeypatch):
+    """Skipped without tkinter or a display (CI); runs under xvfb-run locally. Signs in from a saved value, lists
+    sessions, picks the live one, sends a typed line, copies a report and sends it as a comment."""
+    import os
+    import time as _t
+    import pytest
+    tk = pytest.importorskip("tkinter")
+    try:
+        probe = tk.Tk()
+        probe.destroy()
+    except tk.TclError:
+        pytest.skip("no display")
+    import live_client
+    import live_gui
+    sessions = [_ev("item.create", None, {"id": "LV-261120-090000-aaaa", "source": "live", "status": "live",
+                                          "live": {"started": "2026-11-20T09:00:00.000Z"}}, ts="2026-11-20T09:00:00.000Z")]
+    srv, got, url = _stand_in_hub(200, sessions)
+    monkeypatch.setattr(live_client, "HOME", tmp_path)
+    monkeypatch.setattr(live_client, "POINTER_EVENTS", tmp_path / "none.jsonl")
+    monkeypatch.setitem(core.HUBS, "staging", url)
+    monkeypatch.setenv("NODACH_LIVE_TOKEN", GOOD_TOKEN)
+    root = tk.Tk()
+    app = live_gui.App(root, "staging", "base")
+
+    def pump(cond, secs=10):
+        end = _t.monotonic() + secs
+        while _t.monotonic() < end:
+            root.update()
+            if cond():
+                return True
+            _t.sleep(0.02)
+        return False
+    try:
+        assert pump(lambda: app.live is not None), [r["detail"] for r in app.rows]
+        assert app.who_var.get() == "Signed in as owner" and app.session_var.get() == "LV-261120-090000-aaaa · live"
+        assert str(app.end_btn["state"]) != "disabled"
+        app.text_var.set("hello from the window")
+        app.send_typed()
+        assert pump(lambda: any(r["step"] == "send" for r in app.rows))
+        sent = [r for r in app.rows if r["step"] == "send"][-1]
+        assert sent["outcome"] == "ok" and "hub 200" in sent["detail"]
+        app.toggle_talk()   # no speech model here: a clear failed row, not silence
+        assert app.rows[-1]["step"] == "record" and app.rows[-1]["outcome"] == "failed"
+        app.copy_report()
+        rep = root.clipboard_get()
+        assert "client 0.2.0" in rep and "LV-261120-090000-aaaa" in rep and "signed in: owner" in rep and GOOD_TOKEN not in rep
+        app.send_report()
+        assert pump(lambda: any(r["step"] == "report" and "comment" in r["detail"] for r in app.rows))
+        posts = [g["body"]["event"] for g in got if g["method"] == "POST"]
+        assert [p["kind"] for p in posts] == ["live.line", "comment"]
+        assert posts[1]["body"]["report"] is True and posts[1]["item"] == "LV-261120-090000-aaaa"
+        assert GOOD_TOKEN not in json.dumps(posts)
+        assert GOOD_TOKEN not in (tmp_path / "activity.jsonl").read_text()
+        assert os.listdir(tmp_path) and "session-" not in " ".join(os.listdir(tmp_path))   # env sign-in isn't written to disk
+    finally:
+        app._close()
+        try:
+            pump(lambda: False, 0.5)
+        except tk.TclError:
+            pass
+        srv.shutdown()

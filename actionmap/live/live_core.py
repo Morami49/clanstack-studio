@@ -20,7 +20,7 @@ import re
 from pathlib import Path
 import secrets
 
-VERSION = "0.1.2"
+VERSION = "0.2.0"
 LINE_KIND = "live.line"
 MAX_TEXT = 2000
 POINT_MAX_AGE_S = 120          # a pointer point older than this isn't attached to a new line
@@ -202,3 +202,179 @@ def local_model_dir(roots, model: str):
         if all((d / f).is_file() for f in MODEL_FILES):
             return d
     return None
+
+
+# ---------------------------------------------------------------- the window (live_gui.py): pure helpers
+HUBS = {"staging": "https://staging.nodach.com", "production": "https://studio.nodach.com"}
+
+# Keys other Nodach tools (and the Claude desktop app) already use. Ctrl+Alt+Space is Claude's quick-entry box.
+RESERVED_HOTKEYS = {
+    "<ctrl>+<alt>+m": "Nodach pointer: point",
+    "<ctrl>+<alt>+b": "Nodach pointer: batch",
+    "<ctrl>+<alt>+q": "Nodach pointer: quit",
+    "<ctrl>+<alt>+p": "ActionMap capture",
+    "<ctrl>+<alt>+l": "Live: send latest point (command line)",
+    "<ctrl>+<alt>+a": "Live: always-on (command line)",
+    "<ctrl>+<alt>+<space>": "Claude desktop app: quick entry",
+}
+GUI_HOTKEY = "<ctrl>+<alt>+j"
+
+STEPS = ("record", "transcribe", "send", "sign-in", "session", "point", "mic", "model", "report", "setup")
+OUTCOMES = ("ok", "failed", "empty speech", "info")
+REPORT_ROWS = 30
+
+
+def hotkey_clash(combo: str):
+    """What already uses this key combination, or None if it's free."""
+    return RESERVED_HOTKEYS.get(str(combo or "").lower().replace(" ", ""))
+
+
+def activity_row(step: str, outcome: str, detail: str = "", t: dt.datetime | None = None) -> dict:
+    """One row of the window's activity list. Unknown steps/outcomes are kept but marked, so nothing is lost."""
+    t = t or utcnow()
+    return {"ts": iso(t), "time": t.astimezone().strftime("%H:%M:%S"),
+            "step": step if step in STEPS else f"?{step}", "outcome": outcome if outcome in OUTCOMES else f"?{outcome}",
+            "detail": scrub(detail)[:160]}
+
+
+def format_row(row: dict) -> str:
+    """A fixed-width line for the plain-text report."""
+    return f"{row.get('time', ''):8}  {row.get('step', ''):10}  {row.get('outcome', ''):12}  {row.get('detail', '')}".rstrip()
+
+
+def record_detail(seconds: float, peak: float) -> str:
+    return f"{seconds:.1f} s recorded, peak level {peak:.2f}"
+
+
+def transcribe_detail(seconds: float, chars: int, took_s: float) -> str:
+    return f"{seconds:.1f} s of audio -> {chars} chars in {took_s:.1f} s"
+
+
+def send_detail(status, chars: int, point: bool = False, draft: str = "", error: str = "") -> str:
+    parts = [f"hub {status}" if status else "hub unreachable", f"{chars} chars" if chars else "no text"]
+    if point:
+        parts.append("with pointer point")
+    if draft:
+        parts.append(f"draft {draft}")
+    if error:
+        parts.append(error)
+    return " · ".join(parts)
+
+
+def level_fraction(rms: float) -> float:
+    """Microphone loudness (RMS, 0..1) as a 0..1 bar length on a decibel scale: -60 dB is empty, 0 dB full."""
+    import math
+    if not rms or rms <= 0:
+        return 0.0
+    return max(0.0, min(1.0, (20 * math.log10(rms) + 60) / 60))
+
+
+def talk_label(recording: bool, seconds: float = 0.0, always: bool = False) -> str:
+    if not recording:
+        return "● Talk"
+    m, s = divmod(int(seconds), 60)
+    return f"■ Stop listening  {m}:{s:02d}" if always else f"■ Stop and send  {m}:{s:02d}"
+
+
+def input_devices(devices, default_index=None, hostapis=None):
+    """sounddevice.query_devices() → [{index, label, default}] for microphones only, the default first.
+
+    Windows lists every microphone once per sound system (MME, DirectSound, WASAPI, WDM-KS); only the ones on the
+    default device's sound system are kept, so the list reads like Windows' own. Names are trimmed."""
+    devs = [dict(d, index=d.get("index", i)) for i, d in enumerate(devices or []) if (d or {}).get("max_input_channels", 0) > 0]
+    if not devs:
+        return []
+    by_index = {d["index"]: d for d in devs}
+    default = by_index.get(default_index)
+    if default is not None and "hostapi" in default:
+        same = [d for d in devs if d.get("hostapi") == default["hostapi"]]
+        devs = same or devs
+    names = {}
+    if hostapis:
+        names = {i: (h or {}).get("name", "") for i, h in enumerate(hostapis)}
+    out, seen = [], set()
+    for d in devs:
+        name = re.sub(r"\s+", " ", str(d.get("name") or "microphone")).strip()[:60]
+        if name in seen:
+            continue
+        seen.add(name)
+        label = name + (f" ({names[d['hostapi']]})" if names.get(d.get("hostapi")) and len({x.get("hostapi") for x in devs}) > 1 else "")
+        out.append({"index": d["index"], "label": label, "default": d["index"] == default_index})
+    out.sort(key=lambda d: not d["default"])
+    return out
+
+
+def session_list(docs, me_id: str, owner: bool = False):
+    """Every live session in /studio/api/events rows you can use: [{id, state, title, started, label}], live ones
+    first, newest first within each group. Owners see all; members see the ones they started or were given."""
+    found, order = {}, []
+    for d in docs:
+        e = (d or {}).get("event") or {}
+        b = e.get("body") or {}
+        if e.get("kind") == "item.create" and b.get("source") == "live" and str(b.get("id", "")).startswith("LV-") and b["id"] not in found:
+            aud = ((b.get("live") or {}).get("audience") or [])
+            mine = (e.get("author") or {}).get("id") == me_id
+            if owner or mine or me_id in aud or not aud:
+                found[b["id"]] = {"id": b["id"], "state": b.get("status", "open"), "title": str(b.get("title") or "")[:80],
+                                  "started": (b.get("live") or {}).get("started") or e.get("ts") or ""}
+                order.append(b["id"])
+        elif e.get("kind") == "status" and e.get("item") in found:
+            found[e["item"]]["state"] = b.get("status") or found[e["item"]]["state"]
+    rows = sorted(found.values(), key=lambda r: r["started"], reverse=True)
+    rows.sort(key=lambda r: r["state"] != "live")   # stable: live first, newest first inside each group
+    for r in rows:
+        r["label"] = f"{r['id']} · {r['state']}"
+    return rows
+
+
+_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+_TOKEN_ANY_RE = re.compile(r"[A-Za-z0-9-]{1,39}\.\d{10,16}\.[0-9a-f]{64}")
+_LONGHEX_RE = re.compile(r"\b[0-9a-f]{40,}\b")
+_PATH_RE = re.compile(r"(?:[A-Za-z]:[\\/]|\\\\|~[\\/]|/(?:home|Users|tmp|mnt|root|var)/)[^\s'\"<>|]*")
+
+
+def scrub(text) -> str:
+    """Make a line safe for a shared report: no sign-in values, email addresses or long secrets, and file paths cut
+    down to the part inside the nodach-live folder (anything else becomes [path])."""
+    t = str(text if text is not None else "")
+    t = _TOKEN_ANY_RE.sub("[sign-in value]", t)
+    t = t.replace("nodach_session=", "")
+    t = _EMAIL_RE.sub("[email]", t)
+    t = _LONGHEX_RE.sub("[hex]", t)
+
+    def _path(m):
+        p = m.group(0)
+        parts = re.split(r"[\\/]+", p)
+        if "nodach-live" in parts:
+            return "/".join(parts[parts.index("nodach-live"):])
+        return "[path]"
+    return _PATH_RE.sub(_path, t)
+
+
+def build_report(info: dict, rows, n: int = REPORT_ROWS) -> str:
+    """The plain-text report the window copies or sends. info: version, os, python, hub, role, session, mic, model,
+    model_status, settings (dict). Never the sign-in value, audio, transcripts, window titles or outside paths."""
+    settings = info.get("settings") or {}
+    head = [
+        f"Nodach Live report · client {info.get('version', VERSION)} · {info.get('at') or iso(utcnow())}",
+        f"os: {info.get('os', '?')} · python {info.get('python', '?')}",
+        f"hub: {info.get('hub', '?')}",
+        f"signed in: {info.get('role') or 'not signed in'}",
+        f"session: {info.get('session') or 'none selected'}",
+        f"microphone: {info.get('mic') or 'none'}",
+        f"speech model: {info.get('model', '?')} · {info.get('model_status', '?')}",
+        "settings: " + (", ".join(f"{k}={'on' if v is True else 'off' if v is False else v}" for k, v in settings.items()) or "-"),
+    ]
+    rows = list(rows or [])[-n:]
+    fails = sum(1 for r in rows if r.get("outcome") == "failed")
+    head.append(f"activity: last {len(rows)} rows, {fails} failed")
+    head.append(f"{'time':8}  {'step':10}  {'outcome':12}  detail")
+    body = [format_row(r) for r in rows] or ["(nothing yet)"]
+    return "\n".join(scrub(x) for x in head + body) + "\n"
+
+
+def report_event(session: str, me: dict, text: str, t: dt.datetime, branch: str = "main") -> dict:
+    """The report as a comment on the session item, so Claude can read it through the connector."""
+    ts = iso(t)
+    return {"ts": ts, "kind": "comment", "item": session, "branch": branch,
+            "body": {"text": scrub(text)[:8000], "report": True}, "author": author(me)}
