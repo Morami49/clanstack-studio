@@ -852,7 +852,7 @@ async def s44_show_replay(b):
 FAKE_CLOCK = "window.__fake = 0; window.__clockNow = () => window.__fake;"
 
 
-async def s46_show_pause_clock(b):
+async def s49_show_pause_clock(b):
     """F-show-pause-clock (20 Nov, staging): pauses a show for five seconds on a fake clock. The timer freezes while paused,
     and paused time is left out of every step's t_ms, the cursor trail and the saved duration; the save box holds it too."""
     st = Store(); p = await open_page(b, st, {})
@@ -884,7 +884,7 @@ async def s46_show_pause_clock(b):
     return ok, f"timer while paused={timer_paused} (elapsed {el_paused}), step t_ms={t_ms}, live t_ms={live}, duration={sh.get('duration_ms')}, timer in save box={timer_stop}, cursor times={curs}, errors={p.errors[:1]}"
 
 
-async def s47_show_states(b):
+async def s50_show_states(b):
     """Show is an explicit state machine: open, cancel, open, start, pause, stop, keep (back to paused), resume, stop, discard.
     NodachShow.state() reads the state and an ordered trace; an event the state doesn't take is refused and traced."""
     st = Store(); p = await open_page(b, st, {})
@@ -1057,7 +1057,7 @@ async def s39_scheduled_steps(b):
     return ok, f"post only-new by default={only_new}, no schedule on wired-into step={no_sched_mid}, hours saved={hours}, badge shown={badge}, bad hour refused={refused}, errors={p.errors[:1]}"
 
 
-async def s48_show_marks_follow_canvas(b):
+async def s51_show_marks_follow_canvas(b):
     """F-show-replay-drift (20 Nov, staging): points at a node on the canvas and draws on another while showing, then drags
     the map and moves the first node. Live and in the replay, each badge stays on the node it marked (map units and
     node anchor kept), not at the old screen spot."""
@@ -1134,7 +1134,7 @@ SCENARIOS = [s01_tired_misclick, s02_undo, s03_stable_codes, s04_past_view_lock,
              s20_addresses, s21_money_settings, s22_duplicate_id, s23_same_order_everywhere,
              s24_hub_sync, s25_more_than_1000, s26_hub_not_connected, s27_read_on_open, s28_push_after_clean_runs, s29_runs_timeline, s30_builder_pipeline, s31_content_cycles, s32_private_files_and_views, s33_studio_edits_studio, s34_command_map, s35_history_words, s36_canvas, s37_classic_map_fallback, s38_runnable_steps, s39_scheduled_steps, s40_point_mode,
              s41_multi_point, s42_show_record_save, s43_show_pause, s44_show_replay, s45_my_queue,
-             s46_show_pause_clock, s47_show_states, s48_show_marks_follow_canvas]
+             s49_show_pause_clock, s50_show_states, s51_show_marks_follow_canvas]
 
 
 async def main():
