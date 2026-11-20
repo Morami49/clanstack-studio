@@ -205,7 +205,7 @@ GOOD_TOKEN = "Morami49.1795000000000." + "b" * 64
 
 
 def test_version_and_hotkey_does_not_clash():
-    assert core.VERSION == "0.2.0"
+    assert core.VERSION == "0.2.1"
     assert core.GUI_HOTKEY == "<ctrl>+<alt>+j" and core.hotkey_clash(core.GUI_HOTKEY) is None
     assert "Claude" in core.hotkey_clash("<ctrl>+<alt>+<space>")
     for k in ("m", "b", "q", "p", "l"):
@@ -248,11 +248,11 @@ def test_input_devices_like_windows():
         {"name": "Microphone (Realtek(R) Audio)", "max_input_channels": 2, "hostapi": 2},
     ]
     out = core.input_devices(devs, 1, hostapis)
-    assert [d["label"] for d in out] == ["Microphone (Realtek(R) Audio)", "Microsoft Sound Mapper - Input", "Headset (Jabra)"]
-    assert out[0] == {"index": 1, "label": "Microphone (Realtek(R) Audio)", "default": True}
+    assert [d["label"] for d in out] == ["Microphone (Realtek(R) Audio)", "Headset (Jabra)"]
+    assert out[0] == {"index": 1, "label": "Microphone (Realtek(R) Audio)", "default": True, "kind": "mic"}
     # no default known: every microphone, sound system named when they differ, duplicates dropped
     out2 = core.input_devices(devs, -1, hostapis)
-    assert len(out2) == 3 and not any(d["default"] for d in out2) and "(MME)" in out2[0]["label"]
+    assert len(out2) == 2 and not any(d["default"] for d in out2) and "(MME)" in out2[0]["label"]
     assert core.input_devices([], 0) == [] and core.input_devices([{"name": "Out", "max_input_channels": 0}], 0) == []
 
 
@@ -443,3 +443,18 @@ def test_gui_end_to_end_against_a_stand_in_hub(tmp_path, monkeypatch):
         except tk.TclError:
             pass
         srv.shutdown()
+
+
+def test_mic_ranking_and_find_my_mic():
+    devs = [
+        {"name": "Microsoft Sound Mapper - Input", "max_input_channels": 2, "hostapi": 0},
+        {"name": "Microphone (DroidCam Audio)", "max_input_channels": 1, "hostapi": 0},
+        {"name": "Stereo Mix (Realtek(R) Audio)", "max_input_channels": 2, "hostapi": 0},
+        {"name": "Microphone Array (Realtek(R) Audio)", "max_input_channels": 2, "hostapi": 0},
+    ]
+    out = core.input_devices(devs, default_index=1)
+    assert [d["kind"] for d in out] == ["mic", "virtual", "loopback"]
+    assert out[0]["label"].startswith("Microphone Array")
+    assert "not your voice" in out[2]["label"]
+    assert core.pick_loudest([(out[2], 0.5), (out[1], 0.0), (out[0], 0.1)]) is out[0]
+    assert core.pick_loudest([(out[2], 0.5)]) is None

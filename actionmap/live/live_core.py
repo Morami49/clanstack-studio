@@ -20,7 +20,7 @@ import re
 from pathlib import Path
 import secrets
 
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 LINE_KIND = "live.line"
 MAX_TEXT = 2000
 POINT_MAX_AGE_S = 120          # a pointer point older than this isn't attached to a new line
@@ -276,11 +276,34 @@ def talk_label(recording: bool, seconds: float = 0.0, always: bool = False) -> s
     return f"■ Stop listening  {m}:{s:02d}" if always else f"■ Stop and send  {m}:{s:02d}"
 
 
+_LOOPBACK = ("stereo mix", "what u hear", "wave out", "loopback", "mixage stéréo", "stereomix")
+_VIRTUAL = ("droidcam", "virtual", "cable output", "voicemeeter", "vb-audio", "obs", "nvidia broadcast", "krisp", "iriun")
+_MAPPER = ("sound mapper", "primary sound capture")
+
+
+def mic_kind(name: str) -> str:
+    """mic | virtual | loopback | mapper. Loopback devices record what the PC plays (not your voice); virtual ones
+    come from apps (phone-as-webcam, mixers) and are often silent; mappers are Windows aliases for the default."""
+    n = (name or "").lower()
+    if any(k in n for k in _MAPPER):
+        return "mapper"
+    if any(k in n for k in _LOOPBACK):
+        return "loopback"
+    if any(k in n for k in _VIRTUAL):
+        return "virtual"
+    return "mic"
+
+
+_KIND_NOTE = {"virtual": " — app device, may be silent", "loopback": " — records PC sound, not your voice"}
+
+
 def input_devices(devices, default_index=None, hostapis=None):
-    """sounddevice.query_devices() → [{index, label, default}] for microphones only, the default first.
+    """sounddevice.query_devices() → [{index, label, default, kind}] for inputs, real microphones first.
 
     Windows lists every microphone once per sound system (MME, DirectSound, WASAPI, WDM-KS); only the ones on the
-    default device's sound system are kept, so the list reads like Windows' own. Names are trimmed."""
+    default device's sound system are kept. Order: real microphones (the Windows default first), then app/virtual
+    devices, then loopback ('Stereo Mix'); Windows' mapper aliases are dropped. 20 Nov: the app picked DroidCam
+    (silent) as default and Stereo Mix got chosen, so speech arrived as silence."""
     devs = [dict(d, index=d.get("index", i)) for i, d in enumerate(devices or []) if (d or {}).get("max_input_channels", 0) > 0]
     if not devs:
         return []
@@ -295,13 +318,25 @@ def input_devices(devices, default_index=None, hostapis=None):
     out, seen = [], set()
     for d in devs:
         name = re.sub(r"\s+", " ", str(d.get("name") or "microphone")).strip()[:60]
-        if name in seen:
+        kind = mic_kind(name)
+        if kind == "mapper" or name in seen:
             continue
         seen.add(name)
         label = name + (f" ({names[d['hostapi']]})" if names.get(d.get("hostapi")) and len({x.get("hostapi") for x in devs}) > 1 else "")
-        out.append({"index": d["index"], "label": label, "default": d["index"] == default_index})
-    out.sort(key=lambda d: not d["default"])
+        out.append({"index": d["index"], "label": label + _KIND_NOTE.get(kind, ""), "default": d["index"] == default_index, "kind": kind})
+    rank = {"mic": 0, "virtual": 1, "loopback": 2}
+    out.sort(key=lambda d: (rank[d["kind"]], not d["default"]))
     return out
+
+
+def pick_loudest(results, floor: float = 0.02):
+    """results: [(device, peak)] from 'Find my mic'. The loudest real microphone above the floor, else the
+    loudest non-loopback device above it, else None."""
+    ok = [(d, p) for d, p in results if p >= floor and d.get("kind") != "loopback"]
+    if not ok:
+        return None
+    mics = [x for x in ok if x[0].get("kind") == "mic"]
+    return max(mics or ok, key=lambda x: x[1])[0]
 
 
 def session_list(docs, me_id: str, owner: bool = False):

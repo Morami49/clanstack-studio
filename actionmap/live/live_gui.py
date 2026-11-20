@@ -176,6 +176,8 @@ class App:
         self.meter = tk.Canvas(f3, width=160, height=14, bg="#eee", highlightthickness=1, highlightbackground="#aaa")
         self.meter.grid(row=0, column=1, padx=8)
         self.meter_bar = self.meter.create_rectangle(0, 0, 0, 14, fill="#3a3", width=0)
+        self.find_btn = ttk.Button(f3, text="Find my mic", command=self.find_mic)
+        self.find_btn.grid(row=0, column=2, padx=4)
         self.model_var = tk.StringVar(value=f"speech model ({self.model_name}): loading…")
         ttk.Label(f3, textvariable=self.model_var).grid(row=1, column=0, columnspan=2, sticky="w", padx=4)
         self.install_btn = ttk.Button(f3, text="Install voice packages", command=self.install_packages)
@@ -444,7 +446,7 @@ class App:
             self.mic_box.configure(values=["microphone support not installed"])
             self.mic_box.current(0)
             self.mic_box.state(["disabled"])
-            self.install_btn.grid(row=0, column=2, padx=4)
+            self.install_btn.grid(row=0, column=3, padx=4)
             self.row("mic", "failed", f"no microphone support ({lc.AUDIO_MISSING[:60]}): click Install voice packages")
             return
         try:
@@ -461,6 +463,44 @@ class App:
         self.mic_box.configure(values=[d["label"] for d in self.devices])
         self.mic_box.current(0)
         self.row("mic", "ok", f"{len(self.devices)} microphones · default: {self.devices[0]['label']}")
+
+    def find_mic(self):
+        """Listen 1.5 s on each input while he talks; pick the loudest real microphone and log every level."""
+        if lc.AUDIO_MISSING or lc.sd is None or not self.devices:
+            self.row("mic", "failed", "no microphones to test")
+            return
+        if getattr(self, "rec", None) is not None:
+            self.row("mic", "info", "stop talking first, then Find my mic")
+            return
+        self.find_btn.state(["disabled"])
+        self.row("mic", "info", f"testing {len(self.devices)} inputs: keep talking for {int(1.5 * len(self.devices)) + 1} s")
+
+        def work():
+            results = []
+            for d in self.devices:
+                r = Recorder(d["index"])
+                try:
+                    r.start()
+                    time.sleep(1.5)
+                    r.stop()
+                    results.append((d, r.peak))
+                    self.later(self.row, "mic", "info", f"{d['label'][:40]}: peak {r.peak:.3f}")
+                except Exception as e:
+                    r.stop()
+                    results.append((d, 0.0))
+                    self.later(self.row, "mic", "failed", f"{d['label'][:40]}: {type(e).__name__}")
+            best = core.pick_loudest(results)
+            self.later(self._found_mic, best)
+
+        self.bg(work)
+
+    def _found_mic(self, best):
+        self.find_btn.state(["!disabled"])
+        if best is None:
+            self.row("mic", "failed", "no input heard you: check Windows Settings > Privacy > Microphone, and the mic's mute switch")
+            return
+        self.mic_var.set(best["label"])
+        self.row("mic", "ok", f"using {best['label']}")
 
     def mic_device(self):
         label = self.mic_var.get()
