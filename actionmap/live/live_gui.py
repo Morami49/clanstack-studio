@@ -1,5 +1,5 @@
 """
-Nodach Live — the window (B-live-session, client 0.2.0)
+Nodach Live — the window (B-live-session, client 0.2.2)
 =======================================================
 A click-only way to talk into a Nodach Studio live session: no command line and no keyboard shortcuts needed.
 start-live.bat opens this window; start-live-cli.bat still opens the old command-line client.
@@ -117,6 +117,9 @@ class App:
         self.last_toggle = 0.0
         self.hotkeys = None
         self.threshold = float(os.environ.get("NODACH_LIVE_LEVEL", "0.015"))
+        self.auto_last = None          # when the last automatic failure report went (at most one per 5 minutes)
+        self.auto_queue: list = []     # automatic reports that couldn't be sent yet, tried again every minute
+        self.auto_try = None
 
         root.title(f"Nodach Live {core.VERSION}")
         root.geometry("780x760")
@@ -166,6 +169,11 @@ class App:
         self.start_btn.grid(row=0, column=2, padx=4)
         self.end_btn = ttk.Button(f2, text="End session", command=self.end_session)
         self.end_btn.grid(row=0, column=3, padx=4)
+        # 0.2.2: shown (and the list turns yellow) when the chosen session has ended and Live can't tell which to use
+        ttk.Style(self.root).configure("Pick.TCombobox", fieldbackground="#ffe08a", background="#ffb300")
+        self.pick_var = tk.StringVar()
+        self.pick_lbl = ttk.Label(f2, textvariable=self.pick_var, foreground="#a15c00")
+        self.pick_lbl.grid(row=1, column=0, columnspan=4, sticky="w", padx=4)
 
         # 3. microphone
         f3 = ttk.LabelFrame(top, text="3  Microphone")
@@ -231,7 +239,10 @@ class App:
         f7.pack(fill="x", **pad)
         ttk.Button(f7, text="Copy report", command=self.copy_report).pack(side="left")
         ttk.Button(f7, text="Send report to Claude", command=self.send_report).pack(side="left", padx=8)
-        ttk.Label(f7, foreground="#555", text="The report holds steps and settings only: no audio, transcripts or sign-in.").pack(side="left", padx=8)
+        self.auto_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(f7, text="Automatic reports", variable=self.auto_var).pack(side="left", padx=4)
+        ttk.Label(f7, foreground="#555", text="The report holds steps and settings only: no audio, transcripts or sign-in. "
+                  "Automatic: sent when a step fails (at most every 5 min) and when a session ends.", wraplength=420).pack(side="left", padx=8)
         self._update_buttons()
 
     # ---------- plumbing
@@ -254,6 +265,59 @@ class App:
                 f.write(json.dumps(dict(r, client=core.VERSION), ensure_ascii=False) + "\n")
         except OSError:
             pass
+        if r["step"] != "report":
+            self._auto_check(r)
+
+    # ---------- automatic reports (0.2.2)
+    def _auto_check(self, r):
+        if not (getattr(self, "auto_var", None) and self.auto_var.get()):
+            return
+        now = core.utcnow()
+        if core.auto_report_due(r, self.auto_last, now):
+            self.auto_last = now
+            self._auto_send(self.live.session if self.live else None, "failure", r)
+
+    def _auto_send(self, sid, reason, r=None):
+        self._post_auto({"sid": sid, "reason": reason, "text": core.auto_report_text(self.report_text(), reason, r)})
+
+    def _post_auto(self, job):
+        hub, me = self.hub, self.me
+        sid = job["sid"] or (self.live.session if self.live else None)
+        if not (hub and me and sid):
+            return self._auto_queued(job, "not signed in or no session yet")
+        job = dict(job, sid=sid)
+
+        def work():
+            try:
+                hub.post(core.report_event(sid, me, job["text"], core.utcnow(), auto=job["reason"]))
+            except Exception as e:
+                self.later(self._auto_queued, job, f"hub {getattr(e, 'code', 0) or 'unreachable'}")
+                return
+            self.later(self._auto_log, job, "sent", f"hub {hub.last_status}")
+        self.bg(work)
+
+    def _auto_queued(self, job, why):
+        self.auto_queue.append(job)
+        self._auto_log(job, "queued", f"{why}; tried again in {core.AUTO_RETRY_S // 60} min")
+
+    def _auto_log(self, job, what, detail):
+        self.row("report", "ok" if what == "sent" else "info",
+                 f"auto-report {what} ({job['reason']}){' to ' + job['sid'] if job.get('sid') and what == 'sent' else ''} · {detail}")
+        try:
+            lc.HOME.mkdir(parents=True, exist_ok=True)
+            with (lc.HOME / "auto-reports.jsonl").open("a", encoding="utf-8") as f:
+                f.write(json.dumps({"ts": core.iso(core.utcnow()), "what": what, "reason": job["reason"], "session": job.get("sid"),
+                                    "detail": core.scrub(detail)}, ensure_ascii=False) + "\n")
+        except OSError:
+            pass
+
+    def _auto_retry(self):
+        now = core.utcnow()
+        if core.retry_due(self.auto_queue, self.auto_try, now):
+            self.auto_try = now
+            jobs, self.auto_queue = self.auto_queue, []
+            for j in jobs:
+                self._post_auto(j)
 
     def _tk_error(self, exc, val, tb):
         self.row("setup", "failed", f"window error {exc.__name__}: {val}")
@@ -271,6 +335,7 @@ class App:
                 fn(*a)
             except Exception as e:
                 self.row("setup", "failed", f"{type(e).__name__}: {e}")
+        self._auto_retry()
         if self.recording and self.recorder:
             self.talk_btn.configure(text=core.talk_label(True, time.monotonic() - self.rec_start, self.always))
             frac = core.level_fraction(self.recorder.level)
@@ -396,16 +461,39 @@ class App:
         if r:
             self._set_live(r["id"])
             if r["state"] != "live":
-                self.row("session", "info", f"{r['id']} is {r['state']}, not live: lines still go to it")
+                self.row("session", "info", f"{r['id']} is {r['state']}, not live: each line goes to the one live session, or waits for you to pick")
 
     def _set_live(self, sid):
+        held = []
         if self.live:
+            held = self.live.take_held()
             self.live.close()
             self.live = None
         if sid and self.hub:
-            self.live = lc.Live(self.hub, self.me, sid, attach_points=self.point_var.get(), report=self._live_report)
+            self.live = lc.Live(self.hub, self.me, sid, attach_points=self.point_var.get(), report=self._live_report,
+                                on_switch=lambda old, new: self.later(self._switched, old, new),
+                                on_ask=lambda old, live: self.later(self._ask_pick, old, live))
             self.row("session", "ok", f"using {sid}")
+            self._clear_pick()
+            if held:
+                self.row("send", "info", f"sending {len(held)} held line(s) to {sid}")
+                self.live.resend(held)
         self._update_buttons()
+
+    # 0.2.2 (F-live-stale-session): the session ended under us
+    def _switched(self, old, new):
+        self._clear_pick()
+        self.refresh_sessions(new)
+
+    def _ask_pick(self, old, live_ids):
+        self.session_box.configure(style="Pick.TCombobox")
+        self.pick_var.set(f"⚠ {old} has ended. Pick a live session above (or start one): held lines are sent to it."
+                          if live_ids else f"⚠ {old} has ended and no session is live. Start a new session: held lines are sent to it.")
+        self.refresh_sessions()
+
+    def _clear_pick(self):
+        self.session_box.configure(style="TCombobox")
+        self.pick_var.set("")
 
     def start_session(self):
         if not (self.hub and self.me and self.me.get("owner")):
@@ -430,11 +518,12 @@ class App:
             return
         if not messagebox.askyesno("End session", f"End {self.live.session}? Lines already sent stay in Studio."):
             return
-        live = self.live
+        live, auto = self.live, self.auto_var.get()
 
         def work():
             try:
-                live.end()
+                if live.end() and auto:
+                    self.later(self._auto_send, live.session, "session ended")
             except Exception as e:
                 self.later(self.row, "session", "failed", f"end: hub {getattr(e, 'code', 0) or 'unreachable'} · {e}")
             self.later(self.refresh_sessions)

@@ -1,8 +1,19 @@
-# Nodach Live (v0.2.0)
+# Nodach Live (v0.2.2)
 
 Talk into a Nodach Studio **live session** from your Windows PC while Claude and builders reply in the same
 stream (Studio → **◉ Live**). Speech is turned into text **on your PC** (faster-whisper on the CPU); the audio
 never leaves it. Only the text of each line goes to the hub, signed in as you.
+
+**New in 0.2.2:**
+- **No more lines into an ended session.** Before each line is sent, the app re-reads the session list. If the
+  session you picked has ended and exactly one session is live, it switches to that one and says so in Activity
+  (*session · info · … switched to LV-…*). If none or several are live, it holds the line, adds a red *session*
+  row, turns the session list yellow with a note under it, and sends the held lines once you pick (or start) one.
+- **Automatic reports** (tick box next to *Send report to Claude*, on by default): when a *record, transcribe,
+  send, sign-in* or *session* step fails, the same filtered report is posted to the current session by itself, at
+  most once every 5 minutes; a summary is posted when you end a session. If posting fails it's queued and tried
+  again every minute. Each one leaves a row: *report · auto-report sent / queued*. `auto-reports.jsonl` in
+  `%USERPROFILE%\nodach-live\` logs them (no report text).
 
 From 0.2.0 it is a **window you click**: no command line and no keyboard shortcuts needed. (0.1.x used
 Ctrl+Alt+Space, which is also the Claude desktop app's quick-entry shortcut, so it opened Claude's box instead.)
@@ -28,7 +39,8 @@ Ctrl+Alt+Space, which is also the Claude desktop app's quick-entry shortcut, so 
 ## First-time setup (Windows)
 
 1. Python on PATH: <https://www.python.org/downloads/windows/> (tick **Add python.exe to PATH**; keep *tcl/tk* ticked).
-2. Unzip `nodach-live-v0.2.0.zip` (it holds the `nodach-live` folder with the speech model inside `models\`).
+2. Unzip the Nodach Live zip (it holds the `nodach-live` folder). Updating from 0.2.x: unzip `nodach-live-v0.2.2-update.zip`
+   over your existing `nodach-live` folder (it has no `models` folder, so your speech model stays).
 3. Double-click **`start-live.bat`**. The window opens. If section 3 says voice packages aren't installed, click
    **Install voice packages**, wait for the *installed* row in Activity, then close and reopen the window.
 4. Sign in (once every 30 days): click **Open Studio**, sign in, press **F12** → **Application** tab → **Cookies** →
@@ -57,6 +69,6 @@ counts as speech.
 
 In `%USERPROFILE%\nodach-live\`: `lines.jsonl` is an append-only log of every line sent or not sent (text only);
 `activity.jsonl` is an append-only copy of the window's activity rows (no text you said); `gui-error.txt` appears
-only if the window couldn't start. Events go to `POST /studio/api/events` with your `nodach_session` cookie and the
+only if the window couldn't start; `auto-reports.jsonl` lists automatic reports sent or queued. Events go to `POST /studio/api/events` with your `nodach_session` cookie and the
 `x-nodach-studio` header, exactly like Studio's own writes, so the hub's access rules apply: owners can write
 anywhere, members only into a session they were given.

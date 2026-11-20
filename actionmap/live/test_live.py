@@ -169,6 +169,69 @@ def test_client_posts_line_then_draft_to_the_studio_api(tmp_path, monkeypatch, c
     assert "SECRET-TOKEN-123" not in out and "→ draft TK-" in out
 
 
+
+# ---------------------------------------------------------------- 0.2.2: never write into a session that has ended
+def _sess(sid, started, status="live", ended=False):
+    rows = [_ev("item.create", None, {"id": sid, "source": "live", "status": "live", "live": {"started": started}}, ts=started)]
+    if ended:
+        rows.append(_ev("status", sid, {"status": "open"}, ts=started[:-5] + "9.000Z"))
+    return rows
+
+
+def test_send_target_rules():
+    rows = lambda *xs: [{"id": i, "state": st} for i, st in xs]
+    assert core.send_target(rows(("LV-a", "live")), "LV-a")["action"] == "send"
+    assert core.send_target(rows(("LV-b", "live")), "LV-gone")["action"] == "send"          # not listed: can't tell
+    d = core.send_target(rows(("LV-a", "open"), ("LV-b", "live")), "LV-a")
+    assert d["action"] == "switch" and d["to"] == "LV-b" and d["state"] == "open"
+    d = core.send_target(rows(("LV-a", "open"), ("LV-b", "live"), ("LV-c", "live")), "LV-a")
+    assert d["action"] == "ask" and d["to"] is None and d["live"] == ["LV-b", "LV-c"]
+    assert core.send_target(rows(("LV-a", "open")), "LV-a")["action"] == "ask"
+
+
+def test_live_switches_to_the_one_live_session_after_its_own_ended(tmp_path, monkeypatch):
+    """F-live-stale-session (20 Nov): LV-...4slr ended at 18:21 but still got lines at 18:35 and 18:37."""
+    import live_client
+    monkeypatch.setattr(live_client, "HOME", tmp_path)
+    monkeypatch.setattr(live_client, "POINTER_EVENTS", tmp_path / "none.jsonl")
+    docs = _sess("LV-261120-180852-4slr", "2026-11-20T18:08:52.000Z", ended=True) + _sess("LV-261120-183000-newx", "2026-11-20T18:30:00.000Z")
+    srv, got, url = _stand_in_hub(200, docs)
+    rows, switched = [], []
+    live = live_client.Live(live_client.Hub(url, GOOD_TOKEN), OWNER, "LV-261120-180852-4slr",
+                            report=lambda *a: rows.append(a), on_switch=lambda o, n: switched.append((o, n)))
+    live.say("hello again", "typed")
+    live.say("second line", "typed")
+    live.out.join(); live.close(); srv.shutdown()
+    posts = [g["body"]["event"] for g in got if g["method"] == "POST"]
+    assert [p["item"] for p in posts] == ["LV-261120-183000-newx"] * 2
+    assert switched == [("LV-261120-180852-4slr", "LV-261120-183000-newx")] and live.session == "LV-261120-183000-newx"
+    assert rows[0][0] == "session" and rows[0][1] == "info" and "switched to LV-261120-183000-newx" in rows[0][2]
+    assert [r[1] for r in rows if r[0] == "send"] == ["ok", "ok"] and "switched from" in [r for r in rows if r[0] == "send"][0][2]
+
+
+def test_live_holds_lines_and_asks_when_several_are_live(tmp_path, monkeypatch):
+    import live_client
+    monkeypatch.setattr(live_client, "HOME", tmp_path)
+    monkeypatch.setattr(live_client, "POINTER_EVENTS", tmp_path / "none.jsonl")
+    docs = (_sess("LV-old", "2026-11-20T18:00:00.000Z", ended=True) + _sess("LV-b", "2026-11-20T18:30:00.000Z")
+            + _sess("LV-c", "2026-11-20T18:31:00.000Z"))
+    srv, got, url = _stand_in_hub(200, docs)
+    rows, asked = [], []
+    hub = live_client.Hub(url, GOOD_TOKEN)
+    live = live_client.Live(hub, OWNER, "LV-old", report=lambda *a: rows.append(a), on_ask=lambda o, l: asked.append((o, l)))
+    live.say("where does this go", "typed")
+    live.out.join()
+    assert not [g for g in got if g["method"] == "POST"]          # nothing written into the ended session
+    assert asked and asked[0][0] == "LV-old" and sorted(asked[0][1]) == ["LV-b", "LV-c"]
+    assert rows[-1][0] == "session" and rows[-1][1] == "failed" and "pick one" in rows[-1][2]
+    held = live.take_held(); live.close()
+    assert len(held) == 1
+    nxt = live_client.Live(hub, OWNER, "LV-c", report=lambda *a: rows.append(a))
+    nxt.resend(held); nxt.out.join(); nxt.close(); srv.shutdown()
+    posts = [g["body"]["event"] for g in got if g["method"] == "POST"]
+    assert [(p["item"], p["body"]["text"]) for p in posts] == [("LV-c", "where does this go")]
+    assert "lines.jsonl" in [p.name for p in tmp_path.iterdir()] and '"held": true' in (tmp_path / "lines.jsonl").read_text()
+
 if __name__ == "__main__":
     n = 0
     for name, fn in list(globals().items()):
@@ -205,7 +268,7 @@ GOOD_TOKEN = "Morami49.1795000000000." + "b" * 64
 
 
 def test_version_and_hotkey_does_not_clash():
-    assert core.VERSION == "0.2.1"
+    assert core.VERSION == "0.2.2"
     assert core.GUI_HOTKEY == "<ctrl>+<alt>+j" and core.hotkey_clash(core.GUI_HOTKEY) is None
     assert "Claude" in core.hotkey_clash("<ctrl>+<alt>+<space>")
     for k in ("m", "b", "q", "p", "l"):
@@ -425,14 +488,17 @@ def test_gui_end_to_end_against_a_stand_in_hub(tmp_path, monkeypatch):
         assert sent["outcome"] == "ok" and "hub 200" in sent["detail"]
         app.toggle_talk()   # no speech model here: a clear failed row, not silence
         assert app.rows[-1]["step"] == "record" and app.rows[-1]["outcome"] == "failed"
+        # 0.2.2: that failure sends an automatic report by itself (on by default)
+        assert pump(lambda: any(r["step"] == "report" and "auto-report sent (failure)" in r["detail"] for r in app.rows))
         app.copy_report()
         rep = root.clipboard_get()
-        assert "client 0.2.0" in rep and "LV-261120-090000-aaaa" in rep and "signed in: owner" in rep and GOOD_TOKEN not in rep
+        assert f"client {core.VERSION}" in rep and "LV-261120-090000-aaaa" in rep and "signed in: owner" in rep and GOOD_TOKEN not in rep
         app.send_report()
         assert pump(lambda: any(r["step"] == "report" and "comment" in r["detail"] for r in app.rows))
         posts = [g["body"]["event"] for g in got if g["method"] == "POST"]
-        assert [p["kind"] for p in posts] == ["live.line", "comment"]
-        assert posts[1]["body"]["report"] is True and posts[1]["item"] == "LV-261120-090000-aaaa"
+        assert [p["kind"] for p in posts] == ["live.line", "comment", "comment"]
+        assert posts[1]["body"]["auto"] == "failure" and posts[1]["body"]["text"].startswith("Automatic report (failure): record failed")
+        assert posts[2]["body"]["report"] is True and "auto" not in posts[2]["body"] and posts[2]["item"] == "LV-261120-090000-aaaa"
         assert GOOD_TOKEN not in json.dumps(posts)
         assert GOOD_TOKEN not in (tmp_path / "activity.jsonl").read_text()
         assert os.listdir(tmp_path) and "session-" not in " ".join(os.listdir(tmp_path))   # env sign-in isn't written to disk
@@ -458,3 +524,145 @@ def test_mic_ranking_and_find_my_mic():
     assert "not your voice" in out[2]["label"]
     assert core.pick_loudest([(out[2], 0.5), (out[1], 0.0), (out[0], 0.1)]) is out[0]
     assert core.pick_loudest([(out[2], 0.5)]) is None
+
+
+def test_gui_highlights_the_session_list_and_sends_held_lines_after_a_pick(tmp_path, monkeypatch):
+    """0.2.2, the window: its session ended and two are live, so a typed line is held, an activity row says why, the
+    session list turns yellow with a note under it; picking a live session sends the held line there."""
+    import time as _t
+    import pytest
+    tk = pytest.importorskip("tkinter")
+    try:
+        probe = tk.Tk()
+        probe.destroy()
+    except tk.TclError:
+        pytest.skip("no display")
+    import live_client
+    import live_gui
+    docs = (_sess("LV-261120-180000-oldx", "2026-11-20T18:00:00.000Z", ended=True) + _sess("LV-261120-183000-bbbb", "2026-11-20T18:30:00.000Z")
+            + _sess("LV-261120-183100-cccc", "2026-11-20T18:31:00.000Z"))
+    srv, got, url = _stand_in_hub(200, docs)
+    monkeypatch.setattr(live_client, "HOME", tmp_path)
+    monkeypatch.setattr(live_client, "POINTER_EVENTS", tmp_path / "none.jsonl")
+    monkeypatch.setitem(core.HUBS, "staging", url)
+    monkeypatch.setenv("NODACH_LIVE_TOKEN", GOOD_TOKEN)
+    root = tk.Tk()
+    app = live_gui.App(root, "staging", "base")
+
+    def pump(cond, secs=10):
+        end = _t.monotonic() + secs
+        while _t.monotonic() < end:
+            root.update()
+            if cond():
+                return True
+            _t.sleep(0.02)
+        return False
+    try:
+        assert pump(lambda: app.live is not None)
+        app.auto_var.set(False)                           # this test counts posts; automatic reports have their own
+        app._set_live("LV-261120-180000-oldx")          # as if it was picked before it ended
+        app.text_var.set("is this still going through")
+        app.send_typed()
+        assert pump(lambda: bool(app.pick_var.get())), [r["detail"] for r in app.rows]
+        assert str(app.session_box.cget("style")) == "Pick.TCombobox" and "has ended" in app.pick_var.get()
+        assert any(r["step"] == "session" and r["outcome"] == "failed" and "pick one" in r["detail"] for r in app.rows)
+        assert not [g for g in got if g["method"] == "POST"]
+        app.session_var.set("LV-261120-183100-cccc · live")
+        app._session_picked()
+        assert pump(lambda: any(g["method"] == "POST" for g in got))
+        posts = [g["body"]["event"] for g in got if g["method"] == "POST"]
+        assert [(p["item"], p["body"]["text"]) for p in posts] == [("LV-261120-183100-cccc", "is this still going through")]
+        assert app.pick_var.get() == "" and str(app.session_box.cget("style")) == "TCombobox"
+    finally:
+        app._close()
+        try:
+            pump(lambda: False, 0.5)
+        except tk.TclError:
+            pass
+        srv.shutdown()
+
+
+def test_auto_report_rules():
+    now = T
+    fail = {"step": "send", "outcome": "failed", "detail": "hub 401"}
+    assert core.auto_report_due(fail, None, now)
+    assert not core.auto_report_due(fail, now - dt.timedelta(seconds=299), now)          # at most once per 5 minutes
+    assert core.auto_report_due(fail, now - dt.timedelta(seconds=300), now)
+    for step in ("record", "transcribe", "sign-in", "session"):
+        assert core.auto_report_due({"step": step, "outcome": "failed"}, None, now)
+    assert not core.auto_report_due({"step": "send", "outcome": "ok"}, None, now)
+    assert not core.auto_report_due({"step": "report", "outcome": "failed"}, None, now)  # its own failures never loop
+    assert not core.auto_report_due({"step": "mic", "outcome": "failed"}, None, now)
+    assert not core.auto_report_due({"step": "send", "outcome": "empty speech"}, None, now)
+    txt = core.auto_report_text("REPORT BODY\n", "failure", {"step": "send", "outcome": "failed", "detail": f"x {GOOD_TOKEN} a@b.co"})
+    assert txt.startswith("Automatic report (failure): send failed") and txt.endswith("REPORT BODY\n")
+    assert GOOD_TOKEN not in txt and "a@b.co" not in txt
+    assert not core.retry_due([], None, now) and core.retry_due([1], None, now)
+    assert not core.retry_due([1], now - dt.timedelta(seconds=30), now) and core.retry_due([1], now - dt.timedelta(seconds=60), now)
+    e = core.report_event("LV-x", OWNER, "t", T, auto="session ended")
+    assert e["body"] == {"text": "t", "report": True, "auto": "session ended"}
+    assert "auto" not in core.report_event("LV-x", OWNER, "t", T)["body"]
+
+
+def test_gui_auto_report_queues_when_the_send_fails_and_retries(tmp_path, monkeypatch):
+    import time as _t
+    import pytest
+    tk = pytest.importorskip("tkinter")
+    try:
+        probe = tk.Tk()
+        probe.destroy()
+    except tk.TclError:
+        pytest.skip("no display")
+    import live_client
+    import live_gui
+    sessions = _sess("LV-261120-090000-aaaa", "2026-11-20T09:00:00.000Z")
+    srv, got, url = _stand_in_hub(200, sessions)
+    monkeypatch.setattr(live_client, "HOME", tmp_path)
+    monkeypatch.setattr(live_client, "POINTER_EVENTS", tmp_path / "none.jsonl")
+    monkeypatch.setitem(core.HUBS, "staging", url)
+    monkeypatch.setenv("NODACH_LIVE_TOKEN", GOOD_TOKEN)
+    root = tk.Tk()
+    app = live_gui.App(root, "staging", "base")
+
+    def pump(cond, secs=10):
+        end = _t.monotonic() + secs
+        while _t.monotonic() < end:
+            root.update()
+            if cond():
+                return True
+            _t.sleep(0.02)
+        return False
+    try:
+        assert pump(lambda: app.live is not None)
+        real = app.hub.post
+        calls = {"n": 0}
+
+        def flaky(ev, did=None):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise live_client.HubError("hub answered 503", 503)
+            return real(ev, did)
+        app.hub.post = flaky
+        app.row("send", "failed", "hub 503 · test")
+        assert pump(lambda: any("auto-report queued (failure)" in r["detail"] for r in app.rows))
+        app.row("send", "failed", "again within 5 minutes")          # rate limit: no second report
+        app.auto_try = core.utcnow() - dt.timedelta(seconds=core.AUTO_RETRY_S)
+        assert pump(lambda: any("auto-report sent (failure)" in r["detail"] for r in app.rows))
+        pump(lambda: False, 0.4)
+        posts = [g["body"]["event"] for g in got if g["method"] == "POST"]
+        assert len(posts) == 1 and posts[0]["body"]["auto"] == "failure" and "hub 503 · test" in posts[0]["body"]["text"]
+        log = (tmp_path / "auto-reports.jsonl").read_text()
+        assert '"what": "queued"' in log and '"what": "sent"' in log and GOOD_TOKEN not in log
+        # ending the session sends a summary
+        monkeypatch.setattr(live_gui.messagebox, "askyesno", lambda *a, **k: True)
+        app.end_session()
+        assert pump(lambda: any("auto-report sent (session ended)" in r["detail"] for r in app.rows))
+        posts = [g["body"]["event"] for g in got if g["method"] == "POST"]
+        assert posts[-1]["kind"] == "comment" and posts[-1]["body"]["auto"] == "session ended"
+    finally:
+        app._close()
+        try:
+            pump(lambda: False, 0.5)
+        except tk.TclError:
+            pass
+        srv.shutdown()

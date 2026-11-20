@@ -1242,6 +1242,118 @@ async def s48_live_member_lines(b):
     return ok, f"no start={no_start}, followed={followed}, member creates={len(member_creates)}, tag={tag}, owner button={has_btn}, drafts={len(drafts)}, speaker={speaker}, errors={(m.errors + o.errors)[:1]}"
 
 
+
+SHIM = HERE.parent / "standalone.js"
+
+
+async def open_hub_page(browser, docs, poll_ms=60000, fast_ms=600, me=None, width=1440, height=900):
+    """Studio as the hub serves it (D-171): the real host shim (standalone.js) over a stand-in hub API, so polling,
+    sign-in and sign-out are the real code paths. docs: [{doc_id, event}]; append to H["docs"] to "write on the hub"."""
+    import urllib.parse
+    me = me or {"login": "Morami49", "id": "github:Morami49", "owner": True}
+    H = {"docs": list(docs), "posts": [], "gets": 0, "visits": []}
+    html = ('<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">'
+            '<style>:root{color-scheme:light}body{margin:0;font:14px system-ui}img{max-width:100%}[hidden]{display:none!important}</style>'
+            f'<script>window.__nodachBuild="test";window.__nodachEnv="production";window.__nodachPollMs={poll_ms};window.__nodachFastPollMs={fast_ms};</script>'
+            f'<script>{SHIM.read_text()}</script></head><body>{PAGE.read_text()}</body></html>')
+
+    async def serve(route):
+        req = route.request; u = urllib.parse.urlparse(req.url); path = u.path; q = urllib.parse.parse_qs(u.query)
+        H["visits"].append(path)
+        js = lambda v, status=200: route.fulfill(status=status, body=json.dumps(v), content_type="application/json")
+        if path in ("/studio", "/studio/"):
+            return await route.fulfill(body=html, content_type="text/html")
+        if path in ("/studio/login", "/studio/logout"):
+            return await route.fulfill(body=f"<!doctype html><title>{path}</title><p id=where>{path}</p>", content_type="text/html")
+        if path == "/health":
+            return await route.fulfill(body="ok test", content_type="text/plain")
+        if path == "/studio/api/me":
+            return await js(me)
+        if path == "/studio/api/genesis":
+            return await js(GENESIS)
+        if path == "/studio/api/events" and req.method == "GET":
+            H["gets"] += 1
+            after, lim = int(q.get("after", ["0"])[0]), int(q.get("limit", ["500"])[0])
+            page = H["docs"][after:after + lim]
+            return await js({"events": page, "next": after + len(page), "total": len(H["docs"])})
+        if path == "/studio/api/events" and req.method == "POST":
+            b = json.loads(req.post_data or "{}"); H["posts"].append(b)
+            if not any(d["doc_id"] == b["doc_id"] for d in H["docs"]):
+                H["docs"].append({"doc_id": b["doc_id"], "event": b["event"]})
+            return await js({"id": b["doc_id"], "imported": 1})
+        if path == "/studio/api/private":
+            return await js({"error": "no private store"}, 503)
+        return await route.fulfill(status=404, body="")
+    ctx = await browser.new_context(viewport={"width": width, "height": height})
+    await ctx.route("http://hub.test/**", serve)
+    page = await ctx.new_page()
+    errors = []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    await page.goto("http://hub.test/studio")
+    await page.wait_for_timeout(1200)
+    page.errors = errors; page.hub = H
+    return page
+
+
+def hub_doc(doc_id, kind, item, body, who="github:Morami49", label="Morami49", ts=None, via=None):
+    e = {"ts": ts or now_ts(), "kind": kind, "item": item, "branch": "main", "body": body,
+         "author": {"id": who, "label": label, "role": "owner"}}
+    if via:
+        e["via"] = via
+    return {"doc_id": doc_id, "event": e}
+
+
+async def s52_live_connector_reply_in_seconds(b):
+    """F-live-replies-late (20 Nov, staging): Studio served by the hub, a live session open in the Live panel. A reply
+    Claude writes through the connector (via claude-connector) shows in the stream within a few seconds, with no
+    reload, although the normal poll is a minute here; closing the panel drops back to the normal poll."""
+    sid = "LV-261120-190000-abcd"
+    p = await open_hub_page(b, [hub_doc("d1", "item.create", None, {"id": sid, "type": "idea", "title": "Live session", "body": "x", "refs": [],
+                                                                    "status": "live", "source": "live", "live": {"schema": "live.v1", "started": now_ts(), "audience": []}})])
+    await p.evaluate(f"NodachLive.open('{sid}')"); await p.wait_for_timeout(300)
+    fast = (await p.evaluate("NodachLive.state()"))["fast_poll_ms"]
+    await p.fill("#liveText", "can you see this"); await p.press("#liveText", "Enter"); await p.wait_for_timeout(300)
+    p.hub["docs"].append(hub_doc("hubreply1", "comment", sid, {"text": "Yes, I see your line"}, via="claude-connector"))
+    import time
+    t0 = time.monotonic(); seen = False
+    while time.monotonic() - t0 < 5:
+        txt = await p.evaluate("document.getElementById('liveStream')?.innerText || ''")
+        if "Yes, I see your line" in txt:
+            seen = True; break
+        await p.wait_for_timeout(100)
+    took = round(time.monotonic() - t0, 1)
+    reply_row = await p.locator("#liveStream li.reply").count()
+    await p.click("#liveClose"); await p.wait_for_timeout(200)
+    after = (await p.evaluate("NodachLive.state()"))["fast_poll_ms"]
+    lines = [x for x in p.hub["posts"] if x["event"]["kind"] == "live.line"]
+    ok = seen and took < 4 and reply_row >= 1 and fast > 0 and after == 0 and len(lines) == 1 and not p.errors
+    return ok, f"reply shown={seen} after {took}s, reply rows={reply_row}, fast poll={fast} ms then {after}, lines posted={len(lines)}, errors={p.errors[:1]}"
+
+
+async def s53_live_states(b):
+    """Live is an explicit state machine too: open (idle), start (live), the session is ended in another place (lost),
+    pick another live session (select), End here (end), close. NodachLive.state() gives the state and the trace."""
+    old = "LV-261120-170000-aaaa"
+    st = Store([ev("item.create", None, {"id": old, "type": "idea", "title": "Live session", "body": "x", "refs": [], "status": "live", "source": "live",
+                                         "live": {"schema": "live.v1", "started": "2026-11-20T17:00:00.000Z", "audience": []}}, ts="2026-11-20T17:00:00.000Z")])
+    p = await open_page(b, st, {})
+    seq = []
+    async def s(): seq.append(await p.evaluate("NodachLive.state().state"))
+    await s()
+    await p.evaluate("NodachLive.open()"); await p.wait_for_timeout(200); await s()      # the old one is live: follows it
+    await st.add("events", ev("status", old, {"status": "open"}, ts=now_ts())); await p.wait_for_timeout(300); await s()   # ended elsewhere
+    await p.click("#liveStart")
+    await until(lambda: sum(e["kind"] == "item.create" and e["body"].get("source") == "live" for e in st.events) == 2)
+    await p.wait_for_timeout(200); await s()
+    await p.click("#liveEnd")
+    await until(lambda: sum(e["kind"] == "status" for e in st.events) == 2)
+    await p.wait_for_timeout(200); await s()
+    await p.click("#liveClose"); await p.wait_for_timeout(100); await s()
+    tr = [(t["event"], t["to"]) for t in await p.evaluate("NodachLive.state().trace") if t["ok"]]
+    want = [("open", "idle"), ("select", "live"), ("lost", "idle"), ("start", "live"), ("end", "idle"), ("close", "closed")]
+    ok = seq == ["closed", "live", "idle", "live", "idle", "closed"] and tr == want and not p.errors
+    return ok, f"states={seq}, trace={tr}, errors={p.errors[:1]}"
+
 SCENARIOS = [s01_tired_misclick, s02_undo, s03_stable_codes, s04_past_view_lock, s05_branch_awareness, s06_view_only_client,
              s07_names, s08_long_history, s09_ai_relay, s10_keyboard_list, s11_offline_capture, s12_member_rights,
              s13_two_people_at_once, s14_phone, s15_undo_old_status, s16_overwhelm, s17_disagreement, s18_clock_skew, s19_private_area,
@@ -1249,7 +1361,8 @@ SCENARIOS = [s01_tired_misclick, s02_undo, s03_stable_codes, s04_past_view_lock,
              s24_hub_sync, s25_more_than_1000, s26_hub_not_connected, s27_read_on_open, s28_push_after_clean_runs, s29_runs_timeline, s30_builder_pipeline, s31_content_cycles, s32_private_files_and_views, s33_studio_edits_studio, s34_command_map, s35_history_words, s36_canvas, s37_classic_map_fallback, s38_runnable_steps, s39_scheduled_steps, s40_point_mode,
              s41_multi_point, s42_show_record_save, s43_show_pause, s44_show_replay, s45_my_queue,
              s46_live_session_stream, s47_live_browser_speech_opt_in, s48_live_member_lines,
-             s49_show_pause_clock, s50_show_states, s51_show_marks_follow_canvas]
+             s49_show_pause_clock, s50_show_states, s51_show_marks_follow_canvas,
+             s52_live_connector_reply_in_seconds, s53_live_states]
 
 
 async def main():

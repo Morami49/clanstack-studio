@@ -20,7 +20,7 @@ import re
 from pathlib import Path
 import secrets
 
-VERSION = "0.2.1"
+VERSION = "0.2.2"
 LINE_KIND = "live.line"
 MAX_TEXT = 2000
 POINT_MAX_AGE_S = 120          # a pointer point older than this isn't attached to a new line
@@ -362,6 +362,22 @@ def session_list(docs, me_id: str, owner: bool = False):
     return rows
 
 
+def send_target(rows, chosen: str):
+    """Before each send (F-live-stale-session, 20 Nov: lines went to LV-261120-180852-4slr 15 minutes after it ended,
+    because a new session had started and the app still held the old one). rows: session_list(). Returns
+    {"action": "send"|"switch"|"ask", "to": <session or None>, "state": <chosen's state>, "live": [live ids]}:
+      send    the chosen session is still live, or isn't in the list (can't tell: keep going as before)
+      switch  it isn't live any more and exactly one session is live: use that one
+      ask     it isn't live and none or several are: hold the line and let him pick."""
+    live = [r["id"] for r in rows or [] if r.get("state") == "live"]
+    me = next((r for r in rows or [] if r.get("id") == chosen), None)
+    if me is None or me.get("state") == "live":
+        return {"action": "send", "to": chosen, "state": me.get("state") if me else None, "live": live}
+    if len(live) == 1:
+        return {"action": "switch", "to": live[0], "state": me.get("state"), "live": live}
+    return {"action": "ask", "to": None, "state": me.get("state"), "live": live}
+
+
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 _TOKEN_ANY_RE = re.compile(r"[A-Za-z0-9-]{1,39}\.\d{10,16}\.[0-9a-f]{64}")
 _LONGHEX_RE = re.compile(r"\b[0-9a-f]{40,}\b")
@@ -408,8 +424,38 @@ def build_report(info: dict, rows, n: int = REPORT_ROWS) -> str:
     return "\n".join(scrub(x) for x in head + body) + "\n"
 
 
-def report_event(session: str, me: dict, text: str, t: dt.datetime, branch: str = "main") -> dict:
-    """The report as a comment on the session item, so Claude can read it through the connector."""
+def report_event(session: str, me: dict, text: str, t: dt.datetime, branch: str = "main", auto: str = "") -> dict:
+    """The report as a comment on the session item, so Claude can read it through the connector.
+    auto: why it was sent by itself ("failure" or "session ended"); empty when he pressed Send report."""
     ts = iso(t)
-    return {"ts": ts, "kind": "comment", "item": session, "branch": branch,
-            "body": {"text": scrub(text)[:8000], "report": True}, "author": author(me)}
+    body = {"text": scrub(text)[:8000], "report": True}
+    if auto:
+        body["auto"] = auto
+    return {"ts": ts, "kind": "comment", "item": session, "branch": branch, "body": body, "author": author(me)}
+
+
+# ---------------------------------------------------------------- 0.2.2: automatic reports
+AUTO_STEPS = ("record", "transcribe", "send", "sign-in", "session")   # a failed row in one of these sends a report
+AUTO_EVERY_S = 300                                                    # at most one failure report per 5 minutes
+AUTO_RETRY_S = 60                                                     # queued reports are tried again after this
+
+
+def auto_report_due(row: dict, last_sent, now: dt.datetime, every_s: int = AUTO_EVERY_S) -> bool:
+    """Should this activity row send an automatic report now? Only failed rows of AUTO_STEPS, and not within
+    every_s of the last automatic failure report (last_sent: datetime or None). Report rows never trigger one."""
+    if not row or row.get("outcome") != "failed" or row.get("step") not in AUTO_STEPS:
+        return False
+    return last_sent is None or (now - last_sent).total_seconds() >= every_s
+
+
+def auto_report_text(report: str, reason: str, row=None) -> str:
+    """The filtered report with one line on top saying why it was sent by itself."""
+    why = f"Automatic report ({reason})"
+    if row:
+        why += f": {row.get('step', '')} {row.get('outcome', '')} · {row.get('detail', '')}"
+    return scrub(why)[:300] + "\n" + report
+
+
+def retry_due(queued, last_try, now: dt.datetime, every_s: int = AUTO_RETRY_S) -> bool:
+    """Is it time to try the locally queued reports again?"""
+    return bool(queued) and (last_try is None or (now - last_try).total_seconds() >= every_s)

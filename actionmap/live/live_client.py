@@ -186,10 +186,16 @@ def load_token(hub_url: str) -> str:
 
 # ---------------------------------------------------------------- the session
 class Live:
-    def __init__(self, hub: Hub, me: dict, session: str, attach_points: bool = True, report=None):
-        """report(step, outcome, detail, message): called after every send; default prints like the CLI always did."""
+    def __init__(self, hub: Hub, me: dict, session: str, attach_points: bool = True, report=None,
+                 check: bool = True, on_switch=None, on_ask=None):
+        """report(step, outcome, detail, message): called after every send; default prints like the CLI always did.
+        check: before each send, re-read the session list and don't write into a session that has ended
+        (core.send_target). on_switch(old, new) / on_ask(old, live_ids): told when it moved on or needs a pick;
+        lines it couldn't place wait in self.held (take_held() hands them to the next session)."""
         self.hub, self.me, self.session, self.attach = hub, me, session, attach_points
         self.report = report or (lambda step, outcome, detail, message: print("  " + message))
+        self.check, self.on_switch, self.on_ask = check, on_switch, on_ask
+        self.held: list = []
         self.used_points: set = set()
         self.out: "queue.Queue" = queue.Queue()
         threading.Thread(target=self._sender, daemon=True).start()
@@ -236,6 +242,14 @@ class Live:
                 self.out.task_done()
                 return
             _, text, via, point = job
+            note = ""
+            if self.check:
+                go, note = self._target()
+                if not go:
+                    self.held.append(job)
+                    self._log({"ts": core.iso(core.utcnow()), "session": self.session, "text": text, "via": via, "sent": False, "held": True})
+                    self.out.task_done()
+                    continue
             t = core.utcnow()
             ev = core.line_event(self.session, self.me, text, t, via, point)
             try:
@@ -249,7 +263,7 @@ class Live:
                     draft_id = tev["body"]["id"]
                     drafted = f"  → draft {draft_id}"
                 self._log({"ts": ev["ts"], "session": self.session, "doc_id": did, "text": text, "via": via, "sent": True})
-                self.report("send", "ok", core.send_detail(status, len(text), bool(point), draft_id),
+                self.report("send", "ok", core.send_detail(status, len(text), bool(point), draft_id) + (f" · {note}" if note else ""),
                             f"sent{' + point' if point else ''}: {text or '(point)'}{drafted}")
             except Exception as e:
                 self._log({"ts": ev["ts"], "session": self.session, "text": text, "via": via, "sent": False, "error": str(e)[:200]})
@@ -257,6 +271,41 @@ class Live:
                             f"NOT sent ({e}). Kept in {HOME / 'lines.jsonl'}.")
             finally:
                 self.out.task_done()
+
+    def _target(self):
+        """(send?, note). Re-reads the session list; switches to the one live session if this one ended, or holds
+        the line and asks when it can't tell which. A failed read doesn't stop the line (noted on its send row)."""
+        try:
+            rows = core.session_list(self.hub.events(), self.me["id"], bool(self.me.get("owner")))
+        except Exception as e:
+            return True, f"session not re-checked (hub {getattr(e, 'code', 0) or 'unreachable'})"
+        d = core.send_target(rows, self.session)
+        if d["action"] == "send":
+            return True, ""
+        old = self.session
+        if d["action"] == "switch":
+            self.session = d["to"]
+            self.report("session", "info", f"{old} is {d['state']}, not live: switched to {d['to']} (the only live session)",
+                        f"{old} has ended ({d['state']}). Switched to {d['to']}, the only live session.")
+            if self.on_switch:
+                self.on_switch(old, d["to"])
+            return True, f"switched from {old}"
+        n = len(d["live"])
+        self.report("session", "failed",
+                    f"{old} is {d['state']}, not live; {n} live sessions: pick one (line held, sent once you pick)" if n
+                    else f"{old} is {d['state']}, not live; no live session: start one (line held)",
+                    f"{old} has ended. Line held: pick or start a live session.")
+        if self.on_ask:
+            self.on_ask(old, d["live"])
+        return False, ""
+
+    def take_held(self) -> list:
+        jobs, self.held = self.held, []
+        return jobs
+
+    def resend(self, jobs) -> None:
+        for j in jobs:
+            self.out.put(j)
 
     def end(self) -> bool:
         self.out.join()   # every line lands before the session closes

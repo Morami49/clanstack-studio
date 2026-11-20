@@ -469,7 +469,7 @@ function fold(){
   const gone = new Set(evs.filter(e => e.kind==="retract").map(e => e.body.of));
   const reverted = new Set(evs.filter(e => e.body?.revert_of).map(e => e.body.revert_of));
   for (const e of evs){
-    const h = {id:e._id, ts:e.ts, kind:e.kind, author:e.author, body:e.body, branch:e.branch, gone:gone.has(e._id), reverted:reverted.has(e._id)};
+    const h = {id:e._id, ts:e.ts, kind:e.kind, author:e.author, body:e.body, branch:e.branch, via:e.via||null, gone:gone.has(e._id), reverted:reverted.has(e._id)};
     if (e.kind==="item.create" && items.has(e.body.id)){ h.dup = true; items.get(e.body.id).history.push(h); continue; } // F-19: a second create never replaces an item
     if (e.kind==="item.create"){ items.set(e.body.id, {id:e.body.id, type:e.body.type, title:e.body.title, body:e.body.body||"", status:e.body.status||"open",
       refs:e.body.refs||[], sketch:e.body.sketch||null, source:e.body.source||null, private:!!e._private, value:e.body.value, meta:e.body.meta||null, point:e.body.point||null, show:e.body.show||null, live:e.body.live||null, answers:[], comments:[], lines:[], history:[h], by:e.author}); continue; }
@@ -845,7 +845,7 @@ function showSteps(it){
   if (it.show?.steps?.length && it.status !== "live") return it.show.steps;
   return it.comments.filter(c => c.body?.step).map(c => c.body.step);
 }
-function isReply(h){ const a = h.author || {}; return a.id === "claude" || a.role === "agent" || a.role !== "owner"; }
+function isReply(h){ const a = h.author || {}; return a.id === "claude" || a.role === "agent" || a.role !== "owner" || h.via === "claude-connector"; }   // the connector writes as the signed-in owner
 function showSection(it){
   if (it.source !== "show" && !it.show) return "";
   const live = it.status === "live", steps = showSteps(it);
@@ -885,7 +885,7 @@ function liveRows(it){
       (d ? `<button class="chip task link" data-go="${esc(d.id)}">→ ${esc(d.id)} (${esc(d.status)})</button>`
          : t ? (canDraft ? `<button class="chip task" data-live-draft="${esc(h.id)}">Draft ${esc(t.kind)}</button>` : `<span class="chip task">${esc(t.kind)}?</span>`) : "") +
       (b.via ? `<span class="chip">${esc(b.via)}</span>` : "");
-    return `<li class="${line ? "line" : isReply(h) ? "reply" : ""}" data-live-row="${esc(h.id || "")}"><span class="n">${line ? "says" : "reply"}</span><span><span class="mono mute">${esc((h.ts||"").slice(11,19))} · ${esc(who(h.author))}</span><br>
+    return `<li class="${line ? "line" : isReply(h) ? "reply" : ""}" data-live-row="${esc(h.id || "")}"><span class="n">${line ? "says" : "reply"}</span><span><span class="mono mute">${esc((h.ts||"").slice(11,19))} · ${esc(who(h.author))}${h.via === "claude-connector" ? " · via Claude" : ""}</span><br>
       <span class="what">${b.text ? esc(b.text) : line ? '<span class="mute">(pointed)</span>' : ""}</span>${chips ? "<br>" + chips : ""}</span></li>`;
   }).join("");
 }
@@ -1883,6 +1883,15 @@ const SHOW_TABLE = {
   saved:     {close:"idle"},
 };
 
+/* Live panel: closed → idle (panel open, no live session) → live (following a live session) ⇄ listening (browser
+   speech on). end = he ended it here; lost = it ended elsewhere (another tab, the desktop client, a connector). */
+const LIVE_TABLE = {
+  closed:    {open:"idle"},
+  idle:      {start:"live", select:"live", close:"closed"},
+  live:      {listen:"listening", end:"idle", lost:"idle", select:"live", close:"closed"},
+  listening: {unlisten:"live", end:"idle", lost:"idle", close:"closed"},
+};
+
 /* ---------------------------------------------------------------- pointer.v1 targets (shared by point mode and show mode)
    One way to say "this part of Studio": the named region (data-nodach-part, stable across renames and edits), the
    element and its text, the view, and the screen position. The desktop pointer and ActionMap use the same shape. */
@@ -2432,6 +2441,18 @@ const PTR = {
   const btn = $("#liveBtn"); if (!btn) return;
   const SRx = window.SpeechRecognition || window.webkitSpeechRecognition;
   let panel = null, L = {id:null, point:null, picking:false, q:Promise.resolve(), rec:null, granted:new Set()};
+  const M = NodachFSM.machine("live", LIVE_TABLE, "closed");
+  /* F-live-replies-late (20 Nov): served by the hub, Studio pulls new events every 15 s, so a reply Claude wrote
+     through the connector could take that long to show. While a live session is open here (in this panel or the
+     item panel) it pulls every FAST_MS instead; the normal poll takes over again when nothing live is open. */
+  const FAST_MS = window.__nodachFastPollMs ?? 2500;
+  let fastT = null;
+  function follow(){
+    const pull = window.__nodach?.pull, it = cur();
+    const want = !!pull && ((!!panel && it?.status === "live") || F.items?.get?.(S.sel)?.status === "live");
+    if (want && !fastT){ fastT = setInterval(() => { if (!document.hidden) window.__nodach.pull().catch(() => {}); }, FAST_MS); pull().catch(() => {}); }
+    else if (!want && fastT){ clearInterval(fastT); fastT = null; }
+  }
   const queue = fn => (L.q = L.q.then(fn).catch(() => {}));
   const sessions = () => [...F.items.values()].filter(i => i.source === "live" && i.status === "live")
     .sort((a, b) => (b.history[0]?.ts || "").localeCompare(a.history[0]?.ts || ""));
@@ -2439,6 +2460,7 @@ const PTR = {
 
   function open(id){
     if (id) L.id = id;
+    if (M.state === "closed") M.send("open");
     if (!panel){
       panel = document.createElement("div"); panel.id = "livePanel"; panel.dataset.nodachPart = "live.panel";
       panel.setAttribute("role", "region"); panel.setAttribute("aria-label", "Live session");
@@ -2460,7 +2482,7 @@ const PTR = {
           : "This browser has no speech recognition. Type, or use the desktop client (audio stays on your PC)."}</span>`;
       document.body.append(panel);
       panel.querySelector("#liveClose").onclick = close;
-      panel.querySelector("#liveSel").onchange = e => { L.id = e.target.value || null; render(); };
+      panel.querySelector("#liveSel").onchange = e => { L.id = e.target.value || null; if (cur()?.status === "live" && M.state !== "closed") M.send("select"); render(); };
       panel.querySelector("#liveStart")?.addEventListener("click", start);
       panel.querySelector("#liveSend").onclick = sendTyped;
       panel.querySelector("#liveText").onkeydown = e => { if (e.key === "Enter" && !e.shiftKey){ e.preventDefault(); sendTyped(); } };
@@ -2476,7 +2498,7 @@ const PTR = {
     if (!L.id) L.id = sessions()[0]?.id || null;
     render();
   }
-  function close(){ stopMic(); setPicking(false); panel?.remove(); panel = null; btn.setAttribute("aria-pressed", "false"); }
+  function close(){ stopMic(); setPicking(false); panel?.remove(); panel = null; btn.setAttribute("aria-pressed", "false"); M.send("close"); follow(); }
   btn.onclick = () => panel ? close() : open();
 
   function audience(){
@@ -2499,19 +2521,21 @@ const PTR = {
       body:"Live session in progress. Lines arrive as live.line events; replies as comments on this item.", refs:[], status:"live", source:"live",
       live:{schema:"live.v1", started, audience:aud}});
     if (!ok) return null;
-    L.id = id; grant(id, aud);
+    L.id = id; grant(id, aud); if (M.state !== "closed") M.send(M.state === "idle" ? "start" : "select");
     toast(`Live session ${id} started${aud.length ? " for " + aud.length + " watcher(s)" : ""}.`);
     render(); return id;
   }
   async function end(){
     const it = cur(); if (!it || it.status !== "live") return;
     if (!S.owner){ toast("Only an owner can end a session."); return; }
-    stopMic(); await L.q;
+    stopMic(); await L.q; L.ending = it.id;
     const n = (it.lines || []).length, drafts = [...liveDrafts(it.id).keys()].length, ended = new Date().toISOString();
     const a = await write("item.edit", it.id, {title:it.title.replace(/^Live session/, "Live session (ended)"),
       body:`Live session from ${(it.live?.started || "").slice(0, 16).replace("T", " ")} to ${ended.slice(0, 16).replace("T", " ")} UTC: ${n} line(s), ${drafts} draft task(s). The stream is below; each line keeps its own history entry.`,
       live:{ended, lines:n}});
     const b = a && await write("status", it.id, {status:"open"});
+    if (L.ending === it.id && (M.state === "live" || M.state === "listening")) M.send("end");
+    L.ending = null;
     if (a && b) toast(`Ended ${it.id}.`);
   }
 
@@ -2567,16 +2591,21 @@ const PTR = {
     r.onerror = e => { toast(e.error === "not-allowed" ? "Microphone not allowed for this page."
       : (e.error === "network" && navigator.brave) ? "Brave has no speech service, so browser speech can't work here. Use the desktop client (audio stays on your PC), or Chrome/Edge."
       : `Browser speech stopped (${e.error}).`); };
-    r.onend = () => { if (L.rec === r){ L.rec = null; render(); } };
-    try { r.start(); L.rec = r; } catch { L.rec = null; }
+    r.onend = () => { if (L.rec === r){ L.rec = null; if (M.state === "listening") M.send("unlisten"); render(); } };
+    try { r.start(); L.rec = r; M.send("listen"); } catch { L.rec = null; }
     render();
   }
-  function stopMic(){ const r = L.rec; L.rec = null; if (r) try { r.stop(); } catch {} render(); }
+  function stopMic(){ const r = L.rec; L.rec = null; if (r){ try { r.stop(); } catch {} if (M.state === "listening") M.send("unlisten"); } render(); }
 
   function render(){
+    follow();
     if (!panel) return;
     const list = sessions(), it = cur();
     if (L.id && !it) L.id = null;
+    // keep the machine in step with the record: a session that ended elsewhere is "lost", picking a live one is "select"
+    const isLive = it?.status === "live";
+    if (!isLive && (M.state === "live" || M.state === "listening")) M.send(L.ending === it?.id && it ? "end" : "lost", {});
+    else if (isLive && M.state === "idle") M.send("select");
     const opts = [...list]; if (it && !list.includes(it)) opts.unshift(it);
     panel.querySelector("#liveSel").innerHTML = opts.length ? opts.map(s => `<option value="${esc(s.id)}" ${s.id === L.id ? "selected" : ""}>${esc(s.id)}${s.status === "live" ? " ● live" : ""}</option>`).join("")
       : '<option value="">no live session</option>';
@@ -2593,7 +2622,9 @@ const PTR = {
     if (atEnd) box.scrollTop = box.scrollHeight;
   }
 
-  window.NodachLive = {open, close, render, start, end, send, draft, session: () => L.id, listening: () => !!L.rec, parse: liveTask};
+  window.NodachLive = {open, close, render, start, end, send, draft, session: () => L.id, listening: () => !!L.rec, parse: liveTask,
+    /* a readout for tests and graphs: the machine's state, the session, the fast pull and the transitions so far */
+    state: () => ({state:M.state, session:L.id, listening:!!L.rec, fast_poll_ms:fastT ? FAST_MS : 0, trace:M.trace(), edges:M.edges()})};
 })();
 </script>
 <script type="module">
