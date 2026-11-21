@@ -171,12 +171,15 @@ class Gate:
     def child_params(self):
         from mcp.client.stdio import StdioServerParameters
         env = dict(os.environ)
-        env.update({"ANONYMIZED_TELEMETRY": "false", "PYTHONUTF8": "1"})
+        # 21 Nov (test 4): Windows-MCP's own control layer showed its 'AI is taking control' prompt and locked the
+        # mouse, so Nowed couldn't click Gate's Allow and had to press its escape keys. Gate is the one consent
+        # layer: Windows-MCP runs with its control layer off.
+        env.update({"ANONYMIZED_TELEMETRY": "false", "PYTHONUTF8": "1", "WINDOWS_MCP_CONTROL": "false"})
         env.pop("WINDOWS_MCP_EXCLUDE_TOOLS", None)
         env["WINDOWS_MCP_TOOLS"] = ",".join(core.UI_TOOLS)
         test_cmd = os.environ.get("NODACH_GATE_CHILD_CMD")      # tests only: a stand-in for Windows-MCP
         cmd = self.child_cmd or (json.loads(test_cmd) if test_cmd else None) \
-            or [sys.executable, "-m", "windows_mcp", "serve", "--tools", ",".join(core.UI_TOOLS)]
+            or [sys.executable, "-m", "windows_mcp", "serve", "--no-control", "--tools", ",".join(core.UI_TOOLS)]
         return StdioServerParameters(command=cmd[0], args=cmd[1:], env=env)
 
     async def connect(self, stack: contextlib.AsyncExitStack):

@@ -22,7 +22,7 @@ import json
 import re
 from pathlib import Path
 
-VERSION = "0.1.4"
+VERSION = "0.1.5"
 SCHEMA = "gate.v1"
 HERE = Path(__file__).resolve().parent
 DEFAULT_ZONES = HERE / "zones.json"
