@@ -168,6 +168,24 @@ pub fn gemini_text(v: &Value) -> String {
         .to_string()
 }
 
+/// Longest wait for one model call before it is abandoned (the busy-model retry then tries the next).
+pub const AI_TIMEOUT_MS: u64 = 20_000;
+
+/// What a Studio poll does when a line is due an answer, given the stored alarm time.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Nudge { Wait, Rearm, RunNow }
+
+/// No alarm, or one far off: re-arm the wake. An alarm more than 15 s overdue never ran (run 5b): answer now.
+/// An alarm due within 30 s, or overdue by less than 15 s: wait for it.
+pub fn nudge(alarm_at: Option<i64>, now: i64) -> Nudge {
+    match alarm_at {
+        None => Nudge::Rearm,
+        Some(at) if at < now - 15_000 => Nudge::RunNow,
+        Some(at) if at <= now + 30_000 => Nudge::Wait,
+        Some(_) => Nudge::Rearm,
+    }
+}
+
 /// How soon a live line wakes the responder. workers-rs `set_alarm(i64)` reads the number as an OFFSET from now,
 /// not an epoch time (F-responder-alarm, 21 Nov: `now + 200` scheduled the wake ~56 years ahead and pushed the
 /// hourly schedule with it). Always pass an offset from these helpers, never an absolute time.
@@ -323,5 +341,14 @@ mod tests {
             {"text": "thinking...", "thought": true}, {"text": "Noted. I"}, {"text": "'ll pass the cramped versions line to Claude."}]}}]});
         assert_eq!(gemini_text(&v), "Noted. I'll pass the cramped versions line to Claude.");
         assert_eq!(gemini_text(&json!({})), "");
+    }
+
+    #[test]
+    fn poll_nudge_rearms_waits_or_runs_an_overdue_wake() {
+        assert_eq!(nudge(None, NOW), Nudge::Rearm);
+        assert_eq!(nudge(Some(NOW + 200), NOW), Nudge::Wait);
+        assert_eq!(nudge(Some(NOW - 5_000), NOW), Nudge::Wait);
+        assert_eq!(nudge(Some(NOW - 60_000), NOW), Nudge::RunNow);
+        assert_eq!(nudge(Some(NOW + 3_000_000), NOW), Nudge::Rearm);
     }
 }

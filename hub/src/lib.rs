@@ -614,7 +614,19 @@ impl Record {
         h.set("x-goog-api-key", key).map_err(e)?;
         let mut init = RequestInit::new();
         init.with_method(Method::Post).with_headers(h).with_body(Some(worker::wasm_bindgen::JsValue::from_str(body)));
-        let mut r = Fetch::Request(Request::new_with_init(&url, &init).map_err(e)?).send().await.map_err(e)?;
+        // a hung model call must never hold the alarm (run 5b, 21 Nov): abort after AI_TIMEOUT_MS
+        let ctl = worker::AbortController::default();
+        let signal = ctl.signal();
+        let fetch = Fetch::Request(Request::new_with_init(&url, &init).map_err(e)?);
+        let tx = std::rc::Rc::new(std::cell::Cell::new(false));
+        let done = tx.clone();
+        worker::wasm_bindgen_futures::spawn_local(async move {
+            worker::Delay::from(std::time::Duration::from_millis(hub_core::responder::AI_TIMEOUT_MS)).await;
+            if !done.get() { ctl.abort(); }
+        });
+        let sent = fetch.send_with_signal(&signal).await;
+        tx.set(true);
+        let mut r = sent.map_err(|x| if signal.aborted() { (0u16, format!("no answer in {} s", hub_core::responder::AI_TIMEOUT_MS / 1000)) } else { e(x) })?;
         let status = r.status_code();
         let v: serde_json::Value = r.json().await.unwrap_or(serde_json::Value::Null);
         if !(200..300).contains(&status) {
@@ -733,10 +745,19 @@ impl Record {
         let tried = match self.responder_tried() { Ok(t) => t, Err(_) => return };
         if hub_core::responder::due(&docs, &tried, now).is_empty() { return; }
         let st = self.state.storage();
-        let soon = matches!(st.get_alarm().await, Ok(Some(at)) if at <= now + 30_000);
-        if !soon {
-            let outcome = match st.set_alarm(hub_core::responder::WAKE_OFFSET_MS).await { Ok(()) => "re-armed".to_string(), Err(e) => format!("alarm not set: {e}") };
-            self.log(now, "/live-responder", "nudge", &outcome, who);
+        let at = st.get_alarm().await.ok().flatten();
+        match hub_core::responder::nudge(at, now) {
+            hub_core::responder::Nudge::Wait => {}
+            hub_core::responder::Nudge::Rearm => {
+                let outcome = match st.set_alarm(hub_core::responder::WAKE_OFFSET_MS).await { Ok(()) => "re-armed".to_string(), Err(e) => format!("alarm not set: {e}") };
+                self.log(now, "/live-responder", "nudge", &outcome, who);
+            }
+            hub_core::responder::Nudge::RunNow => {
+                // the wake alarm is overdue and hasn't run: answer from this request (lines are marked before each
+                // call, so an alarm that wakes later skips them)
+                let outcome = match self.responder_pass(now).await { Ok(n) => format!("alarm overdue: ran here, {n} due"), Err(e) => format!("alarm overdue: failed: {}", e.chars().take(100).collect::<String>()) };
+                self.log(now, "/live-responder", "nudge", &outcome, who);
+            }
         }
     }
 
@@ -1526,6 +1547,7 @@ impl DurableObject for Record {
         self.load()?;
         let now = Date::now().as_millis() as i64;
         // next wake-up first, so a failed run can never stop the schedule
+        self.log(now, "/alarm", "start", "fired", "hub");   // proves the alarm ran, even if what follows hangs
         self.state.storage().set_alarm(hub_core::responder::next_hour_offset(now)).await?;
         match self.responder_pass(now).await {
             Ok(n) => self.log(now, "/alarm", "responder wake", &format!("{n} due"), "hub"),
