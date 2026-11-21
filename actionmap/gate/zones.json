@@ -1,7 +1,7 @@
 {
  "_comment": "Nodach Gate trust zones. JSON has no comments, so every key starting with _ is a comment and is ignored. Edit your copy at %USERPROFILE%\\nodach-gate\\zones.json (Gate reloads it when it changes and keeps each version it has seen in zones-history\\). Bump 'revision' and add a line to '_changes' when you edit, so the log shows which rules were in force. Words match whole words, case-insensitive. Process names match with or without .exe.",
  "schema": "gate.zones.v1",
- "revision": 2,
+ "revision": 3,
  "_changes": [
   "1 (2026-11-20): first version, approved by Nowed (never-list and zones as built).",
   {
@@ -9,6 +9,12 @@
    "date": "2026-11-21",
    "by": "Claude",
    "what": "added never group 'secrets in files' after Gate read a recovery-codes file in Notepad"
+  },
+  {
+   "revision": 3,
+   "date": "2026-11-21",
+   "by": "Claude",
+   "what": "Nowed: never touch Desktop\\Nodach\\nodach_sec. Added nodach_sec and client_secret; element names or values naming a secret are now hidden in every window (Gate showed a file name inside nodach_sec in an Explorer window)."
   }
  ],
  "_never": "NEVER: refused with a reason, no popup, no grant can open it. Checked against the window the action lands in (process name and title) and the target element's name. applies_to 'all' also hides reads (Snapshot/Screenshot are refused while it's in front, and its elements are cut out of any Snapshot); 'input' only stops clicks/keys/typing.",
@@ -66,10 +72,14 @@
     "wallet",
     "passphrase",
     "kek",
-    "seed"
+    "seed",
+    "nodach_sec",
+    "client_secret",
+    "client-secret"
    ],
    "element_words": [],
-   "note": "21 Nov: Notepad reopened github-recovery-codes.txt and Gate passed its text to Claude. Windows whose title names a secret are never read or touched."
+   "note": "21 Nov: Notepad reopened github-recovery-codes.txt and Gate passed its text to Claude. Windows whose title names a secret are never read or touched.",
+   "redact_elements": true
   },
   {
    "name": "banking or payment",

@@ -22,7 +22,7 @@ import json
 import re
 from pathlib import Path
 
-VERSION = "0.1.2"
+VERSION = "0.1.3"
 SCHEMA = "gate.v1"
 HERE = Path(__file__).resolve().parent
 DEFAULT_ZONES = HERE / "zones.json"
@@ -527,7 +527,18 @@ def redact_snapshot(text: str, zones: dict) -> tuple[str, int]:
     # before the UI tree: any other line naming a never-zone window (Focused/Opened Windows list)
     head, sep, tail = t.partition("UI Tree:")
     head = "\n".join(HIDDEN if _never(zones, "", ln, "", input_action=False) else ln for ln in head.splitlines())
-    return head + sep + tail, len(titles)
+    t = head + sep + tail
+    # 21 Nov: an Explorer window open on nodach_sec listed a client_secret file name. Any element whose name or
+    # value names a secret is hidden, in every window, not only windows with a secret title.
+    words = [w for g in zones.get("never", []) if g.get("redact_elements") for w in (g.get("title_words") or [])]
+    rx = _rx(words)
+    if rx:
+        def scrub(line):
+            if not rx.search(line):
+                return line
+            return re.sub(r'"[^"]*"', '"' + HIDDEN + '"', line)
+        t = "\n".join(scrub(ln) for ln in t.splitlines())
+    return t, len(titles)
 
 
 def parse_elements(text: str) -> list[dict]:

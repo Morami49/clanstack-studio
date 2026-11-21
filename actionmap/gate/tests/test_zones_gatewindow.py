@@ -31,3 +31,15 @@ def test_upgrade_zones_adds_new_never_groups_and_keeps_edits():
     assert added == ["secrets in files"] and z["revision"] == 2
     assert z["never"][0]["processes"] == ["MyVault"] and z["auto_apps"] == ["X"]
     assert core.upgrade_zones(z, default)[1] == []
+
+
+def test_secret_element_names_hidden_in_any_window():
+    z = _z()
+    snap = ('UI Tree:\ndesktop\n├── window "C:\\\\Users\\\\x\\\\Desktop\\\\Nodach - File Explorer"\n'
+            '│   ├── (813,257) list item "client_secret_123.apps.googleusercontent.com.json"  [action: click]\n'
+            '│   └── (10,10) list item "notes.txt"  [action: click]')
+    out, _ = core.redact_snapshot(snap, z)
+    assert "client_secret_123" not in out and "notes.txt" in out
+    snap2 = 'UI Tree:\ndesktop\n├── window "C:\\\\Users\\\\x\\\\Desktop\\\\Nodach\\\\nodach_sec - File Explorer"\n│   └── (1,1) list item "anything.json"'
+    out2, n = core.redact_snapshot(snap2, z)
+    assert "anything.json" not in out2 and n == 1
