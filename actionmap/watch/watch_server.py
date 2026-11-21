@@ -100,6 +100,9 @@ class Watch:
         self.capturing = False             # a capture is running (the app doesn't restart itself mid-capture)
         self.test_last = None              # the latest test input, for the page to attach and note
         self.test_seq = 0
+        self.chat_notes: list[dict] = []   # Watch's own grey rows (test inputs, a session ended for quiet), by session
+        self.pending = None                # the last line sent, until a reply comes (the 'waiting' row)
+        self.watch_since = time.time()     # when Watch was (last seen) turned on: older glitch clips are never offered
         self.ui, self.ui_t = {}, 0.0       # what the page last reported it shows
         self.tokens = token_store or _LiveTokens()
         self.voice = voice
@@ -239,11 +242,7 @@ class Watch:
             ev = core.lesson_event(sid, me, t, self.stream(sid))
             h.post(ev)
             out["lesson"] = ev["body"]["id"]
-        ts = core.iso(t)
-        au = live_core.author(me)
-        h.post({"ts": ts, "kind": "item.edit", "item": sid, "branch": "main", "author": au,
-                "body": {"live": {"ended": ts}, "body": f"Live session ended {ts[:16].replace('T', ' ')} UTC from the Watch window."}})
-        h.post({"ts": ts, "kind": "status", "item": sid, "branch": "main", "author": au, "body": {"status": "open"}})
+        self._end(sid, me, "from the Watch window")
         self.pull(force=True)
         self.note("session", "ok", f"ended {sid}" + (f", kept as lesson {out['lesson']}" if lesson else ""))
         return out
@@ -266,9 +265,14 @@ class Watch:
     def offer(self, now: float | None = None):
         """U1b: 'looks like you're stuck' (Settings toggle, off by default)."""
         now = now or time.time()
+        if not self.gate_state().get("watch"):
+            self.watch_since = None
+            return None
+        if self.watch_since is None:
+            self.watch_since = now
         log = self.gate_log()
         asked = self.settings.setdefault("glitch_asked", {})
-        o = core.glitch_offer(log, asked, now)        # U4: always on, at most once per app per hour
+        o = core.glitch_offer(log, asked, now, since=self.watch_since)        # U4: always on, at most once per app per hour
         if o:
             self.save_settings()
         else:
@@ -304,11 +308,55 @@ class Watch:
             fn(self.home / "exports")
         return {"html": Path(r["html"]).name, "zip": Path(r["zip"]).name, "folder": "nodach-watch/exports"}
 
+    def chat_note(self, text: str, session: str | None = None, kind: str = "note"):
+        """A grey row from Watch itself in the chat (SC-golden-looksoff-1 #6: the test-input note didn't show)."""
+        t = core.utcnow()
+        self.chat_notes.append({"id": f"wn-{len(self.chat_notes) + 1}", "ts": core.iso(t), "time": core.iso(t)[11:19], "kind": kind,
+                                "who": "Watch", "text": str(text)[:300], "words": "", "via": None,
+                                "session": session or self.settings.get("session")})
+        self.chat_notes = self.chat_notes[-50:]
+
     def stream(self, session: str | None) -> list:
         session = session or self.settings.get("session")
         if not session:
             return []
-        return core.stream_rows(self.pull(), session)[-200:]
+        docs = self.pull()
+        me_id = (self._me or {}).get("id")
+        rows = core.stream_rows(docs, session, me_id)
+        rows += [dict(n) for n in self.chat_notes if n.get("session") == session]
+        rows.sort(key=lambda r: r.get("ts") or "")
+        if self.pending and self.pending.get("session") == session:
+            w = core.wait_row(self.pending, rows, docs, time.time())
+            if w:
+                rows.append(w)
+            else:
+                self.pending = None
+        return rows[-200:]
+
+    def _end(self, sid: str, me: dict, why: str):
+        h, t = self.hub(), core.utcnow()
+        ts = core.iso(t)
+        au = live_core.author(me)
+        h.post({"ts": ts, "kind": "item.edit", "item": sid, "branch": "main", "author": au,
+                "body": {"live": {"ended": ts}, "body": f"Live session ended {ts[:16].replace('T', ' ')} UTC {why}."}})
+        h.post({"ts": ts, "kind": "status", "item": sid, "branch": "main", "author": au, "body": {"status": "open"}})
+
+    def retire_if_idle(self, session: str, me: dict) -> str:
+        """SC-golden-looksoff-1 #2: a session with no activity for idle_end_minutes (default 30) ends itself on the next
+        send, and the line goes to a fresh session (owners). Returns the session to send to."""
+        mins = core.idle_minutes(self.settings)
+        docs = self.pull(force=True)
+        rows = core.session_list(docs, me)
+        st = next((r["state"] for r in rows if r["id"] == session), None)
+        if st != "live" or not core.is_idle(docs, session, time.time(), mins):
+            return session
+        if not me.get("owner"):
+            raise ApiError(f"This session has been quiet for {mins}+ minutes: ask the owner to start a new one", 409)
+        self._end(session, me, f"after {mins} quiet minutes (Watch)")
+        self.note("session", "ok", f"ended {session} after {mins} quiet minutes")
+        new = self.start_session()["session"]
+        self.chat_note(f"{session} had been quiet for {mins}+ minutes, so it ended; this is a new session.", new)
+        return new
 
     # ------------------------------------------------------------ sign-in and sessions
     def signin(self) -> dict:
@@ -451,6 +499,7 @@ class Watch:
         self.test_seq += 1
         self.test_last = {"seq": self.test_seq, "action": action, "note": note, "event": ev, "at": core.iso(core.utcnow()), "t": time.time()}
         self.note("test-input", "ok", f"{note}: {ev['words']}")
+        self.chat_note(note[:1].upper() + note[1:])
         return {"event": ev, "seq": self.test_seq, "note": note,
                 "elements": [x.get("name") for x in (e.get("elements") or [])][:40] if mode == "area" else None}
 
@@ -537,6 +586,7 @@ class Watch:
         ev = core.line_event(session, self.me(), line, core.utcnow(), point=point, watch=fields)
         did = self.hub().post(ev)
         self.pull(force=True)
+        self.pending = {"session": session, "line": did, "ts": ev["ts"], "t": time.time()}
         self.note("send", "ok", f"route {route} for {carousel}")
         return {"sent": did, "session": session}
 
@@ -618,6 +668,7 @@ class Watch:
         if not line.strip() and not point:
             raise ApiError("Nothing to send: type a line or add a point")
         me = self.me()
+        session = self.retire_if_idle(session, me)
         rows = core.session_list(self.pull(force=True), me)
         tgt = live_core.send_target(rows, session)
         if tgt["action"] == "switch":
@@ -637,6 +688,7 @@ class Watch:
         if task and me.get("owner"):
             self.hub().post(live_core.task_event(session, did, task, me, core.utcnow()))
         self.pull(force=True)
+        self.pending = {"session": session, "line": did, "ts": ev["ts"], "t": time.time()}
         self.note("send", "ok", f"{len(line)} chars" + (" + point" if point else "") + (f" [{chip}]" if chip else ""))
         with open(self.home / "lines.jsonl", "a", encoding="utf-8") as f:
             f.write(json.dumps({"ts": ev["ts"], "session": session, "doc_id": did, "text": line, "chip": chip,

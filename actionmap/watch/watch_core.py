@@ -30,7 +30,7 @@ import secrets
 import sys
 from pathlib import Path
 
-VERSION = "0.1.0"
+VERSION = "0.2.2"
 SCHEMA = "pointer.v1"
 TOOL = "nodach-watch"
 HERE = Path(__file__).resolve().parent
@@ -302,15 +302,53 @@ def wrong_place(t: dt.datetime, *, from_pt, to_pt, from_element=None, to_element
 
 
 # ---------------------------------------------------------------- what may be shared
+_OWN_PROCS = {"python", "pythonw", "python3", "pythonw3", "nodach-watch"}
+_FRIENDLY = {"chrome": "Chrome", "msedge": "Edge", "firefox": "Firefox", "brave": "Brave", "explorer": "File Explorer",
+             "notepad": "Notepad", "code": "VS Code", "claude": "Claude", "winword": "Word", "excel": "Excel",
+             "powerpnt": "PowerPoint", "outlook": "Outlook", "teams": "Teams", "ms-teams": "Teams", "slack": "Slack"}
+
+
+def app_label(e: dict) -> str:
+    """The app as a person names it (SC-golden-looksoff-1 #3, 21 Nov: 'pythonw.exe' was shown for Nodach Desktop).
+    Nodach's own windows run in python(w).exe, so they go by their window title (it never holds personal text);
+    every other app goes by a friendly name from its process, never its window title (titles can hold file names,
+    subjects and so on: shareable() keeps them out of the shared record)."""
+    e = e or {}
+    proc = str((e.get("process") or {}).get("name") or e.get("app") or "").strip()
+    stem = proc.lower().removesuffix(".exe")
+    title = str((e.get("window") or {}).get("title") or "").strip()
+    if stem in _OWN_PROCS or stem.startswith("nodach"):
+        if title.lower().startswith("nodach"):
+            return title[:40]
+        return "Nodach"
+    if not stem:
+        return "desktop"
+    return _FRIENDLY.get(stem) or proc.removesuffix(".exe").removesuffix(".EXE")[:40]
+
+
+def named_elements(elements, n: int = 3) -> tuple[list[str], int]:
+    """The first n distinct element names (unnamed elements are left out of the words), and how many others there are."""
+    names = []
+    for x in elements or []:
+        nm = re.sub(r"\s+", " ", str((x or {}).get("name") or "")).strip()
+        if nm and nm not in names:
+            names.append(nm[:40])
+    shown = names[:n]
+    return shown, len(names) - len(shown)
+
+
 def point_words(e: dict) -> str:
     """Short words for a point, as Studio's livePointWords shows them."""
     if not e:
         return ""
     if e.get("kept_out"):
         return f"⌖ (kept out: {e['kept_out']})"
-    app = (e.get("process") or {}).get("name") or e.get("app") or "desktop"
+    app = app_label(e)
     if e.get("kind") == "area":
-        return f"⌖ {app} › area, {len(e.get('elements') or [])} element(s)"
+        shown, more = named_elements(e.get("elements"))
+        if not shown:
+            return f"⌖ {app} › an area" + (f" ({len(e.get('elements') or [])} unnamed parts)" if e.get("elements") else "")
+        return f"⌖ {app} › area: " + ", ".join(f"“{x}”" for x in shown) + (f" +{more} more" if more else "")
     if e.get("kind") == "markup":
         return f"⌖ {app} › mark-up{' (' + PRESETS[e['preset']]['label'] + ')' if e.get('preset') in PRESETS else ''}: {(e.get('element') or {}).get('name', '')}"
     el = e.get("element") or {}
@@ -327,7 +365,7 @@ def shareable(e: dict, picture: dict | None = None) -> dict | None:
         return {"schema": SCHEMA, "kind": e.get("kind"), "id": e.get("id"), "kept_out": e["kept_out"]}
     el = e.get("element") or {}
     out = {"schema": SCHEMA, "kind": e.get("kind") or "pointer.desktop", "id": e.get("id"), "via": "watch",
-           "app": ((e.get("process") or {}).get("name") or "")[:60],
+           "app": app_label(e)[:60],
            "element": {"type": str(el.get("type") or "")[:40], "name": str(el.get("name") or "")[:80], "rect": el.get("rect")}}
     if e.get("kind") == "area":
         out["rect"] = e.get("rect")
@@ -462,11 +500,24 @@ def line_event(session: str, me: dict, text: str, t: dt.datetime, *, point=None,
 
 
 # ---------------------------------------------------------------- the stream (as Studio's Live panel)
-def _who(a: dict, via=None) -> str:
+RESPONDER_ID = "agent:live-responder"
+RESPONDER_LABEL = "Quick answer (Gemini)"
+
+
+def _who(a: dict, via=None, me_id: str | None = None) -> str:
+    """Who wrote a row, as the Watch chat names them (SC-golden-looksoff-1 #4: 'Morami49 via Claude' read as if
+    Nowed wrote Claude's replies). Claude's replies through the connector are 'Claude'; the hub's quick answers
+    say which model wrote them; the signed-in person is 'You'."""
     a = a or {}
-    if a.get("id") == "claude" or a.get("role") == "agent":
+    if a.get("id") == RESPONDER_ID or via == "live-responder":
+        return RESPONDER_LABEL
+    if via == "claude-connector" or a.get("id") == "claude":
+        return "Claude"
+    if a.get("role") == "agent":
         return a.get("label") or "Claude"
-    return (a.get("label") or a.get("role") or "someone") + (" via Claude" if via == "claude-connector" else "")
+    if me_id and a.get("id") == me_id:
+        return "You"
+    return a.get("label") or a.get("role") or "someone"
 
 
 def is_reply(e: dict) -> bool:
@@ -482,7 +533,7 @@ def step_words(st: dict) -> str:
     return "Note: " + (st.get("text") or "") if k == "note" else f"Drew around {what}{part}" if k == "stroke" else f"Pointed at {what}{part}"
 
 
-def stream_rows(docs, session: str) -> list[dict]:
+def stream_rows(docs, session: str, me_id: str | None = None) -> list[dict]:
     """One session's stream from /studio/api/events rows ([{doc_id, event}]): its live.line events, comments
     (connector and responder replies included) and show steps, by time; taken-back entries left out.
     Rows: {id, ts, time, kind: line|reply|note|step, who, text, words (point), via, report}."""
@@ -503,13 +554,13 @@ def stream_rows(docs, session: str) -> list[dict]:
             if isinstance(p, dict) and not words:
                 el = p.get("element")
                 words = f"⌖ {p.get('app') or p.get('part') or 'desktop'} › {(el.get('name') if isinstance(el, dict) else el) or ''}"
-            rows.append(dict(base, kind="line", who=b.get("speaker") or _who(e.get("author")), text=b.get("text") or "",
+            rows.append(dict(base, kind="line", who=_who(e.get("author"), None, me_id) if me_id else (b.get("speaker") or _who(e.get("author"))), text=b.get("text") or "",
                              words=words or "", chip=(b.get("watch") or {}).get("chip")))
         elif e.get("kind") == "comment":
             if b.get("step"):
-                rows.append(dict(base, kind="step", who=_who(e.get("author")), text=step_words(b["step"]), words=""))
+                rows.append(dict(base, kind="step", who=_who(e.get("author"), None, me_id), text=step_words(b["step"]), words=""))
             else:
-                row = dict(base, kind="reply" if is_reply(e) else "note", who=_who(e.get("author"), e.get("via")),
+                row = dict(base, kind="reply" if is_reply(e) else "note", who=_who(e.get("author"), b.get("via") if b.get("via") == "live-responder" else e.get("via"), me_id),
                            text=str(b.get("text") or "")[:4000], words="", report=bool(b.get("report")))
                 car = carousel_from(b.get("carousel"), d.get("doc_id"))
                 if car:
@@ -759,7 +810,10 @@ def incident_text(fields: dict) -> str:
 GLITCH_ASK_EVERY_S = 3600
 
 
-def glitch_offer(entries, asked: dict, now: float, every_s: int = GLITCH_ASK_EVERY_S) -> dict | None:
+GLITCH_GRACE_S = 10     # a clip kept just before the Watch window first looked still counts
+
+
+def glitch_offer(entries, asked: dict, now: float, every_s: int = GLITCH_ASK_EVERY_S, since: float | None = None) -> dict | None:
     """Gate keeps a clip when the screen changes with no action (trigger 'glitch'). Ask 'report it?' for the newest
     one not asked about yet, at most once per app per hour. asked: {app: last asked time, '_seen': [clip paths]},
     updated in place. The app is the one the last action before the clip ran in (Gate's clip entry has none)."""
@@ -770,6 +824,14 @@ def glitch_offer(entries, asked: dict, now: float, every_s: int = GLITCH_ASK_EVE
         if e.get("kind", "action") == "action" and e.get("app"):
             last_app = e["app"]
         elif e.get("kind") == "clip" and e.get("trigger") == "glitch" and e.get("path") not in seen:
+            # SC-golden-looksoff-1 #5: a clip from before Watch was turned on, or one from Nodach's own windows,
+            # is never offered (an old clip came back as a fresh 'report it?')
+            if since is not None and float(e.get("_t") or 0) < since - GLITCH_GRACE_S:
+                seen.add(e.get("path"))
+                continue
+            if app_label({"app": last_app}).startswith("Nodach"):
+                seen.add(e.get("path"))
+                continue
             found = (e, last_app)
     if not found:
         return None
@@ -1026,3 +1088,77 @@ def reload_decision(prev: dict | None, cur: dict | None, capturing: bool) -> str
     if prev.get("web") != cur.get("web"):
         return "reload"
     return None
+
+
+# ---------------------------------------------------------------- sessions end after a quiet spell (SC-golden-looksoff-1 #2)
+IDLE_END_MIN = 30
+
+
+def _ts(s) -> float:
+    try:
+        return dt.datetime.fromisoformat(str(s).replace("Z", "+00:00")).timestamp()
+    except (ValueError, TypeError):
+        return 0.0
+
+
+def last_activity(docs, session: str) -> float:
+    """When anything last happened in a session (its start, a line, a reply, an edit): epoch seconds, 0 if unknown."""
+    best = 0.0
+    for d in docs or []:
+        e = (d or {}).get("event") or {}
+        b = e.get("body") or {}
+        if e.get("item") == session or (e.get("kind") == "item.create" and b.get("id") == session):
+            best = max(best, _ts(e.get("ts")))
+    return best
+
+
+def idle_minutes(settings: dict | None) -> int:
+    """settings.json 'idle_end_minutes' (0 turns ending off); default 30."""
+    try:
+        v = int((settings or {}).get("idle_end_minutes", IDLE_END_MIN))
+    except (TypeError, ValueError):
+        v = IDLE_END_MIN
+    return max(0, v)
+
+
+def is_idle(docs, session: str, now: float, minutes: int) -> bool:
+    if not minutes:
+        return False
+    last = last_activity(docs, session)
+    return bool(last) and now - last >= minutes * 60
+
+
+def responder_on(docs, session: str) -> bool | None:
+    """The session's live.responder switch (item.create, then item.edit in order; the latest wins); None if never set."""
+    on = None
+    for d in docs or []:
+        e = (d or {}).get("event") or {}
+        b = e.get("body") or {}
+        if (e.get("kind") == "item.create" and b.get("id") == session) or (e.get("kind") == "item.edit" and e.get("item") == session):
+            lv = b.get("live") if isinstance(b.get("live"), dict) else {}
+            if "responder" in lv:
+                on = bool(lv["responder"])
+    return on
+
+
+WAIT_S = 45
+
+
+def wait_row(pending: dict | None, rows, docs, now: float) -> dict | None:
+    """After a send: a 'waiting for a quick answer' row until a reply newer than the line arrives, never silence.
+    pending: {session, line, ts (iso), t (epoch)}. Returns the row to show, or None once answered."""
+    if not pending:
+        return None
+    if any(r.get("kind") == "reply" and str(r.get("ts") or "") > str(pending.get("ts") or "") for r in rows or []):
+        return None
+    on = responder_on(docs, pending.get("session"))
+    age = now - float(pending.get("t") or now)
+    if on is False:
+        text = "Quick answers are off for this session. Claude answers when you next message the chat."
+    elif age < WAIT_S:
+        text = "Waiting for a quick answer…"
+    else:
+        text = ("No quick answer came (the hub's AI may be busy or not set up). "
+                "Claude answers when you next message the chat.")
+    return {"id": "wait-" + str(pending.get("line") or ""), "ts": pending.get("ts") or "", "time": str(pending.get("ts") or "")[11:19],
+            "kind": "wait", "who": "Watch", "text": text, "words": "", "via": None}

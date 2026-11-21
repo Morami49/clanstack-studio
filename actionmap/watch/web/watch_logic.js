@@ -138,7 +138,7 @@
     idx = idx || {};
     if (!rows || !rows.length) return '<li class="empty">No lines yet. Type, talk, or point.</li>';
     return rows.map(function (r) {
-      const cls = r.kind === "line" ? "line" : r.kind === "step" ? "step" : r.kind === "reply" ? "reply" : "note";
+      const cls = r.kind === "line" ? "line" : r.kind === "step" ? "step" : r.kind === "reply" ? "reply" : r.kind === "wait" ? "note wait" : "note";
       return '<li class="' + cls + (r.carousel ? " wide" : "") + '"><span class="meta">' + esc(r.time) + " · " + esc(r.who) + (r.via ? " · " + esc(r.via) : "") + "</span>" +
         '<span class="text">' + esc(r.text) + "</span>" + (r.words ? '<span class="chip small">' + esc(r.words) + "</span>" : "") +
         (r.carousel ? cardHtml(r.carousel, idx[r.carousel.id] || 0) : "") + "</li>";

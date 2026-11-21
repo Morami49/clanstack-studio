@@ -75,3 +75,6 @@ body.big .bar button { font-size:15px; }
 #frame.simple #sessionRow { display: none; }
 #moreBtn[aria-pressed="true"] { font-weight: 600; }
 .pic { font-weight: 600; padding: 2px 6px; border: 1px solid currentColor; border-radius: 6px; }
+/* Watch's own rows (test inputs, a quiet session ended) and the 'waiting for a quick answer' row */
+.chat li.note { align-self:center; background:none; border:1px solid #bbb; color:#777; font-size:.8em; padding:2px 8px; }
+.chat li.note.wait { border-style:dashed; color:#555; }

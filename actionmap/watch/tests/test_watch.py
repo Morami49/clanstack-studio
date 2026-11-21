@@ -98,9 +98,9 @@ def test_shareable_never_carries_titles_paths_or_cursor():
     blob = json.dumps(sh)
     assert "Studio - Nodach" not in blob and "Users" not in blob and "cursor" not in sh and "ancestors" not in sh
     assert sh["picture"] == {"name": "x.png", "bytes": 10, "sha256": "ab", "private_path": "data/users/u/watch/files", "chunks": 1}
-    assert sh["app"] == "chrome.exe" and sh["element"]["name"] == "Save" and sh["words"] == "⌖ chrome.exe › Save"
+    assert sh["app"] == "Chrome" and sh["element"]["name"] == "Save" and sh["words"] == "⌖ Chrome › Save"
     a = core.shareable(core.area_event(T, area=(0, 0, 99, 99), elements=[el("Save", 1, 1, 9, 9)], window=WIN, process=PROC))
-    assert a["part"] == "chrome.exe" and isinstance(a["element_words"], str) and a["elements"][0]["name"] == "Save"
+    assert a["part"] == "Chrome" and isinstance(a["element_words"], str) and a["elements"][0]["name"] == "Save"
 
 
 # ------------------------------------------------------------------ never zones in pictures
@@ -208,7 +208,10 @@ def test_stream_rows_like_the_live_panel():
     rows = core.stream_rows(docs(), "LV-1")
     assert [(r["kind"], r["text"]) for r in rows] == [("line", "hello"), ("reply", "from the connector"), ("reply", "On it"),
                                                       ("step", "Pointed at Save (toolbar)")]
-    assert rows[0]["words"].startswith("⌖ chrome.exe") and rows[1]["who"] == "Nowed via Claude" and rows[2]["who"] == "Claude"
+    # SC-golden-looksoff-1 #4: Claude's connector replies say "Claude", never "Nowed via Claude"
+    assert rows[0]["words"].startswith("⌖ chrome.exe") and rows[1]["who"] == "Claude" and rows[2]["who"] == "Claude"
+    mine = core.stream_rows(docs(), "LV-1", me_id=docs()[0]["event"]["author"]["id"])
+    assert mine[0]["who"] == "You"
 
 
 # ------------------------------------------------------------------ stuck offers and exports
@@ -476,7 +479,7 @@ def test_api_flow_sign_in_session_point_send_picture(api):
     sid = r["session"]
     assert code == 200 and sid.startswith("LV-") and hub.docs[0]["event"]["body"]["live"]["via"] == "watch"
     code, cap = call("/api/capture", {"mode": "point"})
-    assert code == 200 and cap["event"]["words"] == "⌖ chrome.exe › Save" and calls == ["hide", "show"]
+    assert code == 200 and cap["event"]["words"] == "⌖ Chrome › Save" and calls == ["hide", "show"]
     code, sent = call("/api/send", {"text": "this button", "chip": "looks-off", "opts": {"compare": "none"},
                                     "attach": cap["event"]["id"], "picture": True})
     assert code == 200, sent
@@ -487,7 +490,7 @@ def test_api_flow_sign_in_session_point_send_picture(api):
     assert len(hub.private) == 2 and all(p["path"] == "data/users/x/watch/files" for p in hub.private)
     assert "Users" not in json.dumps(line) and WIN["title"] not in json.dumps(line)
     rows = call(f"/api/stream?session={sid}")[1]["rows"]
-    assert rows[-1]["text"] == "[looks-off] this button"
+    assert [x for x in rows if x["kind"] == "line"][-1]["text"] == "[looks-off] this button" and rows[-1]["kind"] == "wait"
 
 
 def test_api_no_picture_without_the_tick_and_explain_audience(api):
@@ -545,10 +548,14 @@ def test_api_glitch_offer_from_gate_log(api):
     call, hub, tokens, tmp, *_ = api
     now = dt.datetime.now(dt.timezone.utc)
     iso = lambda d: d.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    (tmp / "gate" / "state.json").write_text(json.dumps({"watch": True}))
     with open(tmp / "gate" / "actions.jsonl", "w", encoding="utf-8") as f:
+        f.write(json.dumps({"kind": "action", "ts": iso(now - dt.timedelta(hours=3)), "app": "notepad.exe", "tool": "Click"}) + "\n")
+        f.write(json.dumps({"kind": "clip", "ts": iso(now - dt.timedelta(hours=3)), "trigger": "glitch", "path": "clips/old.gif"}) + "\n")
         f.write(json.dumps({"kind": "action", "ts": iso(now - dt.timedelta(seconds=30)), "app": "chrome.exe", "tool": "Click"}) + "\n")
-        f.write(json.dumps({"kind": "clip", "ts": iso(now - dt.timedelta(seconds=10)), "trigger": "glitch", "path": "clips/x.gif"}) + "\n")
-    assert call("/api/state")[1]["offer"]["reason"] == "glitch"
+        f.write(json.dumps({"kind": "clip", "ts": iso(now - dt.timedelta(seconds=5)), "trigger": "glitch", "path": "clips/x.gif"}) + "\n")
+    o = call("/api/state")[1]["offer"]
+    assert o["reason"] == "glitch" and o["clip"] == "clips/x.gif"        # SC-golden-looksoff-1 #5: the 3-hour-old clip is never offered
     assert call("/api/state")[1]["offer"] is None
 
 
@@ -750,9 +757,9 @@ def test_page_in_a_headless_browser(api):
         (tmp / "gate" / "state.json").write_text(json.dumps({"watch": True}))
         call("/api/session/start", {})
         assert call("/api/test/select_area", {"x1": 0, "y1": 0, "x2": 200, "y2": 200})[0] == 200
-        page.wait_for_selector("#chat li.local.test")
+        page.wait_for_selector("#chat li.note")
         page.wait_for_selector("#attRow:not([hidden])")
-        assert "test input from Claude" in page.inner_text("#chat li.local.test") and "1 element" in page.inner_text("#attWords")
+        assert "Test input from Claude" in page.inner_text("#chat") and "Save" in page.inner_text("#attWords")
         for _ in range(60):
             st = call("/api/test/state", {})[1]
             if st["ui"].get("attach") and st["ui"]["attach"]["kind"] == "area":
@@ -811,7 +818,7 @@ def test_api_test_hook_select_area_attaches_notes_and_reports_state(api):
     call("/api/send", {"text": "header too tall", "chip": "looks-off", "opts": {"compare": "none"}, "attach": out["event"]["id"]})
     code, s = call("/api/test/state", {})
     assert code == 200 and s["ui"]["chip"] == "looks-off" and "junk" not in s["ui"] and s["ui"]["controls"][0]["id"] == "send"
-    assert s["chat_last5"][-1]["text"] == "[looks-off] header too tall" and s["window_open"] and s["last_test"]["seq"] == 1
+    assert [x for x in s["chat_last5"] if x["kind"] == "line"][-1]["text"] == "[looks-off] header too tall" and s["window_open"] and s["last_test"]["seq"] == 1
     assert hub.docs[-1]["event"]["body"]["point"]["kind"] == "area"
     code, out = call("/api/test/point", {"x": 5, "y": 5})
     assert code == 200 and out["event"]["kind"] == "pointer.desktop" and out["seq"] == 2
@@ -896,3 +903,92 @@ def test_watch_for_changes_waits_out_a_capture_then_restarts(tmp_path, monkeypat
     t.join(3)
     stop.set()
     assert did == ["restart"] and w.notes[0][0] == "restart"
+
+
+# ------------------------------------------------------------------ 0.2.2: SC-golden-looksoff-1 issues 2-6 and quick answers
+def test_app_label_names_nodach_windows_by_title_and_others_by_app():
+    own = {"process": {"name": "pythonw.exe"}, "window": {"title": "Nodach Desktop"}}
+    assert core.app_label(own) == "Nodach Desktop"
+    assert core.app_label({"process": {"name": "pythonw.exe"}, "window": {"title": "C:\\Users\\akabd\\notes.txt"}}) == "Nodach"
+    assert core.app_label({"process": {"name": "chrome.exe"}, "window": {"title": "Payroll - Google Chrome"}}) == "Chrome"
+    assert core.app_label({"process": {"name": "SomeTool.exe"}}) == "SomeTool"
+    a = core.area_event(T, area=(0, 0, 99, 99), elements=[el("", 1, 1, 9, 9), el("Versions", 1, 1, 9, 9), el("", 2, 2, 8, 8),
+                                                          el("shell 0.1.0", 1, 1, 9, 9), el("gate 0.2.0", 1, 1, 9, 9), el("live 0.2.2", 1, 1, 9, 9)],
+                        window={"title": "Nodach Desktop"}, process={"name": "pythonw.exe"})
+    w = core.point_words(a)
+    assert w == "⌖ Nodach Desktop › area: “Versions”, “shell 0.1.0”, “gate 0.2.0” +1 more" and "pythonw" not in w
+    blank = core.area_event(T, area=(0, 0, 99, 99), elements=[el("", 1, 1, 9, 9)], window=WIN, process=PROC)
+    assert core.point_words(blank) == "⌖ Chrome › an area (1 unnamed parts)"
+    sh = core.shareable(a)
+    assert sh["app"] == "Nodach Desktop" and "pythonw" not in json.dumps(sh)
+
+
+def test_reply_labels_claude_quick_answer_and_you():
+    me = {"id": "github:x", "role": "owner", "label": "Morami49"}
+    d = [{"doc_id": "a", "event": {"ts": "2026-11-21T13:00:01.000Z", "kind": "live.line", "item": "LV-9", "author": me, "body": {"speaker": "Morami49", "text": "looks off"}}},
+         {"doc_id": "b", "event": {"ts": "2026-11-21T13:00:02.000Z", "kind": "comment", "item": "LV-9", "author": me, "via": "claude-connector", "body": {"text": "fix"}}},
+         {"doc_id": "c", "event": {"ts": "2026-11-21T13:00:03.000Z", "kind": "comment", "item": "LV-9", "via": "live-responder",
+                                   "author": {"id": "agent:live-responder", "label": "Live responder (Gemini)", "role": "agent"}, "body": {"text": "quick", "line": "a"}}}]
+    rows = core.stream_rows(d, "LV-9", me_id="github:x")
+    assert [r["who"] for r in rows] == ["You", "Claude", "Quick answer (Gemini)"] and [r["kind"] for r in rows] == ["line", "reply", "reply"]
+    assert not any("via Claude" in r["who"] for r in rows)
+
+
+def test_glitch_offer_skips_clips_before_watch_on_and_nodach_windows():
+    old = [{"kind": "action", "_t": 10, "app": "chrome.exe"}, {"kind": "clip", "_t": 20, "trigger": "glitch", "path": "old.gif"}]
+    assert core.glitch_offer(old, {}, 5000, since=4000) is None
+    own = [{"kind": "action", "_t": 4100, "app": "pythonw.exe"}, {"kind": "clip", "_t": 4110, "trigger": "glitch", "path": "own.gif"}]
+    assert core.glitch_offer(own, {}, 5000, since=4000) is None
+    fresh = old + [{"kind": "action", "_t": 4100, "app": "chrome.exe"}, {"kind": "clip", "_t": 4120, "trigger": "glitch", "path": "new.gif"}]
+    asked = {}
+    assert core.glitch_offer(fresh, asked, 5000, since=4000)["clip"] == "new.gif"
+    assert core.glitch_offer(fresh, asked, 5001, since=4000) is None       # dedupe: asked once
+
+
+def test_idle_and_responder_helpers():
+    d = [{"doc_id": "s", "event": {"ts": "2026-11-20T18:34:50.000Z", "kind": "item.create", "body": {"id": "LV-1", "live": {"responder": True}}}},
+         {"doc_id": "l", "event": {"ts": "2026-11-20T18:40:00.000Z", "kind": "live.line", "item": "LV-1", "body": {"text": "x"}}},
+         {"doc_id": "e", "event": {"ts": "2026-11-20T18:41:00.000Z", "kind": "item.edit", "item": "LV-1", "body": {"live": {"responder": False}}}}]
+    last = core.last_activity(d, "LV-1")
+    assert core.is_idle(d, "LV-1", last + 29 * 60, 30) is False and core.is_idle(d, "LV-1", last + 31 * 60, 30) is True
+    assert core.is_idle(d, "LV-1", last + 10 ** 6, 0) is False                       # 0 turns ending off
+    assert core.idle_minutes({}) == 30 and core.idle_minutes({"idle_end_minutes": "5"}) == 5
+    assert core.responder_on(d, "LV-1") is False and core.responder_on(d[:2], "LV-1") is True and core.responder_on([], "LV-1") is None
+    p = {"session": "LV-1", "line": "l", "ts": "2026-11-20T18:40:00.000Z", "t": 100.0}
+    assert "off for this session" in core.wait_row(p, [], d, 101)["text"]
+    assert core.wait_row(p, [], d[:2], 101)["text"].startswith("Waiting for a quick answer")
+    assert "No quick answer came" in core.wait_row(p, [], d[:2], 100 + core.WAIT_S + 1)["text"]
+    assert core.wait_row(p, [{"kind": "reply", "ts": "2026-11-20T18:40:05.000Z"}], d[:2], 101) is None
+
+
+def test_api_quiet_session_ends_and_the_line_goes_to_a_new_one(api):
+    call, hub, tokens, tmp, *_ = api
+    call("/api/signin", {})
+    sid = call("/api/session/start", {})[1]["session"]
+    hub.docs[0]["event"]["ts"] = "2026-11-20T18:34:50.000Z"                      # started yesterday, never used since
+    call.w.pull(force=True)
+    code, r = call("/api/send", {"text": "the versions line is cramped"})
+    assert code == 200 and r["session"] != sid
+    ended = [d["event"] for d in hub.docs if d["event"].get("item") == sid and d["event"]["kind"] == "item.edit"]
+    assert ended and "quiet minutes" in ended[0]["body"]["body"]
+    line = next(d["event"] for d in hub.docs if d["event"]["kind"] == "live.line")
+    assert line["item"] == r["session"]
+    rows = call(f"/api/stream?session={r['session']}")[1]["rows"]
+    assert any(x["kind"] == "note" and "quiet" in x["text"] for x in rows)
+    assert rows[-1]["kind"] == "wait" and rows[-1]["text"].startswith("Waiting for a quick answer")
+    assert [x["who"] for x in rows if x["kind"] == "line"] == ["You"]
+    hub.post({"ts": "2099-01-01T00:00:00.000Z", "kind": "comment", "item": r["session"], "via": "live-responder",
+              "author": {"id": "agent:live-responder", "label": "Live responder (Gemini)", "role": "agent"}, "body": {"text": "Try a wider box", "line": "x"}})
+    call.w.pull(force=True)
+    rows = call(f"/api/stream?session={r['session']}")[1]["rows"]
+    assert rows[-1]["who"] == "Quick answer (Gemini)" and not any(x["kind"] == "wait" for x in rows)
+
+
+def test_api_test_input_note_is_in_the_stream(api):
+    call, hub, tokens, tmp, *_ = api
+    (tmp / "gate" / "state.json").write_text(json.dumps({"watch": True}))
+    call("/api/signin", {})
+    sid = call("/api/session/start", {})[1]["session"]
+    assert call("/api/test/select_area", {"x1": 0, "y1": 0, "x2": 200, "y2": 200})[0] == 200
+    st = call("/api/test/state", {})[1]
+    assert any(r["who"] == "Watch" and r["text"].startswith("Test input from Claude") for r in st["chat_last5"])

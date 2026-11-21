@@ -49,8 +49,7 @@
     if (s.test) testSeq = Math.max(testSeq, s.test.seq);
     firstLook = false;
     if (t2) {
-      localRows.push(L.testRowHtml(t2.note, (t2.at || "").slice(11, 19)));
-      $("#chat").dataset.html = "";
+      // the grey 'test input from Claude' row now comes from the server's stream, in time order (SC-golden-looksoff-1 #6)
       if (t2.event) { ui = L.attach(ui, t2.event); renderUi(); }
     }
     await stream();
