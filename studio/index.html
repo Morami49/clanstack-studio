@@ -108,6 +108,12 @@ main{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 380px}
 .nd-pick{position:absolute;left:50%;top:14px;transform:translateX(-50%);z-index:6;background:var(--raise);border:1px solid var(--line);border-radius:10px;padding:10px 12px;box-shadow:0 6px 24px rgba(0,0,0,.15);font-size:13px}
 .nd-pick .row{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
 .react-flow__node-frame{z-index:-1!important}
+/* F-idle-wires (21 Nov): step wires ran the dash animation forever, about 80% of a CPU core per open map (CI s51 slowed
+   until a recorded stroke was late in its replay). They now flow for 4 s when the map draws, and again while hovered
+   or selected; none with reduced motion. */
+.react-flow .react-flow__edge.animated path{animation-iteration-count:8}
+.react-flow .react-flow__edge.animated:hover path,.react-flow .react-flow__edge.animated.selected path{animation-iteration-count:infinite}
+@media (prefers-reduced-motion:reduce){.react-flow .react-flow__edge.animated path{animation:none}}
 .nd-step{width:200px;padding:6px 10px;border-radius:12px;border:2px solid var(--accent);background:var(--raise);color:var(--ink);font:12px/1.3 var(--sans,"IBM Plex Sans",system-ui);box-shadow:0 2px 6px rgba(0,0,0,.08)}
 .nd-step.sel{border-width:3px;box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 25%,transparent)}
 .nd-run{margin-top:4px;font:500 10px var(--mono,monospace);color:var(--mute)}.nd-run.ok{color:var(--ok)}.nd-run.bad{color:var(--bad)}
