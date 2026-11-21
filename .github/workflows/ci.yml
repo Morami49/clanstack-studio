@@ -26,6 +26,7 @@ jobs:
         with: {python-version: "3.12"}
       - run: pip install -r requirements.txt
       - run: python -m tests.test_core
+      - run: pip install jsonschema pillow && python pointer/test_pointer.py   # desktop pointer (F-pointer-webview), runs off Windows
   gate:
     # Nodach Gate: zones, log masking, captures, automatic reports, installer config merge, and the MCP proxy end to
     # end against a fake Windows-MCP (no Windows needed)
