@@ -1,0 +1,11 @@
+[package]
+name = "driver-core"
+description = "Nodach Driver core (Gate's rules in Rust): trust-zone decisions, Snapshot redaction, the gate.v1 action log and reload logic. Pure functions, no I/O, identical decisions to actionmap/gate/gate_core.py (checked by parity vectors)."
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.11"
+hex = "0.4"
