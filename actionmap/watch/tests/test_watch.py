@@ -321,6 +321,32 @@ def test_expected_matches_before_a_map_step():
     assert core.expected_matches(step, None)["changed"] == ["nothing found at that spot"]
 
 
+def test_privacy_moments_pause_watch_in_strip_and_pictures():
+    s = core.status_strip(watch=True, paused=False, acting={}, kept_out=1, signed_in=True, session="LV-1", privacy="sign-in page")
+    assert s["watching"] == "Watch paused itself: sign-in page in front" and s["privacy"] == "sign-in page"
+    assert core.status_strip(watch=False, paused=False, acting={}, kept_out=1, signed_in=True, session=None, privacy="payment form")["privacy"] is None
+    ws = [{"app": "chrome.exe", "title": "Sign in - Google Accounts", "rect": (0, 0, 10, 10)},
+          {"app": "chrome.exe", "title": "Basket - Checkout", "rect": (10, 0, 20, 10)},
+          {"app": "notepad.exe", "title": "Untitled - Notepad", "rect": (20, 0, 30, 10)}]
+    assert len(core.redact_rects(ws, Z)) == 2
+    e = core.point_event(T, cursor=(1, 1), element=el("Email", 0, 0, 5, 5), window={"title": "Log in to Studio"}, process=PROC, zones=Z)
+    assert e["kept_out"] == "privacy moment"
+
+
+def test_plain_actions_and_lesson():
+    a = core.area_event(T, area=(0, 0, 500, 500), window=WIN, process=PROC, zones=Z,
+                        elements=[el("Save", 1, 1, 9, 9), el("Name", 10, 10, 90, 30, "EditControl"), el("Save", 1, 1, 9, 9),
+                                  el("Terms", 5, 50, 20, 60, "CheckBoxControl"), el("", 1, 1, 2, 2), el("Logo", 1, 70, 9, 80, "ImageControl")])
+    assert core.plain_actions(a) == ["Press “Save”", "Type into “Name”", "Tick “Terms”", "Look at “Logo” (image)"]
+    p = core.point_event(T, cursor=(1, 1), element=el("Open", 0, 0, 5, 5, "HyperlinkControl"), window=WIN, process=PROC, zones=Z)
+    assert core.plain_actions(p) == ["Open “Open”"]
+    rows = core.stream_rows(docs(), "LV-1")
+    ev = core.lesson_event("LV-1", {"id": "github:x", "owner": True}, T, rows, "Invoices")
+    b = ev["body"]
+    assert b["id"].startswith("LS-") and b["refs"] == ["LV-1"] and b["meta"]["kind"] == "lesson" and b["meta"]["steps"] == 4
+    assert b["title"] == "Lesson: Invoices" and "1. Nowed: hello" in b["body"]
+
+
 def test_status_strip():
     s = core.status_strip(watch=True, paused=False, acting={"active": True, "tool": "Click"}, kept_out=2, signed_in=True, session="LV-1")
     assert s["watching"] == "Watching: all windows except 2 kept out" and s["acting"] == "Claude is acting: Click" and s["gate"] == "ok"
@@ -522,6 +548,37 @@ def test_api_card_markup_and_route(api):
     assert call("/api/route", {"carousel": did, "route": "x"})[0] == 400
 
 
+def test_api_end_with_lesson_shot_and_plain(api):
+    call, hub, tokens, tmp, calls, base = api
+    call("/api/signin", {})
+    sid = call("/api/session/start", {})[1]["session"]
+    cap = call("/api/capture", {"mode": "point"})[1]["event"]
+    req = urllib.request.Request(base + "/api/shot?id=" + cap["id"], headers={"X-Watch-Key": call.key})
+    with urllib.request.urlopen(req) as r:
+        assert r.headers["Content-Type"] == "image/png" and r.read().startswith(b"\x89PNG")
+    assert call("/api/plain?id=" + cap["id"])[1] == {"actions": ["Press “Save”"]}
+    call("/api/send", {"text": "hello"})
+    r = call("/api/session/end", {"lesson": True})[1]
+    kinds = [(d["event"]["kind"], (d["event"]["body"] or {}).get("source")) for d in hub.docs[-3:]]
+    assert r["ended"] == sid and r["lesson"].startswith("LS-") and kinds[0] == ("item.create", "watch")
+    assert hub.docs[-1]["event"]["kind"] == "status" and hub.docs[-1]["event"]["body"]["status"] == "open"
+    sid2 = call("/api/session/start", {})[1]["session"]
+    n = len(hub.docs)
+    assert "lesson" not in call("/api/session/end", {"lesson": False})[1] and len(hub.docs) == n + 2 and sid2
+
+
+def test_api_privacy_moment_in_state(api):
+    call, hub, tokens, tmp, calls, base = api
+    st = json.loads((tmp / "gate" / "state.json").read_text()) if (tmp / "gate" / "state.json").exists() else {}
+    (tmp / "gate" / "state.json").write_text(json.dumps(dict(st, watch=True)))
+    import watch_server as ws
+    w = ws.Watch(home=tmp / "w2", gate_home=tmp / "gate", root=tmp / "root", hub_factory=lambda u, t: hub, token_store=tokens,
+                 voice=type("V", (), {"status": lambda s: "ready"})(), hooks={"foreground": lambda: {"title": "Sign in - Google Accounts"}})
+    assert w.state()["strip"]["watching"] == "Watch paused itself: sign-in page in front"
+    w.hooks["foreground"] = lambda: {"title": "Untitled - Notepad"}
+    assert w.state()["strip"]["watching"].startswith("Watching: all windows except")
+
+
 def test_api_keep_out_pick_add_remove(api):
     call, hub, tokens, tmp, *_ = api
     pick = call("/api/keepout/pick", {})[1]
@@ -644,6 +701,24 @@ def test_page_in_a_headless_browser(api):
         sent(n + 1)
         body = hub.docs[-1]["event"]["body"]
         assert body["text"].startswith("[irreversible] oops") and body["watch"]["incident"]["what_happened"] == "paid twice"
+        page.click("#point")
+        page.wait_for_selector("#attRow:not([hidden])")
+        page.click("#accessBtn")
+        page.click("#plainList")
+        page.wait_for_selector("#accView ol li")
+        assert page.inner_text("#accView ol") == "Press “Save”"
+        page.click("#enlarge")
+        page.wait_for_selector("#accView img")
+        assert page.get_attribute("#accView img", "src").startswith("blob:")
+        page.check("#bigText")
+        assert "big" in (page.get_attribute("body", "class") or "")
+        page.click("#accClose")
+        page.wait_for_selector("#endSession:not([hidden])")
+        page.click("#endSession")
+        n = len(hub.docs)
+        page.click("#endLesson")
+        sent(n + 3)
+        assert any(d["event"]["body"].get("meta", {}).get("kind") == "lesson" for d in hub.docs[n:] if d["event"]["kind"] == "item.create")
         page.click("#keepOutBtn")
         page.wait_for_selector("#koList li")
         assert "nodach_sec" in page.inner_text("#koList")

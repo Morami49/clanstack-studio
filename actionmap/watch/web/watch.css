@@ -22,6 +22,7 @@ button.icon { padding:4px 8px; }
 .acting { background:var(--orange); color:#fff; font-weight:700; padding:6px 10px; }
 .offer { background:#fff3e6; color:#18201f; padding:6px 8px; display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
 .err { background:#fde8e8; color:#8a1f1f; padding:6px 10px; font-size:13px; }
+.err.info { background:#e6f4ef; color:#1f4f43; }
 .panel { border-bottom:1px solid var(--line); padding:6px 8px; display:flex; flex-direction:column; gap:4px; max-height:45vh; overflow:auto; }
 .list { list-style:none; margin:0; padding:0; }
 .list li { display:flex; gap:6px; align-items:center; padding:3px 0; border-bottom:1px solid var(--line); }
@@ -59,4 +60,11 @@ select, input[type=text], textarea { font:inherit; color:var(--fg); background:v
 .cardsvg text.mk { fill:var(--orange); stroke:none; font-weight:700; }
 .cardtools button.on { background:var(--accent); color:#fff; }
 .routes { border-top:1px solid var(--line); }
+body.big { font-size:18px; }
+body.big .bar button { font-size:15px; }
+.chat li.local { align-self:center; background:none; border:1px solid var(--orange); }
+#accView img { width:100%; image-rendering:auto; border:1px solid var(--line); border-radius:6px; }
+#accView .zoom { overflow:auto; max-height:40vh; }
+#accView .zoom img { width:200%; max-width:none; }
+#accView ol li { padding:3px 0; }
 [hidden] { display:none !important; }

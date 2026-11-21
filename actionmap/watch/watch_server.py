@@ -16,6 +16,8 @@ API (JSON; every call needs the X-Watch-Key header):
   POST /api/reference             pick a reference or design image for 'Looks off' (kept on this PC)
   POST /api/card-markup {carousel, card, marks, size}  mark up a draft card (U9)
   POST /api/route {carousel, route, card, text, attach}  drafts | gate | automation as a [for-claude] line (U10)
+  GET  /api/shot?id=  GET /api/plain?id=   a capture's picture (Enlarge) / its elements as plain actions (U15)
+  POST /api/session/end {lesson}  end the session; lesson: keep it in Studio as a replayable lesson (U14)
   POST /api/clip                  keep the last 10 s (Gate's clip)        POST /api/stop   Pause all
   POST /api/mic {action: start|stop, ...send fields}    click to talk, click to send
   POST /api/ontop {on}            POST /api/settings {stuck}   ('looks like you're stuck' offers, off by default)
@@ -174,13 +176,64 @@ class Watch:
         if self.settings.get("session") not in {s["id"] for s in sessions} and live:
             self.settings["session"] = live[0]["id"]
         strip = core.status_strip(watch=bool(st.get("watch")), paused=bool(st.get("paused")), acting=acting, kept_out=kept,
-                                  signed_in=signed, session=self.settings.get("session"))
+                                  signed_in=signed, session=self.settings.get("session"), privacy=self.privacy())
         return {"version": core.VERSION, "strip": strip, "role": role, "hub": self.settings["hub"], "error": err,
                 "sessions": sessions[:20], "session": self.settings.get("session"), "on_top": bool(self.settings.get("on_top")),
                 "chips": core.CHIPS, "presets": {k: {"label": v["label"], "hint": v["hint"]} for k, v in core.PRESETS.items()},
                 "compare": core.COMPARE, "save": core.SAVE, "voice": self.voice_status(),
                 "audience": core.audience_for(self._me) if signed else None,
                 "stuck": {"on": bool(self.settings["stuck"].get("on"))}, "offer": self.offer()}
+
+    def privacy(self) -> str | None:
+        """U16: a sign-in page or payment form in front pauses Watch (Gate refuses; captures black it out)."""
+        fg = self.hooks.get("foreground")
+        if fg is None:
+            try:
+                import gate_win
+                fg = gate_win.foreground if gate_win.AVAILABLE else (lambda: {})
+            except Exception:
+                fg = lambda: {}   # noqa: E731
+        try:
+            return gate_core.privacy_moment((fg() or {}).get("title") or "")
+        except Exception:
+            return None
+
+    def plain(self, eid: str) -> dict:
+        e = self.find_event(eid)
+        if not e:
+            raise ApiError("That capture isn't on this PC any more", 404)
+        return {"actions": core.plain_actions(e)}
+
+    def shot_bytes(self, eid: str) -> bytes:
+        e = self.find_event(eid)
+        if not e or not e.get("screenshot") or e.get("kept_out"):
+            raise ApiError("No picture for that capture", 404)
+        try:
+            return Path(e["screenshot"]).read_bytes()
+        except OSError:
+            raise ApiError("The picture isn't on this PC any more", 404) from None
+
+    def end_session(self, lesson: bool = False) -> dict:
+        """End the session (owners), and if he chose to, keep it in Studio as a replayable lesson (U14)."""
+        me, sid = self.me(), self.settings.get("session")
+        if not sid:
+            raise ApiError("No session to end")
+        if not me.get("owner"):
+            raise ApiError("Only an owner can end a session", 403)
+        h, t = self.hub(), core.utcnow()
+        out = {"ended": sid}
+        if lesson:
+            ev = core.lesson_event(sid, me, t, self.stream(sid))
+            h.post(ev)
+            out["lesson"] = ev["body"]["id"]
+        ts = core.iso(t)
+        au = live_core.author(me)
+        h.post({"ts": ts, "kind": "item.edit", "item": sid, "branch": "main", "author": au,
+                "body": {"live": {"ended": ts}, "body": f"Live session ended {ts[:16].replace('T', ' ')} UTC from the Watch window."}})
+        h.post({"ts": ts, "kind": "status", "item": sid, "branch": "main", "author": au, "body": {"status": "open"}})
+        self.pull(force=True)
+        self.note("session", "ok", f"ended {sid}" + (f", kept as lesson {out['lesson']}" if lesson else ""))
+        return out
 
     def gate_log(self, n: int = 200) -> list:
         out = []
@@ -629,6 +682,8 @@ def dispatch(w: Watch, method: str, path: str, query: dict, body: dict):
             return {"windows": w.windows()}
         if path == "/api/shots":
             return {"shots": w.shots()}
+        if path == "/api/plain":
+            return w.plain(q.get("id", ""))
     if method == "POST":
         if path == "/api/signin":
             return w.signin()
@@ -652,6 +707,8 @@ def dispatch(w: Watch, method: str, path: str, query: dict, body: dict):
             return w.keepout_remove(str(body.get("id") or ""))
         if path == "/api/reference":
             return w.reference(body.get("path"))
+        if path == "/api/session/end":
+            return w.end_session(bool(body.get("lesson")))
         if path == "/api/card-markup":
             return w.card_markup(str(body.get("carousel") or ""), str(body.get("card") or ""), body.get("marks") or [], body.get("size"))
         if path == "/api/route":
@@ -685,7 +742,7 @@ def make_handler(w: Watch, key: str, port_ref: dict):
             self.send_header("Content-Type", ctype)
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
-            self.send_header("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; frame-src 'self'")
+            self.send_header("Content-Security-Policy", "default-src 'self'; img-src 'self' data: blob:; style-src 'self'; script-src 'self'; frame-src 'self'")
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
@@ -706,6 +763,11 @@ def make_handler(w: Watch, key: str, port_ref: dict):
                     body = json.loads(self.rfile.read(min(n, 1_000_000)) or b"{}")
                 except ValueError:
                     return self._send(400, b'{"error":"bad json"}')
+            if u.path == "/api/shot" and method == "GET":     # the picture itself, for Enlarge (U15); stays local
+                try:
+                    return self._send(200, w.shot_bytes(urllib.parse.parse_qs(u.query).get("id", [""])[0]), "image/png")
+                except ApiError as e:
+                    return self._send(e.code, json.dumps({"error": str(e)}).encode())
             try:
                 out = dispatch(w, method, u.path, urllib.parse.parse_qs(u.query), body)
                 code = 200

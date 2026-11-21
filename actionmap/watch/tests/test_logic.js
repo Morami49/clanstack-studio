@@ -95,6 +95,15 @@ const tests = {
     assert.deepStrictEqual(L.routeBody("gate", "d1", "c1", " go ", "PE-1"), {carousel: "d1", route: "gate", card: "c1", text: "go", attach: "PE-1"});
     assert.throws(() => L.routeBody("fly", "d1"));
   },
+  "privacy notes, local rows and read-out text"() {
+    assert.strictEqual(L.privacyNote(null, null), null);
+    assert.ok(L.privacyNote(null, "sign-in page").startsWith("Watch paused itself: a sign-in page"));
+    assert.strictEqual(L.privacyNote("sign-in page", "sign-in page"), null);
+    assert.strictEqual(L.privacyNote("payment form", null), "Watch resumed: the payment form is gone.");
+    assert.ok(L.localRowHtml("<x>", "10:00").includes("&lt;x&gt;") && L.localRowHtml("a").includes('class="local"'));
+    assert.strictEqual(L.lastReplyText([{kind: "reply", who: "Claude", text: "one"}, {kind: "line", who: "Nowed", text: "two"}]), "Claude says: one");
+    assert.strictEqual(L.lastReplyText([]), "");
+  },
   "strip and mic labels"() {
     assert.deepStrictEqual(L.stripText({watching: "W", gate: "paused", acting: ""}), {watching: "W", gate: "Gate paused", acting: ""});
     assert.strictEqual(L.micLabel(false), "🎙 Mic");

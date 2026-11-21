@@ -4,7 +4,7 @@
   const L = window.WatchLogic;
   const $ = s => document.querySelector(s);
   const KEY = (location.hash.match(/key=([^&]+)/) || [])[1] || "";
-  let ui = L.initial(), state = null, lastOffer = null, carIdx = {}, lastRows = [], marking = null, micT0 = 0, micTimer = null, ref = null;
+  let ui = L.initial(), state = null, lastOffer = null, privacyWas = null, localRows = [], carIdx = {}, lastRows = [], marking = null, micT0 = 0, micTimer = null, ref = null;
 
   async function api(path, body) {
     const opt = {headers: {"X-Watch-Key": KEY}};
@@ -14,7 +14,8 @@
     if (!r.ok) throw new Error(j.error || ("error " + r.status));
     return j;
   }
-  function err(msg) { const e = $("#err"); e.textContent = msg || ""; e.hidden = !msg; if (msg) setTimeout(() => { if (e.textContent === msg) e.hidden = true; }, 8000); }
+  function info(msg) { err(msg, true); }
+  function err(msg, ok) { const e = $("#err"); e.classList.toggle("info", !!ok); e.textContent = msg || ""; e.hidden = !msg; if (msg) setTimeout(() => { if (e.textContent === msg) e.hidden = true; }, 8000); }
   async function run(fn) { try { err(""); return await fn(); } catch (e) { err(e.message); return null; } }
 
   /* ------------------------------------------------------------ state and stream */
@@ -35,6 +36,9 @@
     const html = opts.join("") || '<option value="">no session</option>';
     if (sel.dataset.html !== html) { sel.innerHTML = html; sel.dataset.html = html; }
     $("#startSession").hidden = s.role !== "owner";
+    $("#endSession").hidden = s.role !== "owner" || !(s.sessions || []).some(x => x.id === s.session && x.state === "live");
+    const pn = L.privacyNote(privacyWas, s.strip.privacy);
+    if (pn) { localRows.push(L.localRowHtml(pn, new Date().toTimeString().slice(0, 8))); privacyWas = s.strip.privacy || null; $("#chat").dataset.html = ""; }
     if (s.offer) {
       const g = s.offer.reason === "glitch";
       $("#offerText").textContent = g ? "Gate kept a clip: " + s.offer.detail : "Looks like Claude is stuck (" + s.offer.detail + "). Show what's wrong?";
@@ -50,7 +54,7 @@
     const box = $("#chatWrap"), atEnd = box.scrollTop + box.clientHeight >= box.scrollHeight - 10;
     lastRows = r.rows;
     if (marking) return;                                  // don't redraw under a card being marked up
-    const html = L.rowsHtml(r.rows, carIdx);
+    const html = L.rowsHtml(r.rows, carIdx) + localRows.join("");
     if ($("#chat").dataset.html !== html) { $("#chat").innerHTML = html; $("#chat").dataset.html = html; if (atEnd) box.scrollTop = box.scrollHeight; }
   }
 
@@ -112,7 +116,7 @@
   async function doSend(body) {
     if (!body) { err("Type a line or add a point first."); return; }
     const r = await run(() => api("/api/send", body));
-    if (r) { $("#text").value = ""; ui = L.afterSend(ui); ref = null; renderUi(); if (r.switched) err("That session had ended: sent to " + r.session); await refresh(); }
+    if (r) { $("#text").value = ""; ui = L.afterSend(ui); ref = null; renderUi(); if (r.switched) info("That session had ended: sent to " + r.session); await refresh(); }
   }
   $("#send").onclick = () => doSend(L.buildSend(ui, $("#text").value));
   $("#text").onkeydown = e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("#send").click(); } };
@@ -122,7 +126,7 @@
   $("#attClaude").onclick = () => doSend(L.buildMarkupSend(ui, $("#text").value, "for-claude"));
   $("#attExport").onclick = async () => {
     const r = await run(() => api("/api/export", {id: ui.attach.id, note: $("#text").value}));
-    if (r) err("Saved " + r.html + " and " + r.zip + " in " + r.folder);
+    if (r) info("Saved " + r.html + " and " + r.zip + " in " + r.folder);
   };
 
   /* ------------------------------------------------------------ tools */
@@ -133,7 +137,7 @@
   $("#point").onclick = () => capture("point");
   $("#select").onclick = () => capture("area");
   $("#markup").onclick = () => { if (ui.chip !== "mark-up") { ui = L.applyChip(ui, "mark-up"); syncOptInputs(); renderUi(); } capture("markup", ui.opts.preset); };
-  $("#clip").onclick = () => run(() => api("/api/clip", {})).then(r => r && err("Gate keeps the last 10 s (in nodach-gate/clips)."));
+  $("#clip").onclick = () => run(() => api("/api/clip", {})).then(r => r && info("Gate keeps the last 10 s (in nodach-gate/clips)."));
   $("#stop").onclick = () => run(() => api("/api/stop", {})).then(refresh);
   $("#mic").onclick = async () => {
     if (!ui.listening) {
@@ -152,7 +156,7 @@
   };
 
   /* ------------------------------------------------------------ U9/U10: carousel cards */
-  function redrawChat() { const h = L.rowsHtml(lastRows, carIdx); $("#chat").innerHTML = h; $("#chat").dataset.html = h; }
+  function redrawChat() { const h = L.rowsHtml(lastRows, carIdx) + localRows.join(""); $("#chat").innerHTML = h; $("#chat").dataset.html = h; }
   $("#chat").addEventListener("click", async e => {
     const t = e.target.closest("button"); if (!t || marking) return;
     if (t.dataset.carPrev) { carIdx[t.dataset.carPrev] = Math.max(0, (carIdx[t.dataset.carPrev] || 0) - 1); redrawChat(); }
@@ -216,6 +220,44 @@
       }
     };
   }
+
+  /* ------------------------------------------------------------ U15: read out, enlarge, plain list */
+  function say(text) {
+    if (!text) { err("Nothing to read out yet."); return; }
+    if (!window.speechSynthesis) { err("This window can't read aloud."); return; }
+    speechSynthesis.cancel(); speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+  }
+  $("#accessBtn").onclick = () => { $("#access").hidden = !$("#access").hidden; };
+  $("#accClose").onclick = () => { $("#access").hidden = true; };
+  $("#readLast").onclick = () => say(L.lastReplyText(lastRows));
+  $("#bigText").onchange = e => document.body.classList.toggle("big", e.target.checked);
+  $("#enlarge").onclick = async () => {
+    if (!ui.attach || !ui.attach.picture) { err("Point or Select first: Enlarge shows that capture bigger."); return; }
+    const r = await fetch("/api/shot?id=" + encodeURIComponent(ui.attach.id), {headers: {"X-Watch-Key": KEY}});
+    if (!r.ok) { err("No picture for that capture."); return; }
+    const url = URL.createObjectURL(await r.blob());
+    $("#accView").innerHTML = '<div class="zoom"><img alt="Enlarged capture"></div>';
+    $("#accView img").src = url;
+  };
+  $("#plainList").onclick = async () => {
+    if (!ui.attach) { err("Select a window or area first: the list shows what can be done there."); return; }
+    const r = await run(() => api("/api/plain?id=" + encodeURIComponent(ui.attach.id)));
+    const acts = (r && r.actions) || [];
+    $("#accView").innerHTML = acts.length ? "<ol>" + acts.map(a => "<li>" + L.esc(a) + "</li>").join("") + '</ol><button id="readList">🔊 Read the list</button>'
+      : '<p class="meta">No named elements there.</p>';
+    const b = $("#readList"); if (b) b.onclick = () => say(acts.join(". "));
+  };
+
+  /* ------------------------------------------------------------ U14: end, and maybe keep as a lesson */
+  $("#endSession").onclick = () => { $("#endAsk").hidden = false; };
+  $("#endCancel").onclick = () => { $("#endAsk").hidden = true; };
+  async function endIt(lesson) {
+    $("#endAsk").hidden = true;
+    const r = await run(() => api("/api/session/end", {lesson}));
+    if (r) { if (r.lesson) info("Ended. Kept in Studio as lesson " + r.lesson + "."); refresh(); }
+  }
+  $("#endLesson").onclick = () => endIt(true);
+  $("#endOnly").onclick = () => endIt(false);
 
   /* ------------------------------------------------------------ keep-out */
   async function koRender() {

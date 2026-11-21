@@ -114,7 +114,11 @@ def never_reason(zones: dict, app: str, title: str) -> str | None:
     """Why a window must stay out of Watch (never group, user keep-out, a nodach_sec path), else None."""
     if SECRET_DIR in str(title or "").lower():
         return "secrets in files: nodach_sec"
-    return gate_core._never(zones, app or "", title or "", "", input_action=False)
+    r = gate_core._never(zones, app or "", title or "", "", input_action=False)
+    if r:
+        return r
+    pm = gate_core.privacy_moment(title or "") if zones.get("privacy_moments", True) else None
+    return f"privacy moment: {pm}" if pm else None
 
 
 def redact_rects(windows, zones: dict) -> list[dict]:
@@ -594,9 +598,13 @@ def window_list(windows, zones: dict) -> list[dict]:
 
 
 # ---------------------------------------------------------------- status strip
-def status_strip(*, watch: bool, paused: bool, acting: dict, kept_out: int, signed_in: bool, session: str | None) -> dict:
-    return {"watch": bool(watch),
-            "watching": (f"Watching: all windows except {kept_out} kept out" if watch else "Watch is off: Claude can't see or act"),
+def status_strip(*, watch: bool, paused: bool, acting: dict, kept_out: int, signed_in: bool, session: str | None,
+                 privacy: str | None = None) -> dict:
+    watching = (f"Watching: all windows except {kept_out} kept out" if watch else "Watch is off: Claude can't see or act")
+    if watch and privacy:
+        watching = f"Watch paused itself: {privacy} in front"
+    return {"watch": bool(watch), "privacy": privacy if watch else None,
+            "watching": watching,
             "kept_out": kept_out,
             "gate": "paused" if paused else "ok",
             "acting": f"Claude is acting: {acting.get('tool')}" if acting.get("active") and not paused else "",
@@ -872,3 +880,41 @@ def expected_matches(step: dict, live: dict | None) -> dict:
         if _norm_text(w) not in near:
             changed.append(f"nearby text: “{w}” is gone")
     return {"ok": not changed, "changed": changed}
+
+
+
+# ---------------------------------------------------------------- U15: accessibility (same window for everyone)
+VERBS = {"button": "Press", "splitbutton": "Press", "edit": "Type into", "checkbox": "Tick", "radiobutton": "Choose",
+         "hyperlink": "Open", "menuitem": "Choose", "listitem": "Pick", "treeitem": "Open", "tabitem": "Switch to",
+         "combobox": "Choose from", "slider": "Move", "dataitem": "Pick", "document": "Read", "text": "Read"}
+
+
+def plain_actions(e: dict) -> list[str]:
+    """'Simplify': a window or area as a plain numbered list of what can be done there ("Press “Save”")."""
+    els = list(e.get("elements") or [])
+    for m in e.get("marks") or []:
+        els += [x for x in (m.get("from_element"), m.get("to_element")) if x] + list(m.get("elements") or [])
+    if not els and (e.get("element") or {}).get("name") and e.get("kind") == "pointer.desktop":
+        els = [e["element"]]
+    out, seen = [], set()
+    for x in els:
+        t = re.sub(r"control$", "", str(x.get("type") or "").lower())
+        name = str(x.get("name") or "").strip()
+        if not name or (t, name) in seen:
+            continue
+        seen.add((t, name))
+        out.append(f"{VERBS.get(t, 'Look at')} “{name[:80]}”" + ("" if t in VERBS else f" ({t or 'item'})"))
+    return out
+
+
+# ---------------------------------------------------------------- U14: a session kept as a lesson (if he chooses)
+def lesson_event(session: str, me: dict, t: dt.datetime, rows, title: str = "") -> dict:
+    """At the end of a session, if he says yes: a Studio item that keeps the session as a replayable lesson (the
+    stream stays on the session item; this links it and lists its steps). Replay itself is a TODO."""
+    import live_core
+    lines = [r for r in rows or [] if r.get("kind") in ("line", "reply", "step")]
+    steps = [f"{i}. {r['who']}: {r['text'][:160]}" + (f" {r['words']}" if r.get("words") else "") for i, r in enumerate(lines, 1)]
+    body = {"id": live_core.stamp("LS", t), "type": "idea", "title": ("Lesson: " + (title or session))[:96],
+            "body": "A session kept as a lesson to replay.\n\n" + "\n".join(steps[:200]), "refs": [session], "status": "open",
+            "source": "watch", "meta": {"kind": "lesson", "from_session": session, "steps": len(lines), "schema": "watch.lesson.v1"}}
+    return {"ts": iso(t), "kind": "item.create", "item": None, "branch": "main", "body": body, "author": live_core.author(me)}

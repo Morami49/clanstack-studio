@@ -133,7 +133,12 @@ def test_pause_blocks_everything_but_gate_tools():
 
 
 def test_password_field_typing_confirm():
-    assert d("Type", {"loc": [1, 1], "text": "x"}, app="chrome.exe", title="Login", element_name="Password", is_password=True)[0] == "confirm"
+    # 0.2.0 (U16): a password box is a sign-in moment, so Watch pauses itself; with privacy moments off it asks first
+    z, r = d("Type", {"loc": [1, 1], "text": "x"}, app="chrome.exe", title="Login", element_name="Password", is_password=True)
+    assert z == "never" and r.startswith(core.PRIVACY_PAUSE)
+    no_pm = dict(Z, privacy_moments=False)
+    assert core.decide({"tool": "Type", "args": {"loc": [1, 1], "text": "x"}}, {"app": "chrome.exe", "title": "Login",
+                        "element_name": "Password", "is_password": True, "watch": True}, no_pm)[0] == "confirm"
 
 
 # ------------------------------------------------------------------ tools

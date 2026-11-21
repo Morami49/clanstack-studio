@@ -11,6 +11,7 @@
   <header id="strip" data-part="watch.strip">
     <button id="watching" class="strip-btn" title="Show the Keep out list">Watching: …</button>
     <span id="gatePill" class="pill">Gate …</span>
+    <button id="accessBtn" class="icon" aria-label="Accessibility: read out, enlarge, plain list" title="Read out, enlarge, plain list">Aa</button>
     <button id="settingsBtn" class="icon" aria-label="Settings" title="Settings">⚙</button>
   </header>
   <div id="acting" class="acting" hidden></div>
@@ -23,6 +24,23 @@
     <label><input type="checkbox" id="stuckOn"> Offer help when Claude looks stuck (same action repeated, a long pause, an error)</label>
     <div class="row"><span id="hubName" class="meta"></span><span class="spacer"></span><button id="signIn">Sign in</button></div>
     <p class="meta">Sign in uses Live's saved sign-in. To sign in, copy your <b>nodach_session</b> value (see Live's README), then click Sign in.</p>
+  </section>
+
+  <section id="access" class="panel" hidden data-part="watch.access">
+    <div class="row"><b>Read, enlarge, simplify</b><span class="spacer"></span><button id="accClose" class="icon" aria-label="Close">✕</button></div>
+    <div class="row wrap">
+      <button id="readLast">🔊 Read out the last reply</button>
+      <button id="enlarge" title="Uses the current capture (Point or Select first)">⊕ Enlarge</button>
+      <button id="plainList" title="Uses the current capture (Select a window or area first)">☰ As a plain list</button>
+      <label><input type="checkbox" id="bigText"> Bigger text</label>
+    </div>
+    <div id="accView"></div>
+  </section>
+
+  <section id="endAsk" class="panel" hidden data-part="watch.end">
+    <b>End this session?</b>
+    <p>Save it in Studio as a replayable lesson?</p>
+    <div class="row wrap"><button id="endLesson" class="primary">End and save as lesson</button><button id="endOnly">Just end</button><button id="endCancel" class="link">Cancel</button></div>
   </section>
 
   <section id="keepout" class="panel" hidden data-part="watch.keepout">
@@ -40,6 +58,7 @@
   <div class="row" id="sessionRow">
     <select id="session" aria-label="Session"></select>
     <button id="startSession">Start session</button>
+    <button id="endSession" hidden>End</button>
   </div>
 
   <main id="chatWrap"><ol id="chat" class="chat" aria-live="polite"></ol></main>

@@ -178,6 +178,11 @@ def decide(action: dict, context: dict, zones: dict):
         return "hidden", f"{tool} is not a UI tool; Gate never exposes it"
     if tool in WATCH_TOOLS and not _truthy(context.get("watch")):   # a missing value counts as off
         return "never", WATCH_OFF
+    if tool in WATCH_TOOLS and zones.get("privacy_moments", True):
+        pm = privacy_moment(context.get("fg_title") or "", "", False) or \
+            privacy_moment(context.get("title") or "", context.get("element_name") or "", bool(context.get("is_password")))
+        if pm:
+            return "never", f"{PRIVACY_PAUSE}: a {pm} is in front (it resumes when it's gone)"
     if tool in GATE_TOOLS:
         return "auto", "Gate's own tool"
     if context.get("paused"):
@@ -260,6 +265,27 @@ def decide(action: dict, context: dict, zones: dict):
         if tool in INPUT_TOOLS and tool != "Scroll" and _in_procs(app, g.get("processes")):
             return "confirm", f"{g.get('name', 'confirm app')}: {app}"
     return "auto", "no rule matched"
+
+
+# U16 (privacy moments): Watch pauses itself while a sign-in page or a payment form is in front, and resumes when it's
+# gone. Video calls showing other people's faces are a TODO (needs on-PC face detection).
+SIGN_IN_WORDS = ("sign in", "sign-in", "signin", "log in", "log-in", "login", "sign on", "single sign-on",
+                 "verify it's you", "two-step verification", "enter your password", "choose an account")
+PAYMENT_WORDS = ("checkout", "payment", "payments", "pay now", "card number", "cardholder", "cvv", "cvc",
+                 "expiry date", "security code", "billing address", "place order")
+PRIVACY_PAUSE = "Watch paused itself"
+
+
+def privacy_moment(title: str = "", element_name: str = "", is_password: bool = False, elements=()) -> str | None:
+    """'sign-in page' / 'payment form' when the window or what's on it looks like one, else None. elements: names
+    of other elements in that window (a Snapshot or Watch list), so a page with a password box counts too."""
+    names = [element_name, *[e.get("name", "") if isinstance(e, dict) else str(e) for e in elements or ()]]
+    if _hit(PAYMENT_WORDS, title, *names):
+        return "payment form"
+    if is_password or any(isinstance(e, dict) and (e.get("password") or "password" in str(e.get("type", "")).lower()) for e in elements or ()) \
+            or _hit(SIGN_IN_WORDS, title, *names):
+        return "sign-in page"
+    return None
 
 
 def _never_with_hints(zones, app, title, el, hints, input_action):
@@ -697,7 +723,7 @@ def auto_report_trigger(entry: dict, settings: dict, prev_entry: dict | None = N
     if entry.get("kind", "action") != "action":
         return None
     if entry.get("zone") == "never" and entry.get("decision") in ("refused", "blocked") \
-            and not str(entry.get("reason", "")).startswith(("Gate is paused", WATCH_OFF)):
+            and not str(entry.get("reason", "")).startswith(("Gate is paused", WATCH_OFF, PRIVACY_PAUSE)):
         return "never_block" if settings.get("never_block") else None
     if entry.get("zone") == "confirm" and entry.get("decision") == "blocked" and entry.get("by") in ("user", "timeout"):
         return "confirm_timeout" if settings.get("confirm_timeout") else None

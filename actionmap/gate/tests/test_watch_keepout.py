@@ -170,3 +170,24 @@ def test_gate_refuses_while_watch_is_off_and_logs_it(tmp_path):
     assert [e["tool"] for e in refused] == ["Snapshot", "capture_view"] and refused[0]["by"] == "watch"
     on = asyncio.run(go({"watch": True}))
     assert not on[0]["is_error"] and json.loads(txt(on[2]))["watch"] is True
+
+
+# ------------------------------------------------------------------ U16: privacy moments
+def test_privacy_moment_detection():
+    assert core.privacy_moment("Sign in - Google Accounts - Google Chrome") == "sign-in page"
+    assert core.privacy_moment("Shop", "Password", True) == "sign-in page"
+    assert core.privacy_moment("Shop", elements=[{"name": "x", "password": True}]) == "sign-in page"
+    assert core.privacy_moment("Basket", elements=["Card number", "Pay now"]) == "payment form"
+    assert core.privacy_moment("Checkout - Shop") == "payment form"
+    assert core.privacy_moment("Untitled - Notepad", "Text editor") is None
+    assert core.privacy_moment("Blogging tips") is None and core.privacy_moment("Catalogue") is None   # whole words only
+
+
+def test_watch_pauses_itself_on_sign_in_and_payment_and_resumes():
+    z, r = d("Snapshot", app="chrome.exe", title="Log in to Studio", watch=True)
+    assert z == "never" and r == "Watch paused itself: a sign-in page is in front (it resumes when it's gone)"
+    assert d("Click", {"loc": [1, 1]}, app="notepad.exe", title="Untitled - Notepad", fg_title="Payment - Shop", watch=True)[1].startswith(core.PRIVACY_PAUSE)
+    assert d("Snapshot", app="notepad.exe", title="Untitled - Notepad", fg_title="Untitled - Notepad", watch=True)[0] == "auto"
+    assert d("gate_status", title="Log in", watch=True)[0] == "auto" and d("Wait", {}, title="Log in", watch=True)[0] == "auto"
+    e = {"kind": "action", "zone": "never", "decision": "refused", "reason": r}
+    assert core.auto_report_trigger(e, {"send_automatically": True, "never_block": True}) is None

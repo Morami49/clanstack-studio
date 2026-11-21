@@ -164,7 +164,22 @@
     return "■ Send " + Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
   }
 
-  const api = {ROUTES, cardHtml, cardMark, routeBody, CHIPS, COMPARE, SAVE, MARKUP_AS, PRESETS, INCIDENT_FIELDS, setIrreversible, setIncident, reproduceNote, esc, chipTag, lineText, initial, applyChip, setOpt, attach,
+  /* U16: the line the chat shows when Watch pauses itself or resumes (null when nothing changed) */
+  function privacyNote(prev, now) {
+    if ((prev || null) === (now || null)) return null;
+    if (now) return "Watch paused itself: a " + now + " is in front. Claude can't see or act until it's gone.";
+    return "Watch resumed: the " + prev + " is gone.";
+  }
+  function localRowHtml(text, time) {
+    return '<li class="local"><span class="meta">' + esc(time || "") + " · Watch</span><span class=\"text\">" + esc(text) + "</span></li>";
+  }
+  /* U15: what 'Read out the last reply' reads */
+  function lastReplyText(rows) {
+    for (let i = (rows || []).length - 1; i >= 0; i--) if (rows[i].kind === "reply" && rows[i].text) return rows[i].who + " says: " + rows[i].text;
+    return "";
+  }
+
+  const api = {privacyNote, localRowHtml, lastReplyText, ROUTES, cardHtml, cardMark, routeBody, CHIPS, COMPARE, SAVE, MARKUP_AS, PRESETS, INCIDENT_FIELDS, setIrreversible, setIncident, reproduceNote, esc, chipTag, lineText, initial, applyChip, setOpt, attach,
                buildSend, buildMarkupSend, afterSend, stripText, rowsHtml, micLabel};
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.WatchLogic = api;
