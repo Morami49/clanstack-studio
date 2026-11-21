@@ -156,6 +156,18 @@ pub fn wakes(ev: &Value) -> bool {
     s(ev, "/kind") == "live.line"
 }
 
+/// The answer text of a Gemini generateContent reply: every text part of the first candidate, joined, skipping
+/// "thought" parts. Run 5 (21 Nov): reading only parts[0] posted "Noted. I" because the model split its answer.
+pub fn gemini_text(v: &Value) -> String {
+    let parts = v.pointer("/candidates/0/content/parts").and_then(Value::as_array).cloned().unwrap_or_default();
+    parts.iter()
+        .filter(|p| !p.get("thought").and_then(Value::as_bool).unwrap_or(false))
+        .filter_map(|p| p.get("text").and_then(Value::as_str))
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
 /// How soon a live line wakes the responder. workers-rs `set_alarm(i64)` reads the number as an OFFSET from now,
 /// not an epoch time (F-responder-alarm, 21 Nov: `now + 200` scheduled the wake ~56 years ahead and pushed the
 /// hourly schedule with it). Always pass an offset from these helpers, never an absolute time.
@@ -303,5 +315,13 @@ mod tests {
                 assert!(!arg.trim_start().starts_with("now"), "hub/src/lib.rs:{}: set_alarm takes an offset, not now + x", i + 1);
             }
         }
+    }
+
+    #[test]
+    fn gemini_answer_joins_every_text_part() {
+        let v = json!({"candidates": [{"content": {"parts": [
+            {"text": "thinking...", "thought": true}, {"text": "Noted. I"}, {"text": "'ll pass the cramped versions line to Claude."}]}}]});
+        assert_eq!(gemini_text(&v), "Noted. I'll pass the cramped versions line to Claude.");
+        assert_eq!(gemini_text(&json!({})), "");
     }
 }

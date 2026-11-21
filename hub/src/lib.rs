@@ -620,7 +620,7 @@ impl Record {
         if !(200..300).contains(&status) {
             return Err((status, v.pointer("/error/message").and_then(|m| m.as_str()).unwrap_or("").to_string()));
         }
-        Ok(v.pointer("/candidates/0/content/parts/0/text").and_then(|t| t.as_str()).unwrap_or("").trim().to_string())
+        Ok(hub_core::responder::gemini_text(&v))   // every text part, not just parts[0] (run 5: "Noted. I")
     }
 
     async fn step_post(&self, cfg: &serde_json::Value, items: Vec<serde_json::Value>, login: &str, now: i64) -> std::result::Result<Vec<serde_json::Value>, String> {
