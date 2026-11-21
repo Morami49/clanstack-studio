@@ -22,7 +22,7 @@ import json
 import re
 from pathlib import Path
 
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 SCHEMA = "gate.v1"
 HERE = Path(__file__).resolve().parent
 DEFAULT_ZONES = HERE / "zones.json"
@@ -185,8 +185,15 @@ def decide(action: dict, context: dict, zones: dict):
     el = context.get("element_name") or ""
     hints = [context.get("page_hint") or ""]
 
-    # Gate's own windows: Claude must never click its own Allow button.
-    if _hit(zones.get("gate_titles", ["Nodach Gate"]), title):
+    # Gate's own windows: Claude must never click or type into them (its Allow button lives there). Reading the
+    # screen and opening other apps stay allowed while a Gate window is in front (21 Nov: with the Gate window
+    # focused, every tool was refused, even Snapshot and launching Notepad).
+    gate_titles = zones.get("gate_titles", ["Nodach Gate"])
+    if tool == "App":
+        target = str(args.get("name") or "")
+        if _hit(gate_titles, target, context.get("target_title") or ""):
+            return "never", "a Nodach Gate window (Claude can't answer Gate's own prompts)"
+    elif tool not in READ_TOOLS and _hit(gate_titles, title):
         return "never", "a Nodach Gate window (Claude can't answer Gate's own prompts)"
 
     if tool == "App":

@@ -202,6 +202,9 @@ class Gate:
             d["inputSchema"] = core.strip_label(d.get("inputSchema") or {})
             if d.get("name") in ("Snapshot", "Screenshot"):
                 (d["inputSchema"].get("properties") or {}).pop("save_path", None)
+            # 21 Nov: Click/Type declared an output schema, so Claude rejected Gate's plain-text results
+            # ("has an output schema but did not return structured content") although the action ran.
+            d.pop("outputSchema", None)
             out.append(d)
         return out + GATE_TOOL_DEFS
 
@@ -288,7 +291,21 @@ class Gate:
                     c = type(c)(type="text", text=text)
                 out.append(c)
             content = out
-        return {"content": content, "is_error": bool(getattr(result, "is_error", False))}
+        return {"content": content, "is_error": bool(getattr(result, "is_error", False)),
+                "structured_content": getattr(result, "structured_content", None)}
+
+    def sign_in_state(self) -> dict:
+        """Whether reports can reach Studio: saved sign-in present and accepted (never the value itself)."""
+        hub_name = (self.reports() or {}).get("hub", "staging")
+        url = studio.hub_url(hub_name)
+        tok = studio.stored_token(url)
+        if not tok:
+            return {"hub": hub_name, "signed_in": False, "why": "no saved sign-in: click Sign in in the Gate window"}
+        try:
+            me = studio.Hub(url, tok).me()
+            return {"hub": hub_name, "signed_in": True, "role": me.get("role") or ("owner" if me.get("owner") else "member")}
+        except Exception as e:
+            return {"hub": hub_name, "signed_in": False, "why": f"saved sign-in not accepted ({type(e).__name__})"}
 
     async def _gate_tool(self, name, args, ctx, t0, cap):
         if name == "gate_status":
@@ -296,7 +313,8 @@ class Gate:
             body = {"version": core.VERSION, "zones_rev": self.zones_rev(), "paused": bool(st.get("paused")),
                     "screenshots": cap.get("screenshots", True), "clips": cap.get("clips", True),
                     "grants_s_left": self.grants.snapshot(time.time()), "hidden_tools": self.hidden,
-                    "auto_reports": self.reports()}
+                    "auto_reports": self.reports(), "studio": self.sign_in_state(),
+                    "reports_waiting": len(studio.pending())}
             return {"content": [{"type": "text", "text": json.dumps(body, indent=1)}], "is_error": False}
         note = str(args.get("note") or "")[:200]
         never = self.is_never(ctx.get("fg_app", ctx.get("app")), ctx.get("fg_title", ctx.get("title")))
@@ -535,7 +553,7 @@ def build_server(gate: Gate):
     async def call_tool(ctx, params):
         r = await gate.call(params.name, params.arguments or {})
         content = [types.TextContent(type="text", text=c["text"]) if isinstance(c, dict) else c for c in r["content"]]
-        return types.CallToolResult(content=content, is_error=r["is_error"])
+        return types.CallToolResult(content=content, is_error=r["is_error"])   # no structured content: schemas are stripped
 
     return Server("nodach-gate", version=core.VERSION, instructions=INSTRUCTIONS, on_list_tools=list_tools, on_call_tool=call_tool)
 
