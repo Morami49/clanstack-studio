@@ -156,12 +156,9 @@ def main(argv=None) -> int:
     ap.add_argument("--browser", action="store_true", help="open in the default browser instead of a window")
     ap.add_argument("--port", type=int, default=0)
     a = ap.parse_args(argv)
-    if os.name == "nt":
-        try:
-            import watch_win
-            watch_win.dpi_aware()           # before pywebview starts, so sizes and positions are physical pixels
-        except Exception:
-            pass
+    # 21 Nov: making this process DPI aware left the WebView2 page blank (white) at 125 % scaling. The window
+    # process stays DPI-unaware: Windows then reports the work area, DPI (96) and SetWindowPos all in the same
+    # scaled units, so place() still lands inside the screen. The capture overlay (its own process) stays DPI aware.
     hooks = {"open_folder": _open_folder}
     w = server.Watch(hooks=hooks)
     if os.environ.pop("NODACH_WATCH_RESTARTED", None):
