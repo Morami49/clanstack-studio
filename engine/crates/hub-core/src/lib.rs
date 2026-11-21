@@ -22,12 +22,12 @@ pub mod mcp;
 pub mod oauth;
 pub mod session;
 pub mod flows;
+pub mod drill;
 pub mod private;
 pub mod profiles;
 pub mod guard;
 pub mod access;
 pub mod digest;
-pub mod drill;
 
 pub const IMPORT_KIND: &str = "studio.event";
 /// A Studio-shaped write made on a node other than Studio Web (PC, phone, an AI via the hub).
