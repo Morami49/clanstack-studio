@@ -45,11 +45,31 @@ def main(argv) -> int:
     def done(v):
         answer["v"] = v
         root.destroy()
-    tk.Button(row, text="Allow once", width=12, command=lambda: done("once")).pack(side="left")
-    tk.Button(row, text=f"Allow for {req.get('grant_minutes', 10)} min in this app", command=lambda: done("app10")).pack(side="left", padx=6)
-    tk.Button(row, text="Block", width=10, bg="#c33", fg="white", command=lambda: done("block")).pack(side="right")
+    # 21 Nov: the popup took keyboard focus while Nowed was typing in the chat, and a stray Space pressed the
+    # focused 'Allow once' (he never saw the popup). Now: it never takes focus, no button can be keyboard-
+    # activated, and the buttons only work 1 s after the popup appears. Only a mouse click answers it.
+    armed = {"v": False}
+
+    def click(v):
+        if armed["v"]:
+            done(v)
+    btns = [tk.Button(row, text="Allow once", width=12, takefocus=0, command=lambda: click("once")),
+            tk.Button(row, text=f"Allow for {req.get('grant_minutes', 10)} min in this app", takefocus=0, command=lambda: click("app10")),
+            tk.Button(row, text="Block", width=10, bg="#c33", fg="white", takefocus=0, command=lambda: click("block"))]
+    btns[0].pack(side="left")
+    btns[1].pack(side="left", padx=6)
+    btns[2].pack(side="right")
+    for b in btns:
+        b.config(state="disabled")
+
+    def arm():
+        armed["v"] = True
+        for b in btns:
+            b.config(state="normal")
+    root.after(1000, arm)
     root.protocol("WM_DELETE_WINDOW", lambda: done("block"))
-    root.bind("<Escape>", lambda e: done("block"))
+    for key in ("<space>", "<Return>", "<KP_Enter>"):
+        root.bind_all(key, lambda e: "break")
 
     def tick():
         if left["s"] <= 0:
@@ -61,9 +81,13 @@ def main(argv) -> int:
     tick()
     root.update_idletasks()
     w, h = root.winfo_width(), root.winfo_height()
-    root.geometry(f"+{root.winfo_screenwidth() - w - 40}+{root.winfo_screenheight() - h - 80}")
-    root.lift()
-    root.focus_force()
+    root.geometry(f"+{(root.winfo_screenwidth() - w) // 2}+{max(40, (root.winfo_screenheight() - h) // 3)}")
+    root.configure(highlightthickness=4, highlightbackground="#d33", highlightcolor="#d33")
+    root.lift()   # on top, but never takes keyboard focus
+    try:
+        root.bell()
+    except Exception:
+        pass
     root.mainloop()
     print(answer["v"])
     return 0

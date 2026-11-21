@@ -576,6 +576,18 @@ def ensure_home(home: Path = HOME):
     z = home / "zones.json"
     if not z.exists() and core.DEFAULT_ZONES.exists():
         z.write_bytes(core.DEFAULT_ZONES.read_bytes())
+        return
+    try:
+        user = json.loads(z.read_text(encoding="utf-8"))
+        default = json.loads(core.DEFAULT_ZONES.read_text(encoding="utf-8"))
+        merged, added = core.upgrade_zones(user, default)
+        if merged is not user:
+            hist = home / "zones-history"
+            hist.mkdir(exist_ok=True)
+            (hist / f"zones-rev{user.get('revision')}-{dt.datetime.now():%y%m%d-%H%M%S}.json").write_bytes(z.read_bytes())
+            z.write_text(json.dumps(merged, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+    except Exception:
+        pass   # a broken zones.json is reported by the normal zone loader
 
 
 async def check():

@@ -22,7 +22,7 @@ import json
 import re
 from pathlib import Path
 
-VERSION = "0.1.1"
+VERSION = "0.1.2"
 SCHEMA = "gate.v1"
 HERE = Path(__file__).resolve().parent
 DEFAULT_ZONES = HERE / "zones.json"
@@ -813,3 +813,25 @@ def chunk_event(name: str, sha: str, n: int, total: int, b64: str, t: dt.datetim
 
 def outbox_name(now: float, kind: str) -> str:
     return f"{int(now * 1000)}-{re.sub(r'[^a-z_]', '', kind)}.json"
+
+
+def upgrade_zones(user: dict, default: dict):
+    """Bring an installed zones.json up to a newer bundled revision without losing his edits.
+
+    21 Nov: 0.1.1 shipped a new never group, but the installed zones.json (revision 1) was kept as it was, so the
+    rule never took effect. New never groups (by name) are added, his own groups and settings are kept, and the
+    bundled change notes are appended. Returns (zones, added_names) — added_names empty when nothing changed."""
+    ur, dr = int(user.get("revision") or 0), int(default.get("revision") or 0)
+    if dr <= ur:
+        return user, []
+    out = dict(user)
+    have = {g.get("name") for g in user.get("never", [])}
+    added = [g for g in default.get("never", []) if g.get("name") not in have]
+    out["never"] = list(user.get("never", [])) + added
+    changes = list(user.get("_changes") or [])
+    for c in default.get("_changes") or []:
+        if isinstance(c, dict) and int(c.get("revision") or 0) > ur and c not in changes:
+            changes.append(c)
+    out["_changes"] = changes
+    out["revision"] = dr
+    return out, [g.get("name") for g in added]
