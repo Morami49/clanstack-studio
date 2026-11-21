@@ -22,7 +22,7 @@ import json
 import re
 from pathlib import Path
 
-VERSION = "0.1.3"
+VERSION = "0.1.4"
 SCHEMA = "gate.v1"
 HERE = Path(__file__).resolve().parent
 DEFAULT_ZONES = HERE / "zones.json"
@@ -846,3 +846,14 @@ def upgrade_zones(user: dict, default: dict):
     out["_changes"] = changes
     out["revision"] = dr
     return out, [g.get("name") for g in added]
+
+
+def user_control_wait(text: str):
+    """Seconds Windows-MCP asks us to wait when it paused for the user (USER_CONTROL), else None."""
+    try:
+        d = json.loads(str(text or "").strip())
+    except (ValueError, TypeError):
+        return None
+    if isinstance(d, dict) and d.get("code") == "USER_CONTROL":
+        return float((d.get("status") or {}).get("wait_seconds") or 10)
+    return None

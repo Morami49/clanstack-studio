@@ -259,6 +259,13 @@ class Gate:
             try:
                 result = await self.child.call_tool(name, args)
                 ok = not bool(getattr(result, "is_error", False))
+                # 21 Nov: clicking Allow in the popup is mouse activity, so Windows-MCP then refused with
+                # USER_CONTROL ("wait ~10 s"). After an approval, wait the time it asks for and try once more.
+                wait = core.user_control_wait(_text_of(result)) if not ok else None
+                if wait is not None and by in ("user", "grant"):
+                    await asyncio.sleep(min(wait, 15) + 0.5)
+                    result = await self.child.call_tool(name, args)
+                    ok = not bool(getattr(result, "is_error", False))
                 if not ok:
                     err = _text_of(result)[:300]
             except Exception as e:  # child died or rejected the call

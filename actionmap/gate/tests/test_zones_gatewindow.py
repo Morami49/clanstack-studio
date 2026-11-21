@@ -43,3 +43,8 @@ def test_secret_element_names_hidden_in_any_window():
     snap2 = 'UI Tree:\ndesktop\n├── window "C:\\\\Users\\\\x\\\\Desktop\\\\Nodach\\\\nodach_sec - File Explorer"\n│   └── (1,1) list item "anything.json"'
     out2, n = core.redact_snapshot(snap2, z)
     assert "anything.json" not in out2 and n == 1
+
+
+def test_user_control_wait():
+    assert core.user_control_wait('{"code": "USER_CONTROL", "status": {"wait_seconds": 9.9}}') == 9.9
+    assert core.user_control_wait("Pressed shift+delete.") is None
