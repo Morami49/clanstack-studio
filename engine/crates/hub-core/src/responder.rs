@@ -156,6 +156,22 @@ pub fn wakes(ev: &Value) -> bool {
     s(ev, "/kind") == "live.line"
 }
 
+/// How soon a live line wakes the responder. workers-rs `set_alarm(i64)` reads the number as an OFFSET from now,
+/// not an epoch time (F-responder-alarm, 21 Nov: `now + 200` scheduled the wake ~56 years ahead and pushed the
+/// hourly schedule with it). Always pass an offset from these helpers, never an absolute time.
+pub const WAKE_OFFSET_MS: i64 = 200;
+
+/// Offset to a minute past the next hour: the hub's hourly wake-up.
+pub fn next_hour_offset(now: i64) -> i64 {
+    3_600_000 - now.rem_euclid(3_600_000) + 60_000
+}
+
+/// True when the stored alarm must be (re)set: none, or further away than any alarm the hub ever sets
+/// (the hourly one is at most 61 minutes out). Repairs an alarm a bad call pushed into the far future.
+pub fn alarm_needs_reset(existing: Option<i64>, now: i64) -> bool {
+    match existing { None => true, Some(at) => at > now + 2 * 3_600_000 }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -248,5 +264,44 @@ mod tests {
         assert_eq!(b["responder"], true); assert_eq!(b["for_claude"], true); assert_eq!(b["line"], "l1");
         assert_eq!(answer_body("Fine.", "m", "l").get("for_claude"), Some(&json!(false)));
         assert!(wakes(&json!({"kind": "live.line"})) && !wakes(&json!({"kind": "comment"})));
+    }
+
+    // Run 4 (21 Nov), exact staging shapes: a Watch line in a fresh session with responder on must be answered.
+    #[test]
+    fn watch_line_in_fresh_session_is_answered() {
+        let docs = vec![
+            json!({"doc_id":"lv53be2ec89e85dd747a79","event":{"author":{"id":"github:Morami49","label":"Nowed","role":"owner"},"body":{"body":"x","id":"LV-261121-143725-eb46","live":{"audience":[],"responder":true,"schema":"live.v1","started":"2026-11-21T14:37:25.683Z","via":"watch"},"refs":[],"source":"live","status":"live","title":"t","type":"idea"},"branch":"main","item":null,"kind":"item.create","ts":"2026-11-21T14:37:25.683Z"}}),
+            json!({"doc_id":"lv00eb94fd33a6279794cb","event":{"author":{"id":"github:Morami49","label":"Nowed","role":"owner"},"body":{"session":"LV-261121-143725-eb46","speaker":"Nowed","text":"[looks-off] golden path run 4: versions line cramped","ts":"2026-11-21T14:37:26.378Z","via":"watch"},"branch":"main","item":"LV-261121-143725-eb46","kind":"live.line","ts":"2026-11-21T14:37:26.378Z"}}),
+        ];
+        let now = 1_795_271_848_378; // 14:37:28Z
+        let d = due(&docs, &Default::default(), now);
+        assert_eq!(d.len(), 1);
+        assert!(matches!(d[0].action, Action::Call { .. }));
+    }
+
+    #[test]
+    fn wake_is_an_offset_not_an_epoch() {
+        assert!(WAKE_OFFSET_MS > 0 && WAKE_OFFSET_MS < 5_000);
+        let off = next_hour_offset(NOW);
+        assert!(off > 60_000 && off <= 3_660_000);
+    }
+
+    #[test]
+    fn far_future_alarm_is_repaired() {
+        assert!(alarm_needs_reset(None, NOW));
+        assert!(!alarm_needs_reset(Some(NOW + next_hour_offset(NOW)), NOW));
+        assert!(alarm_needs_reset(Some(NOW + NOW + 200), NOW));   // the 21 Nov bug: now + (now + 200)
+    }
+
+    // Mechanism guard: the hub must never hand set_alarm an epoch time again.
+    #[test]
+    fn hub_never_passes_epoch_to_set_alarm() {
+        let src = include_str!("../../../../hub/src/lib.rs");
+        for (i, l) in src.lines().enumerate() {
+            if let Some(p) = l.find("set_alarm(") {
+                let arg = &l[p + 10..];
+                assert!(!arg.trim_start().starts_with("now"), "hub/src/lib.rs:{}: set_alarm takes an offset, not now + x", i + 1);
+            }
+        }
     }
 }

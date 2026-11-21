@@ -688,12 +688,13 @@ impl Record {
     /// Answers the fresh lines of sessions with live.responder on (hub_core::responder decides which), with the same
     /// model, key (NODE_SECRET_GEMINI) and busy-model retry-then-lighter-model rule as the flow AI step (F-75).
     /// Each line is marked before the call, so a crash or a retry never calls twice. No key: nothing posted, logged.
-    async fn responder_pass(&self, now: i64) -> std::result::Result<(), String> {
+    async fn responder_pass(&self, now: i64) -> std::result::Result<usize, String> {
         use hub_core::responder::{self as rs, Action};
         let docs = self.studio_docs();
         let tried_set = self.responder_tried().map_err(|e| e.to_string())?;
         let due = rs::due(&docs, &tried_set, now);
-        if due.is_empty() { return Ok(()); }
+        let count = due.len();
+        if due.is_empty() { return Ok(0); }
         let mut tried: Vec<String> = tried_set.into_iter().collect();
         let key = self.node_secret("GEMINI");
         for d in due {
@@ -721,7 +722,22 @@ impl Record {
                 Err(why) => self.log(now, "/live-responder", "call", &format!("failed: {}", why.chars().take(120).collect::<String>()), &d.session),
             }
         }
-        Ok(())
+        Ok(count)
+    }
+
+    /// Fallback wake (F-responder-alarm): Watch and Studio poll GET /studio/api/events every few seconds. If a line is
+    /// due an answer and no alarm is coming within 30 s, re-arm the wake. The per-line tried mark still keeps it to one call.
+    async fn responder_nudge(&self, now: i64, who: &str) {
+        let docs = self.studio_docs();
+        if hub_core::responder::sessions_on(&docs).is_empty() { return; }
+        let tried = match self.responder_tried() { Ok(t) => t, Err(_) => return };
+        if hub_core::responder::due(&docs, &tried, now).is_empty() { return; }
+        let st = self.state.storage();
+        let soon = matches!(st.get_alarm().await, Ok(Some(at)) if at <= now + 30_000);
+        if !soon {
+            let outcome = match st.set_alarm(hub_core::responder::WAKE_OFFSET_MS).await { Ok(()) => "re-armed".to_string(), Err(e) => format!("alarm not set: {e}") };
+            self.log(now, "/live-responder", "nudge", &outcome, who);
+        }
     }
 
     /// One answer from the flow AI step's model, retried once on a busy answer, then the lighter model (F-75).
@@ -745,9 +761,11 @@ impl Record {
     /// The hub's hourly wake-up (S3): Durable Object alarms need no cron, route or account. Set if missing.
     async fn ensure_alarm(&self) -> Result<()> {
         let st = self.state.storage();
-        if st.get_alarm().await?.is_none() {
-            let now = Date::now().as_millis() as i64;
-            st.set_alarm(3_600_000 - now.rem_euclid(3_600_000) + 60_000).await?;   // a minute past the next hour
+        let now = Date::now().as_millis() as i64;
+        let existing = st.get_alarm().await?;
+        if hub_core::responder::alarm_needs_reset(existing, now) {
+            st.set_alarm(hub_core::responder::next_hour_offset(now)).await?;   // an offset: a minute past the next hour
+            if existing.is_some() { self.log(now, "/alarm", "repair", "far-future alarm reset to the next hour", "hub"); }
         }
         Ok(())
     }
@@ -1133,6 +1151,7 @@ impl Record {
                     }
                     (Method::Get, "/studio/api/events", Some(l)) => {
                         let q = |k: &str| url.query_pairs().find(|(a, _)| a == k).and_then(|(_, v)| v.parse::<usize>().ok());
+                        self.responder_nudge(now, &l).await;
                         let (events, next, total, _) = self.hub.borrow().as_ref().unwrap().studio_events_for(&l, q("after").unwrap_or(0), q("limit").unwrap_or(500).clamp(1, 2000));
                         json_status(&serde_json::json!({"events": events, "next": next, "total": total}), 200)?
                     }
@@ -1175,7 +1194,10 @@ impl Record {
                                 // 51a: a live line wakes the Live responder through the Durable Object's alarm, which runs
                                 // after this answer is sent, so writing the line is never slowed by the model call
                                 if wakes && n > 0 && !hub_core::responder::sessions_on(&self.studio_docs()).is_empty() {
-                                    if let Err(e) = self.state.storage().set_alarm(now + 200).await { console_error!("responder alarm: {e}"); }
+                                    // set_alarm takes an OFFSET from now (F-responder-alarm): never pass an epoch time here
+                                    if let Err(e) = self.state.storage().set_alarm(hub_core::responder::WAKE_OFFSET_MS).await {
+                                        self.log(now, "/live-responder", "wake", &format!("alarm not set: {e}"), &l);
+                                    }
                                 }
                                 self.log(now, "/studio/api/events", "write", "ok", &l);
                                 json_status(&serde_json::json!({"id": doc_id, "imported": n}), 200)?
@@ -1504,8 +1526,11 @@ impl DurableObject for Record {
         self.load()?;
         let now = Date::now().as_millis() as i64;
         // next wake-up first, so a failed run can never stop the schedule
-        self.state.storage().set_alarm(3_600_000 - now.rem_euclid(3_600_000) + 60_000).await?;
-        if let Err(e) = self.responder_pass(now).await { console_error!("responder: {e}"); }
+        self.state.storage().set_alarm(hub_core::responder::next_hour_offset(now)).await?;
+        match self.responder_pass(now).await {
+            Ok(n) => self.log(now, "/alarm", "responder wake", &format!("{n} due"), "hub"),
+            Err(e) => self.log(now, "/alarm", "responder wake", &format!("failed: {}", e.chars().take(120).collect::<String>()), "hub"),
+        }
         let due = flows::due(&self.all_events(), now);   // a responder wake-up in the same UK hour runs that hour's slot once, no more
         for (board, start, slot) in &due {
             let res = self.run_flow(board, start, "schedule", now, Some(slot)).await?;
