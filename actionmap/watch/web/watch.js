@@ -115,6 +115,12 @@
   /* ------------------------------------------------------------ sending */
   async function doSend(body) {
     if (!body) { err("Type a line or add a point first."); return; }
+    // 21 Nov: lines went to yesterday's session. With no live session, start one first (owner only).
+    if (state && state.role === "owner" && !(state.sessions || []).some(x => x.id === state.session && x.state === "live")) {
+      const st = await run(() => api("/api/session/start", {}));
+      if (!st) return;
+      await refresh();
+    }
     const r = await run(() => api("/api/send", body));
     if (r) { $("#text").value = ""; ui = L.afterSend(ui); ref = null; renderUi(); if (r.switched) info("That session had ended: sent to " + r.session); await refresh(); }
   }
@@ -138,6 +144,15 @@
   $("#select").onclick = () => capture("area");
   $("#markup").onclick = () => { if (ui.chip !== "mark-up") { ui = L.applyChip(ui, "mark-up"); syncOptInputs(); renderUi(); } capture("markup", ui.opts.preset); };
   $("#clip").onclick = () => run(() => api("/api/clip", {})).then(r => r && info("Gate keeps the last 10 s (in nodach-gate/clips)."));
+  const frame = $("#frame");
+  try { if (localStorage.getItem("watch.more") === "1") frame.classList.remove("simple"); } catch (e) {}
+  $("#moreBtn").setAttribute("aria-pressed", String(!frame.classList.contains("simple")));
+  $("#moreBtn").onclick = () => {
+    frame.classList.toggle("simple");
+    const more = !frame.classList.contains("simple");
+    $("#moreBtn").setAttribute("aria-pressed", String(more));
+    try { localStorage.setItem("watch.more", more ? "1" : "0"); } catch (e) {}
+  };
   $("#stop").onclick = () => run(() => api("/api/stop", {})).then(refresh);
   $("#mic").onclick = async () => {
     if (!ui.listening) {
@@ -265,7 +280,7 @@
     const list = (r && r.list) || [];
     $("#koList").innerHTML = list.map(e => '<li><span class="what" title="' + L.esc(e.added + " by " + e.by) + '">' + L.esc(e.words) +
       '</span><button class="link" data-ko="' + L.esc(e.id) + '">Remove</button></li>').join("") || '<li class="meta">Nothing kept out yet.</li>';
-    $("#koList").querySelectorAll("[data-ko]").forEach(b => b.onclick = () => run(() => api("/api/keepout/remove", {id: b.dataset.ko})).then(koRender).then(refresh));
+    $("#koList").querySelectorAll("[data-ko]").forEach(b => b.onclick = () => run(() => api("/api/keepout/remove", {id: b.dataset.ko})).then(koRender).then(refresh).then(koDone));
   }
   function choices(items) {
     const ul = $("#koChoices"); ul.hidden = !items.length;
@@ -273,9 +288,11 @@
     ul.querySelectorAll("[data-i]").forEach(b => b.onclick = async () => {
       const c = items[+b.dataset.i];
       const r = await run(() => api("/api/keepout/add", {entry: c.entry}));
-      if (r) { ul.hidden = true; koRender(); refresh(); }
+      if (r) { ul.hidden = true; koRender(); refresh(); koDone(); }
     });
   }
+  // 21 Nov: the panel stayed open and took a third of the window; it now closes 1.5 s after a change.
+  function koDone() { setTimeout(() => { $("#keepout").hidden = true; }, 1500); }
   function openKo() { $("#keepout").hidden = false; koRender(); }
   $("#watching").onclick = () => { $("#keepout").hidden ? openKo() : ($("#keepout").hidden = true); };
   $("#keepOutBtn").onclick = openKo;
@@ -295,7 +312,7 @@
   $("#koAddFolder").onclick = async () => {
     const p = $("#koFolder").value.trim(); if (!p) return;
     const r = await run(() => api("/api/keepout/add", {entry: {kind: "folder", path: p}}));
-    if (r) { $("#koFolder").value = ""; koRender(); refresh(); }
+    if (r) { $("#koFolder").value = ""; koRender(); refresh(); koDone(); }
   };
 
   /* ------------------------------------------------------------ settings, sessions, offers */

@@ -620,7 +620,7 @@ def test_static_page_and_csp(api):
     assert "script-src 'self'" in csp
     for part in ("watch.frame", "watch.strip", "watch.bar", "watch.chips", 'id="chat"', 'id="mic"', 'id="point"', 'id="select"',
                  'id="markup"', 'id="clip"', 'id="keepOutBtn"', 'id="stop"', "Looks off", "Mark up", "Explain this",
-                 "attach picture", "Keep out a window", "Pick from open windows", "Keep out folder", "don't save"):
+                 "send the picture", "Keep out a window", "Pick from open windows", "Keep out folder", "don't save"):
         assert part in html, part
     assert "<script>" not in html and " style=" not in html          # nothing inline (the CSP would block it)
     for f in re.findall(r'(?:src|href)="([^"]+)"', html):
@@ -679,6 +679,9 @@ def test_page_in_a_headless_browser(api):
         page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.goto(base + "/#key=" + srv_key)
+        # golden path first (21 Nov): advanced tools sit behind More; this test covers them all
+        assert page.is_hidden("#point") and page.is_visible("#select") and page.is_visible("[data-chip=looks-off]")
+        page.click("#moreBtn")
         page.wait_for_selector("#chat li.reply")
         assert "<b>" not in page.inner_html("#chat") and "from Claude" in page.inner_text("#chat")
         assert page.inner_text("#watching").startswith("Watch is off")

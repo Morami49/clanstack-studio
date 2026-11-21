@@ -68,3 +68,9 @@ body.big .bar button { font-size:15px; }
 #accView .zoom img { width:200%; max-width:none; }
 #accView ol li { padding:3px 0; }
 [hidden] { display:none !important; }
+
+/* Golden path (21 Nov, 75b a): only Looks off, Select, Mic, Send, Stop show until 'More' is pressed. */
+#frame.simple .adv { display: none !important; }
+#frame.simple #sessionRow { display: none; }
+#moreBtn[aria-pressed="true"] { font-weight: 600; }
+.pic { font-weight: 600; padding: 2px 6px; border: 1px solid currentColor; border-radius: 6px; }

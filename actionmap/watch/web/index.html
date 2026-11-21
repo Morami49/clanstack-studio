@@ -7,7 +7,7 @@
 <link rel="stylesheet" href="watch.css">
 </head>
 <body>
-<div id="frame" data-part="watch.frame">
+<div id="frame" class="simple" data-part="watch.frame">
   <header id="strip" data-part="watch.strip">
     <button id="watching" class="strip-btn" title="Show the Keep out list">Watching: …</button>
     <span id="gatePill" class="pill">Gate …</span>
@@ -65,7 +65,7 @@
 
   <div id="attRow" class="att" hidden data-part="watch.attachment">
     <span id="attWords" class="chip"></span>
-    <label id="picLabel"><input type="checkbox" id="attPic"> attach picture</label>
+    <label id="picLabel" class="pic"><input type="checkbox" id="attPic"> 📷 send the picture</label>
     <span class="spacer"></span>
     <button id="attExport" class="link" title="Save as a page + zip on this PC (to watch back or send to a vendor)">Export</button>
     <button id="attReport" class="link" hidden>Send as report</button>
@@ -75,9 +75,9 @@
 
   <div id="chips" class="row chips" data-part="watch.chips">
     <button class="chipbtn" data-chip="looks-off" aria-pressed="false">Looks off</button>
-    <button class="chipbtn" data-chip="mark-up" aria-pressed="false">Mark up</button>
-    <button class="chipbtn" data-chip="explain" aria-pressed="false">Explain this</button>
-    <button class="chipbtn" data-chip="report" aria-pressed="false">Report problem</button>
+    <button class="chipbtn adv" data-chip="mark-up" aria-pressed="false">Mark up</button>
+    <button class="chipbtn adv" data-chip="explain" aria-pressed="false">Explain this</button>
+    <button class="chipbtn adv" data-chip="report" aria-pressed="false">Report problem</button>
   </div>
   <div id="chipOpts" class="row wrap" hidden>
     <span id="optLooks" hidden>Compare with
@@ -131,11 +131,12 @@
 
   <nav id="bar" class="bar" data-part="watch.bar" aria-label="Tools">
     <button id="mic" data-tool="mic" title="Click to talk, click to send">🎙 Mic</button>
-    <button id="point" data-tool="point" title="Click one element on screen">⌖ Point</button>
+    <button id="point" class="adv" data-tool="point" title="Click one element on screen">⌖ Point</button>
     <button id="select" data-tool="select" title="Drag a rectangle over the screen">▭ Select</button>
-    <button id="markup" data-tool="markup" title="Arrows, boxes, pen, notes, numbered steps, if/else">✎ Mark up</button>
-    <button id="clip" data-tool="clip" title="Keep the last 10 seconds">⟲ 10 s</button>
-    <button id="keepOutBtn" data-tool="keepout" title="Keep a window, app or folder out">⊘ Keep out</button>
+    <button id="markup" class="adv" data-tool="markup" title="Arrows, boxes, pen, notes, numbered steps, if/else">✎ Mark up</button>
+    <button id="clip" class="adv" data-tool="clip" title="Keep the last 10 seconds">⟲ 10 s</button>
+    <button id="keepOutBtn" class="adv" data-tool="keepout" title="Keep a window, app or folder out">⊘ Keep out</button>
+    <button id="moreBtn" title="Show all tools (Mark up, Explain, Report, Point, 10 s, Keep out)">⋯ More</button>
     <button id="stop" class="stop" data-tool="stop" title="Pause all: Claude can't act until Resume in Nodach Desktop">■ Stop</button>
   </nav>
 </div>

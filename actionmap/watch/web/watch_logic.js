@@ -85,7 +85,7 @@
 
   function attach(ui, ev) {
     return Object.assign({}, ui, {attach: ev ? {id: ev.id, kind: ev.kind, words: ev.words, picture: !!ev.picture, kept_out: ev.kept_out || null} : null,
-                                  picture: false});
+                                  picture: !!(ev && ev.picture && !ev.kept_out)});   // 21 Nov: on by default, visible toggle
   }
 
   /* what Send posts to /api/send; null when there's nothing to send */

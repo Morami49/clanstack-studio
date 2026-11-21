@@ -28,7 +28,9 @@ const tests = {
   "send carries the chip, the attachment and the picture tick only when it can"() {
     assert.strictEqual(L.buildSend(L.initial(), "  "), null);
     let u = L.attach(L.applyChip(L.initial(), "looks-off"), {id: "PE-1", kind: "pointer.desktop", words: "⌖ x", picture: true});
-    assert.deepStrictEqual(L.buildSend(u, "hi"), {text: "hi", chip: "looks-off", opts: {compare: "none"}, attach: "PE-1", picture: false});
+    assert.deepStrictEqual(L.buildSend(u, "hi"), {text: "hi", chip: "looks-off", opts: {compare: "none"}, attach: "PE-1", picture: true});   // 21 Nov: picture on by default
+    u.picture = false;
+    assert.strictEqual(L.buildSend(u, "").picture, false);
     u.picture = true;
     assert.strictEqual(L.buildSend(u, "").picture, true);
     u = L.attach(u, {id: "PE-2", kind: "area", words: "⌖", picture: true, kept_out: "password manager"});
