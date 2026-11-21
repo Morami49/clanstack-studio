@@ -20,6 +20,7 @@ Z = core.load_zones(None)
 
 
 def d(tool, args=None, **ctx):
+    ctx.setdefault("watch", True)      # Watch on: these tests are about the zones (the Watch rule has its own tests)
     return core.decide({"tool": tool, "args": args or {}}, ctx, Z)
 
 
@@ -498,8 +499,12 @@ class FakeStudio:
         return []
 
 
-def run_gate(tmp_path, ctx, answers, steps):
+def run_gate(tmp_path, ctx, answers, steps, watch=True):
     popups = []
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    st = json.loads((tmp_path / "state.json").read_text()) if (tmp_path / "state.json").exists() else {}
+    st.setdefault("watch", watch)
+    (tmp_path / "state.json").write_text(json.dumps(st))
 
     def popup(req):
         popups.append(req)

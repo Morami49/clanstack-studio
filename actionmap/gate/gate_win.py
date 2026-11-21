@@ -151,6 +151,26 @@ def find_window(name: str) -> dict:
     return _win(found[0]) if found else _win(0)
 
 
+def open_windows() -> list[dict]:
+    """Visible top-level windows with a title: [{app, title}] (for keep-out redaction of Snapshot text)."""
+    if not AVAILABLE:
+        return []
+    out = []
+
+    def cb(h, _):
+        try:
+            if win32gui.IsWindowVisible(h) and win32gui.GetWindowText(h):
+                out.append({"app": _proc_name(h), "title": win32gui.GetWindowText(h), "hwnd": h})
+        except Exception:
+            pass
+        return True
+    try:
+        win32gui.EnumWindows(cb, None)
+    except Exception:
+        pass
+    return out
+
+
 def screen_rect():
     try:
         import win32api
@@ -241,6 +261,9 @@ class WinContext:
     def note_typed(self, ctx, now):
         self.last_typed = {"element_name": ctx.get("element_name", ""), "ts": now}
 
+    def open_windows(self) -> list[dict]:
+        return open_windows()
+
 
 class NullContext(WinContext):
     """For tests and non-Windows runs: a fixed context, no pixels."""
@@ -258,6 +281,9 @@ class NullContext(WinContext):
 
     def window_hash(self, ctx):
         return self.hashes.popleft() if self.hashes else None
+
+    def open_windows(self):
+        return list(self.fixed.get("windows") or [])
 
     def shot(self, ctx, path, margin=40):
         path.parent.mkdir(parents=True, exist_ok=True)

@@ -22,7 +22,7 @@ import json
 import re
 from pathlib import Path
 
-VERSION = "0.1.5"
+VERSION = "0.2.0"
 SCHEMA = "gate.v1"
 HERE = Path(__file__).resolve().parent
 DEFAULT_ZONES = HERE / "zones.json"
@@ -42,6 +42,10 @@ GATE_TOOLS = ("capture_view", "gate_status")  # Gate's own tools
 INPUT_TOOLS = {"Click", "Type", "Scroll", "Move", "Shortcut"}
 READ_TOOLS = {"Snapshot", "Screenshot"}
 PASSIVE_TOOLS = {"Wait", "WaitFor", "ControlStatus"}
+# Watch (DRV4, 21 Nov): off by default, turned on in the Nodach Desktop window. While it's off every screen tool is
+# refused; Wait, ControlStatus, gate_status and the Pointer's read tools still work.
+WATCH_TOOLS = {"Snapshot", "Screenshot", "Click", "Type", "Scroll", "Move", "Shortcut", "App", "WaitFor", "capture_view"}
+WATCH_OFF = "Watch is off: turn it on in Nodach Desktop"
 # Arguments Gate never forwards: they make Windows-MCP write files.
 STRIPPED_ARGS = {"Snapshot": ("save_path",), "Screenshot": ("save_path",)}
 
@@ -139,6 +143,9 @@ def _never(zones, app, title, element, *, input_action: bool):
         if g.get("applies_to", "all") == "input" and not input_action:
             continue
         label = g.get("name", "never")
+        w = keep_out_hit(g.get("entries"), app, title)
+        if w:
+            return f"{label}: {w}"
         if _in_procs(app, g.get("processes")):
             return f"{label}: app {app}"
         w = _hit(g.get("title_words"), title)
@@ -169,6 +176,8 @@ def decide(action: dict, context: dict, zones: dict):
     args = action.get("args") or {}
     if tool not in UI_TOOLS and tool not in GATE_TOOLS:
         return "hidden", f"{tool} is not a UI tool; Gate never exposes it"
+    if tool in WATCH_TOOLS and not _truthy(context.get("watch")):   # a missing value counts as off
+        return "never", WATCH_OFF
     if tool in GATE_TOOLS:
         return "auto", "Gate's own tool"
     if context.get("paused"):
@@ -500,10 +509,13 @@ def _tree_line(line: str):
     return len(m.group("prefix")), m.group("rest").strip()
 
 
-def redact_snapshot(text: str, zones: dict) -> tuple[str, int]:
+def redact_snapshot(text: str, zones: dict, hide_titles=()) -> tuple[str, int]:
     """Cut every never-zone window out of Snapshot text: its subtree in the UI Tree becomes one line, and its title
-    is replaced wherever else it appears (Focused Window, Opened Windows). Returns (text, windows hidden)."""
+    is replaced wherever else it appears (Focused Window, Opened Windows). Returns (text, windows hidden).
+    hide_titles: exact titles of other windows to hide (keep-out apps, found by process: Snapshot text has no
+    process names, so Gate lists the open windows and passes the kept-out ones here, see keep_out_titles)."""
     lines = str(text).splitlines()
+    exact = {t for t in (hide_titles or ()) if t}
     out, skip_depth, titles = [], None, set()
     for line in lines:
         depth, rest = _tree_line(line)
@@ -513,7 +525,8 @@ def redact_snapshot(text: str, zones: dict) -> tuple[str, int]:
             skip_depth = None
         m = _WIN_RE.match(rest)
         if m:
-            r = _never(zones, "", m.group("title"), "", input_action=False)
+            r = _never(zones, "", m.group("title"), "", input_action=False) or \
+                ("user keep-out: kept-out app" if m.group("title") in exact else None)
             if r:
                 titles.add(m.group("title"))
                 out.append(line.replace(m.group("title"), HIDDEN) + f"  (contents hidden: {r.split(':')[0]})")
@@ -526,7 +539,8 @@ def redact_snapshot(text: str, zones: dict) -> tuple[str, int]:
             t = t.replace(title, HIDDEN)
     # before the UI tree: any other line naming a never-zone window (Focused/Opened Windows list)
     head, sep, tail = t.partition("UI Tree:")
-    head = "\n".join(HIDDEN if _never(zones, "", ln, "", input_action=False) else ln for ln in head.splitlines())
+    head = "\n".join(HIDDEN if (_never(zones, "", ln, "", input_action=False) or ln.strip() in exact) else ln
+                     for ln in head.splitlines())
     t = head + sep + tail
     # 21 Nov: an Explorer window open on nodach_sec listed a client_secret file name. Any element whose name or
     # value names a secret is hidden, in every window, not only windows with a secret title.
@@ -683,7 +697,7 @@ def auto_report_trigger(entry: dict, settings: dict, prev_entry: dict | None = N
     if entry.get("kind", "action") != "action":
         return None
     if entry.get("zone") == "never" and entry.get("decision") in ("refused", "blocked") \
-            and not str(entry.get("reason", "")).startswith("Gate is paused"):
+            and not str(entry.get("reason", "")).startswith(("Gate is paused", WATCH_OFF)):
         return "never_block" if settings.get("never_block") else None
     if entry.get("zone") == "confirm" and entry.get("decision") == "blocked" and entry.get("by") in ("user", "timeout"):
         return "confirm_timeout" if settings.get("confirm_timeout") else None
@@ -857,3 +871,151 @@ def user_control_wait(text: str):
     if isinstance(d, dict) and d.get("code") == "USER_CONTROL":
         return float((d.get("status") or {}).get("wait_seconds") or 10)
     return None
+
+
+# --------------------------------------------------------------------------- user keep-out (DRV7b, 21 Nov)
+# Nowed: "you can read and act on any window as long as they are not in the picks users would choose to stay out".
+# Everything is in scope except the windows, apps and folders he keeps out. They live in one never group,
+# "user keep-out", as entries; each change bumps zones.json's revision and adds a _changes line (by, date, what).
+KEEP_OUT = "user keep-out"
+KEEP_OUT_KINDS = ("window", "app", "folder")
+
+
+def _norm_path(p) -> str:
+    return re.sub(r"[\\/]+", "\\\\", str(p or "").strip()).rstrip("\\").lower()
+
+
+def keep_out_hit(entries, app, title) -> str | None:
+    """Why (app, title) is kept out by one of the entries, else None.
+    window: process (if given) AND the title has every title word;  app: the process;  folder: the title contains the
+    path (Explorer with full paths in the title bar, editors showing a file's path), or the window is File Explorer
+    showing that folder by its name. Without a process (Snapshot text) a window entry matches by its words alone,
+    which hides more rather than less."""
+    a, t = _proc(app), str(title or "").lower()
+    tn = _norm_path(title)
+    for e in entries or []:
+        k = e.get("kind", "window")
+        proc = _proc(e.get("process"))
+        if k == "app":
+            if proc and a == proc:
+                return f"kept-out app {e.get('process')}"
+        elif k == "folder":
+            path = _norm_path(e.get("path"))
+            if path and path in tn:
+                return "kept-out folder"
+            base = path.rsplit("\\", 1)[-1]
+            explorer = a == "explorer" or (not a and "file explorer" in t)
+            if base and explorer and (t == base or t.startswith(base + " - ")):
+                return "kept-out folder"
+        else:
+            words = [w.lower() for w in (e.get("title_words") or []) if w]
+            if not words:
+                if proc and a == proc:
+                    return f"kept-out app {e.get('process')}"
+                continue
+            if all(w in t for w in words) and (not proc or not a or a == proc):
+                return "kept-out window"
+    return None
+
+
+def keep_out_group(raw: dict) -> dict | None:
+    for g in raw.get("never") or []:
+        if g.get("name") == KEEP_OUT:
+            return g
+    return None
+
+
+def keep_out_entries(raw: dict) -> list[dict]:
+    g = keep_out_group(raw)
+    return list((g or {}).get("entries") or [])
+
+
+def keep_out_entry(kind: str, *, process: str = "", title: str = "", path: str = "", words=None) -> dict:
+    """An entry from what was picked. A window keeps its title words (the title minus the app suffix and numbers
+    that change, e.g. unread counts), so the same window still matches after small title changes."""
+    if kind not in KEEP_OUT_KINDS:
+        raise ValueError(f"kind must be one of {KEEP_OUT_KINDS}")
+    if kind == "folder":
+        if not str(path or "").strip():
+            raise ValueError("a folder needs its path")
+        return {"kind": "folder", "path": str(path).strip()}
+    if kind == "app":
+        if not _proc(process):
+            raise ValueError("an app needs its process name")
+        return {"kind": "app", "process": str(process).strip()}
+    if words is None:
+        main = re.split(r"\s+[-–—|]\s+", str(title or "").strip())
+        main = [x for x in main if x] or [""]
+        if len(main) > 1:
+            main = main[:-1]               # drop the app name at the end ("... - Google Chrome")
+        words = [re.sub(r"^\(\d+\)\s*", "", " - ".join(main)).strip()]
+    words = [w for w in (str(x).strip() for x in words) if w]
+    if not words and not _proc(process):
+        raise ValueError("a window needs a title or a process")
+    return {"kind": "window", "process": str(process or "").strip(), "title_words": words[:4]}
+
+
+def _entry_words(e: dict) -> str:
+    if e.get("kind") == "folder":
+        return f"folder {e.get('path')}"
+    if e.get("kind") == "app":
+        return f"app {e.get('process')}"
+    return f"window {' / '.join(e.get('title_words') or [])}" + (f" in {e['process']}" if e.get("process") else "")
+
+
+def _same_entry(a: dict, b: dict) -> bool:
+    keys = ("kind", "process", "path", "title_words")
+    norm = lambda e: tuple(json.dumps(e.get(k) if k != "process" else _proc(e.get(k)), sort_keys=True).lower() for k in keys)
+    return norm(a) == norm(b)
+
+
+def _bump(raw: dict, what: str, by: str, date: str) -> dict:
+    out = copy.deepcopy(raw)
+    rev = int(out.get("revision") or 0) + 1
+    out["revision"] = rev
+    out["_changes"] = list(out.get("_changes") or []) + [{"revision": rev, "date": date, "by": by, "what": what}]
+    return out
+
+
+def keep_out_add(raw: dict, entry: dict, *, by: str = "Nowed", date: str | None = None, entry_id: str | None = None):
+    """A new zones dict (raw, with _ comments) with the entry added to 'user keep-out'. Returns (zones, entry);
+    adding one that is already there changes nothing (same dict back, revision unchanged)."""
+    date = date or dt.date.today().isoformat()
+    g = keep_out_group(raw)
+    for e in (g or {}).get("entries") or []:
+        if _same_entry(e, entry):
+            return raw, e
+    eid = entry_id or "KO-" + hashlib.sha256(json.dumps(entry, sort_keys=True).encode()).hexdigest()[:8]
+    e = dict(entry, id=eid, added=date, by=by)
+    out = _bump(raw, f"{by} kept out {_entry_words(entry)} ({eid})", by, date)
+    g = keep_out_group(out)
+    if g is None:
+        g = {"name": KEEP_OUT, "applies_to": "all", "processes": [], "title_words": [], "element_words": [], "entries": []}
+        out.setdefault("never", []).append(g)
+    g.setdefault("entries", []).append(e)
+    return out, e
+
+
+def keep_out_remove(raw: dict, entry_id: str, *, by: str = "Nowed", date: str | None = None):
+    """A new zones dict without that entry (revision bumped, the removal in _changes). Returns (zones, removed or None)."""
+    date = date or dt.date.today().isoformat()
+    g = keep_out_group(raw)
+    hit = next((e for e in (g or {}).get("entries") or [] if e.get("id") == entry_id), None)
+    if not hit:
+        return raw, None
+    out = _bump(raw, f"{by} removed keep-out {_entry_words(hit)} ({entry_id})", by, date)
+    g = keep_out_group(out)
+    g["entries"] = [e for e in g["entries"] if e.get("id") != entry_id]
+    return out, hit
+
+
+def keep_out_titles(zones: dict, windows) -> list[str]:
+    """Titles of open windows ([{app, title}]) that a keep-out entry hides by process (Snapshot redaction)."""
+    out = []
+    for g in zones.get("never", []):
+        for w in windows or []:
+            if g.get("entries") and keep_out_hit(g["entries"], w.get("app"), w.get("title")) and w.get("title"):
+                out.append(w["title"])
+            elif _in_procs(w.get("app"), g.get("processes")) and w.get("title"):
+                out.append(w["title"])
+    return sorted(set(out))

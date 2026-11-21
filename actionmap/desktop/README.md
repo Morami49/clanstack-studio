@@ -1,7 +1,8 @@
-# Nodach Desktop 0.1.0 (the first Driver shell)
+# Nodach Desktop 0.2.0 (the first Driver shell)
 
 One install for Nowed's Windows desktop tools: Gate (Claude's hands, behind Nowed's rules), Pointer (point at
-something, Claude reads it), Live (talk into a Studio live session). It ends the download, extract, relaunch-Claude
+something, Claude reads it), Live (talk into a Studio live session), and from 0.2.0 Watch (the switch that lets
+Claude see at all, plus a phone-shaped chat-and-markup window: see `actionmap/watch/README.md`). It ends the download, extract, relaunch-Claude
 cycle: after the first install, new versions load without restarting Claude.
 
 ## Install (once)
@@ -10,7 +11,7 @@ cycle: after the first install, new versions load without restarting Claude.
 2. Open Claude > Settings > Extensions and turn off **Nodach Pointer**. Nodach Desktop now serves the pointer.
 3. Quit Claude from the tray (right-click the Claude icon by the clock > Quit) and reopen it.
 
-The installer copies the code to `%USERPROFILE%\nodach\app` (`shell`, `gate`, `pointer`, `live`), leaves the data where
+The installer copies the code to `%USERPROFILE%\nodach\app` (`shell`, `gate`, `pointer`, `live`, `watch`), leaves the data where
 it already was (`%USERPROFILE%\nodach-gate`, `\nodach-pointer`, `\nodach-live`: logs, zones and sign-ins carry
 over), and in both Claude configs (normal and Microsoft Store) adds `nodach-desktop` and takes out `nodach-gate`
 and `nodach-pointer`. A backup of each config is kept next to it.
@@ -34,6 +35,8 @@ Claude desktop --stdio--> app\shell\shell_mcp.py  (stable, standard library only
 
 Opens when Claude starts Nodach Desktop (or from the Desktop shortcut). Mouse only:
 
+- **Watch on / off** (big button): off by default; while off Gate refuses every screen tool. Turning it on opens the
+  Watch window (pywebview; the browser if pywebview isn't installed).
 - **STOP CLAUDE NOW**: pauses Gate (same as Pause all). It can always be clicked. The border and banner turn
   orange with the tool name while Claude is acting through Gate. Since Gate 0.1.5 this replaces Windows-MCP's own
   overlay.

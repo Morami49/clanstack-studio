@@ -57,6 +57,7 @@ def versions(app: Path = APP) -> dict:
     return {"desktop": desk, "shell": module_version(app / "shell" / "shell_mcp.py"),
             "worker": module_version(app / "shell" / "worker.py"), "gate": module_version(app / "gate" / "gate_core.py"),
             "pointer": module_version(app / "pointer" / "pointer_core.py"), "live": module_version(app / "live" / "live_core.py"),
+            "watch": module_version(app / "watch" / "watch_core.py"),
             "previous": (lambda p: p.read_text(encoding="utf-8").strip() if p.exists() else None)(app / "_prev" / "VERSION")}
 
 
@@ -144,6 +145,26 @@ def set_gate_paused(paused: bool, gate_home: Path = GATE_HOME) -> dict:
     return st
 
 
+def watch_on(gate_home: Path = GATE_HOME) -> bool:
+    """Watch (DRV4): off unless turned on here. While off, Gate refuses every screen tool."""
+    return bool(read_json(Path(gate_home) / "state.json", {}).get("watch"))
+
+
+def set_watch(on: bool, gate_home: Path = GATE_HOME) -> dict:
+    """state.json watch / watch_changed (other keys kept), and a gui line in Gate's log."""
+    gate_home = Path(gate_home)
+    st = read_json(gate_home / "state.json", {})
+    st["watch"] = bool(on)
+    st["watch_changed"] = now_iso()
+    write_json(gate_home / "state.json", st)
+    e = {"schema": "gate.v1", "kind": "gui", "ts": now_iso(), "session": "", "what": "watch",
+         "detail": "Watch " + ("on: Claude may read and act on windows that aren't kept out" if on else
+                               "off: every screen tool is refused") + " (Nodach Desktop window)"}
+    with open(gate_home / "actions.jsonl", "a", encoding="utf-8") as f:
+        f.write(json.dumps(e, ensure_ascii=False) + "\n")
+    return st
+
+
 def acting_state(root: Path = ROOT, linger_s: float = 1.5, now: float | None = None) -> dict:
     """Is Claude acting through Gate right now? From run\\acting.json (written by the worker around each Gate call).
     A call that ended under linger_s ago still shows, so a quick click is visible; a dead worker never shows as acting."""
@@ -219,7 +240,7 @@ def build_report(app: Path = APP, root: Path = ROOT, events: list | None = None,
     ws = read_json(Path(root) / "run" / "worker-status.json", {})
     lines = [f"Nodach Desktop report · {now_iso()}",
              f"versions: desktop {v['desktop']} · shell {v['shell']} · worker {v['worker']} · gate {v['gate']} · "
-             f"pointer {v['pointer']} · live {v['live']} · previous {v['previous'] or '-'}",
+             f"pointer {v['pointer']} · live {v['live']} · watch {v.get('watch', '?')} · previous {v['previous'] or '-'}",
              f"os: {platform.system()} {platform.release()} · python {platform.python_version()}",
              f"shell: {'running' if st.get('shell_alive') else 'not running (Claude closed?)'} · worker "
              f"{(st.get('worker') or {}).get('state', '?')} · uptime {(st.get('worker') or {}).get('uptime_s', 0)} s · "
@@ -236,6 +257,7 @@ def build_report(app: Path = APP, root: Path = ROOT, events: list | None = None,
     lines.append(f"pointer: tools {'loaded' if p.get('loaded') else 'not loaded'} · capture app {'running' if running('pointer.pid', root) else 'off'}"
                  + (f" · {p['error']}" if p.get("error") else ""))
     lines.append(f"live: window {'open' if running('live.pid', root) else 'closed'}")
+    lines.append(f"watch: {'on' if watch_on() else 'off'} · window {'open' if running('watch.pid', root) else 'closed'}")
     for c in claude_config_check(env.get("APPDATA", ""), env.get("LOCALAPPDATA", "")):
         lines.append(f"claude config ({c['config']}): {'servers ' + ', '.join(c['servers']) if c['exists'] else 'missing'}")
     errs = st.get("errors") or []

@@ -440,13 +440,33 @@ def test_bundle_layout(tmp_path):
     n = set(zipfile.ZipFile(z).namelist())
     for f in ("install-desktop.bat", "install_desktop.py", "app/VERSION", "app/shell/shell_mcp.py", "app/shell/worker.py",
               "app/shell/desktop_gui.py", "app/shell/updater.py", "app/gate/gate_mcp.py", "app/gate/zones.json",
-              "app/gate/gate_popup.py", "app/pointer/pointer_mcp.py", "app/pointer/pointer.py", "app/live/live_gui.py"):
+              "app/gate/gate_popup.py", "app/pointer/pointer_mcp.py", "app/pointer/pointer.py", "app/live/live_gui.py",
+              "app/watch/watch_app.py", "app/watch/watch_server.py", "app/watch/watch_core.py", "app/watch/watch_win.py",
+              "app/watch/web/index.html", "app/watch/web/watch.js", "app/watch/web/watch_logic.js", "app/watch/web/watch.css"):
         assert "nodach-desktop/" + f in n, f
     assert not any("test_" in x or "/tests/" in x or "install_gate" in x or "install-claude-config" in x for x in n)
     assert updater.parse_sha(s.read_text()) == updater.sha256_of(z)
 
 
 # ---------------------------------------------------------------- window helpers
+def test_watch_toggle_is_off_by_default_keeps_state_and_logs(tmp_path):
+    gh = tmp_path / "nodach-gate"
+    gh.mkdir()
+    assert desktop_core.watch_on(gh) is False                         # off until he turns it on
+    (gh / "state.json").write_text(json.dumps({"paused": False, "keep_clip_req": 2}))
+    desktop_core.set_watch(True, gh)
+    st = json.loads((gh / "state.json").read_text())
+    assert desktop_core.watch_on(gh) and st["keep_clip_req"] == 2 and st["watch_changed"]
+    desktop_core.set_watch(False, gh)
+    log = [json.loads(x) for x in (gh / "actions.jsonl").read_text().splitlines()]
+    assert [e["what"] for e in log] == ["watch", "watch"] and log[1]["detail"].startswith("Watch off")
+
+
+def test_desktop_version_is_0_2_0_and_lists_watch():
+    assert build_zip.version() == "0.2.0"
+    assert desktop_core.versions(build_zip.assemble.__globals__["ACTIONMAP"].parent / "nonexistent")["watch"] == "?"
+
+
 def test_gate_pause_toggle_keeps_other_state_and_logs(tmp_path):
     gh = tmp_path / "nodach-gate"
     gh.mkdir()

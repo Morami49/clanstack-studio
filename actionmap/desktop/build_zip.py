@@ -8,6 +8,7 @@ Build the Nodach Desktop bundle: nodach-desktop-<ver>.zip (one folder, nodach-de
       app/gate/    from actionmap/gate (no tests)
       app/pointer/ from actionmap/pointer (no tests)
       app/live/    from actionmap/live (no tests)
+      app/watch/   from actionmap/watch, with its web/ folder (no tests)
 
 Used by the desktop-v* release workflow and by the tests:  python actionmap/desktop/build_zip.py --out dist
 """
@@ -22,7 +23,8 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ACTIONMAP = HERE.parent
-MODULES = {"gate": ACTIONMAP / "gate", "pointer": ACTIONMAP / "pointer", "live": ACTIONMAP / "live", "shell": HERE / "shell"}
+MODULES = {"gate": ACTIONMAP / "gate", "pointer": ACTIONMAP / "pointer", "live": ACTIONMAP / "live", "shell": HERE / "shell",
+           "watch": ACTIONMAP / "watch"}
 TOP_FILES = ["install-desktop.bat", "install_desktop.py", "README.md"]
 # the old per-module installers would add nodach-gate / nodach-pointer back to Claude's config: not shipped
 LEFT_OUT = {"install_gate.py", "install-gate.bat", "install-claude-config.ps1", "connect-to-claude.bat"}
@@ -31,6 +33,18 @@ LEFT_OUT = {"install_gate.py", "install-gate.bat", "install-claude-config.ps1", 
 def keep(p: Path) -> bool:
     n = p.name
     return not (n.startswith("test_") or n == "__pycache__" or n.endswith(".pyc") or n == "tests" or n in LEFT_OUT)
+
+
+def copy_tree(src: Path, out: Path):
+    """Files and sub-folders (watch has web/), leaving out tests, caches and the old installers."""
+    out.mkdir(parents=True, exist_ok=True)
+    for f in sorted(src.iterdir()):
+        if not keep(f):
+            continue
+        if f.is_file():
+            shutil.copy2(f, out / f.name)
+        elif f.is_dir():
+            copy_tree(f, out / f.name)
 
 
 def version() -> str:
@@ -44,11 +58,7 @@ def assemble(dest: Path, ver: str | None = None) -> Path:
         shutil.rmtree(root)
     app = root / "app"
     for name, src in MODULES.items():
-        out = app / name
-        out.mkdir(parents=True)
-        for f in sorted(src.iterdir()):
-            if f.is_file() and keep(f):
-                shutil.copy2(f, out / f.name)
+        copy_tree(src, app / name)
     (app / "VERSION").write_text((ver or version()) + "\n", encoding="utf-8")
     for f in TOP_FILES:
         shutil.copy2(HERE / f, root / f)

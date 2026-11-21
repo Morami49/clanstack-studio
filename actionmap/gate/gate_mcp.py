@@ -58,7 +58,8 @@ INSTRUCTIONS = (
     "registry or processes). Act by loc=[x, y] (the centre Snapshot shows), not label. Some actions need Nowed's OK in "
     "a popup on his PC (send/post/delete/pay/install..., Enter in a message box, Delete keys, launching apps not on his "
     "list); password managers, banking/payment pages, Windows Security/UAC, Settings > Accounts/Privacy and Claude's "
-    "own window are refused. A refusal says why: don't try to work round it, tell Nowed. Prefer Snapshot (UI-tree text) "
+    "own window are refused, and so is anything Nowed put on his Keep out list. Screen tools work only while Watch is "
+    "on in the Nodach Desktop window (off by default). A refusal says why: don't try to work round it, tell Nowed. Prefer Snapshot (UI-tree text) "
     "over Screenshot to save tokens. When the desktop work is done, call ControlStatus with release=true.")
 
 
@@ -227,7 +228,11 @@ class Gate:
         async with self.lock:
             ctx = await asyncio.to_thread(self.ctxp.context, name, args)
             ctx["paused"] = bool(st.get("paused"))
+            ctx["watch"] = bool(st.get("watch"))      # off unless turned on in the Nodach Desktop window
             zone, reason = core.decide({"tool": name, "args": args}, ctx, self.zones)
+            if reason == core.WATCH_OFF:
+                self._log_action(t0, name, args, ctx, zone, reason, "refused", "watch", ok=False, error=reason)
+                return _err(core.WATCH_OFF + ". Ask Nowed to turn Watch on if he wants you to look or act.")
             if name in core.GATE_TOOLS:
                 return await self._gate_tool(name, args, ctx, t0, cap)
             if zone in ("never", "invalid", "hidden"):
@@ -294,7 +299,11 @@ class Gate:
             out = []
             for c in content:
                 if getattr(c, "type", "") == "text":
-                    text, n = core.redact_snapshot(c.text, self.zones)
+                    try:
+                        hide = core.keep_out_titles(self.zones, self.ctxp.open_windows())
+                    except Exception:
+                        hide = []
+                    text, n = core.redact_snapshot(c.text, self.zones, hide)
                     self.ctxp.elements = core.parse_elements(text)
                     if n:
                         text += f"\n\n[Nodach Gate hid {n} protected window(s).]"
@@ -321,6 +330,7 @@ class Gate:
         if name == "gate_status":
             st = self.state()
             body = {"version": core.VERSION, "zones_rev": self.zones_rev(), "paused": bool(st.get("paused")),
+                    "watch": bool(st.get("watch")), "kept_out": len(core.keep_out_entries(self.zones)),
                     "screenshots": cap.get("screenshots", True), "clips": cap.get("clips", True),
                     "grants_s_left": self.grants.snapshot(time.time()), "hidden_tools": self.hidden,
                     "auto_reports": self.reports(), "studio": self.sign_in_state(),

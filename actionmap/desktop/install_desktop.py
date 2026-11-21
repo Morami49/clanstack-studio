@@ -2,8 +2,8 @@
 Nodach Desktop installer (run by install-desktop.bat; one click).
 
 1. Installs the Python packages for this user (pip --user): mcp, windows-mcp, pywin32, uiautomation, pillow, psutil,
-   pynput (Gate + Pointer). Live's voice packages are tried too, but Live works typed-only without them.
-2. Copies app\\ (shell, gate, pointer, live) to %USERPROFILE%\\nodach\\app. A copy already there is kept as
+   pynput (Gate + Pointer). pywebview (the Watch window) is tried separately: without it Watch opens in the browser. Live's voice packages are tried too, but Live works typed-only without them.
+2. Copies app\\ (shell, gate, pointer, live, watch) to %USERPROFILE%\\nodach\\app. A copy already there is kept as
    app\\_prev (Roll back in the window). Data stays where it is: %USERPROFILE%\\nodach-gate, \\nodach-pointer,
    \\nodach-live (logs, zones and sign-ins carry over).
 3. Edits BOTH Claude desktop configs (%APPDATA%\\Claude and, if Claude is the Microsoft Store/MSIX app,
@@ -30,6 +30,8 @@ SERVER_NAME = "nodach-desktop"
 REPLACES = ("nodach-gate", "nodach-pointer")
 MSIX_PKG = "Claude_pzs8sxrjxfjjc"
 PACKAGES = ["mcp>=2.3,<3", "windows-mcp>=0.8.9,<0.9", "pywin32", "uiautomation", "pillow", "psutil", "pynput"]
+# the Watch window (WebView2 through pywebview, which needs pythonnet): optional, Watch falls back to the browser
+WATCH_PACKAGES = ["pywebview>=5"]
 VOICE_PACKAGES = ["faster-whisper>=1.1", "sounddevice>=0.5", "numpy>=1.26"]
 EXTENSION_NOTE = "Open Claude > Settings > Extensions and turn off Nodach Pointer; Nodach Desktop now serves the pointer."
 
@@ -141,6 +143,9 @@ def main() -> int:
     v = subprocess.run([sys.executable, "-m", "pip", "install", "--user", "--disable-pip-version-check", *VOICE_PACKAGES])
     if v.returncode != 0:
         print("   (Live's voice packages didn't install; Live still works with typing.)")
+    wv = subprocess.run([sys.executable, "-m", "pip", "install", "--user", "--disable-pip-version-check", *WATCH_PACKAGES])
+    if wv.returncode != 0:
+        print("   (pywebview didn't install; the Watch window opens in your browser instead.)")
     home = Path(os.environ.get("NODACH_DESKTOP_HOME", str(Path.home() / "nodach")))
     print("2/4 Copying Nodach Desktop to", home / "app")
     res = install_app(HERE / "app", home)

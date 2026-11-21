@@ -4,7 +4,8 @@ Gate lets Claude (the Claude desktop app) use your Windows PC through the open-s
 [Windows-MCP](https://github.com/CursorTouch/Windows-MCP) (MIT), but only through a gate that:
 
 - offers Claude **UI tools only**: no PowerShell, files, registry, processes or clipboard;
-- **refuses** password managers, banking/payment pages, Windows Security/UAC, Settings > Accounts/Privacy, and Claude's own window;
+- **refuses** password managers, banking/payment pages, Windows Security/UAC, Settings > Accounts/Privacy, Claude's own window, and anything on your **Keep out** list (0.2.0: picked in the Watch window, the `user keep-out` never group);
+- **refuses every screen tool while Watch is off** (0.2.0: off by default, turned on in the Nodach Desktop window);
 - **asks you first** (a small popup) before anything that sends, posts, deletes, pays, installs or signs out;
 - **logs every action** as process data, with small local pictures where they help, and can send filtered reports to Studio.
 
