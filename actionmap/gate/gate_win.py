@@ -87,6 +87,27 @@ def is_own(w: dict) -> bool:
     return _OWN_CACHE[pid]
 
 
+_TRUST_CACHE: dict = {}
+
+
+def trusted_own_window(w: dict) -> str:
+    """gate_core.trusted_own for the window's process (by pid, never by title). Cached per (pid, create time)."""
+    hwnd = (w or {}).get("hwnd")
+    if not AVAILABLE or not hwnd:
+        return ""
+    try:
+        _, pid = win32process.GetWindowThreadProcessId(hwnd)
+        pr = psutil.Process(pid)
+        key = (pid, pr.create_time())
+        if key not in _TRUST_CACHE:
+            if len(_TRUST_CACHE) > 500:
+                _TRUST_CACHE.clear()
+            _TRUST_CACHE[key] = core.trusted_own(pr.exe(), pr.cmdline())
+        return _TRUST_CACHE[key]
+    except Exception:
+        return ""
+
+
 def foreground() -> dict:
     if not AVAILABLE:
         return _win(0)
@@ -265,7 +286,8 @@ class WinContext:
                "fg_app": fg["app"], "fg_title": fg["title"], "fg_rect": fg["rect"],
                "element_name": el.get("name", ""), "element_type": el.get("type", ""),
                "element_rect": el.get("rect"), "is_password": el.get("is_password", False),
-               "loc": loc, "last_typed": self.last_typed, "page_hint": "", "now": time.time()}
+               "loc": loc, "last_typed": self.last_typed, "page_hint": "", "now": time.time(),
+               "own_trusted": trusted_own_window(w)}
         if core._in_procs(w["app"], ["SystemSettings", "ApplicationFrameHost"]) and "settings" in w["title"].lower():
             ctx["app"] = "SystemSettings.exe"
             ctx["page_hint"] = settings_page_hint(w["hwnd"])

@@ -992,3 +992,9 @@ def test_api_test_input_note_is_in_the_stream(api):
     assert call("/api/test/select_area", {"x1": 0, "y1": 0, "x2": 200, "y2": 200})[0] == 200
     st = call("/api/test/state", {})[1]
     assert any(r["who"] == "Watch" and r["text"].startswith("Test input from Claude") for r in st["chat_last5"])
+
+
+def test_ended_title_matches_studio():
+    import watch_server as ws
+    assert ws.ended_title("LV-261121-143725-eb46") == "Live session (ended) 2026-11-21 14:37"
+    assert ws.ended_title("weird") == "Live session (ended)"

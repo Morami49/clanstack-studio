@@ -29,7 +29,7 @@ import gate_studio as studio  # noqa: E402
 HOME = studio.HOME
 LOG = HOME / "actions.jsonl"
 STATE = HOME / "state.json"
-COLOURS = {"never": "#f8d0d0", "confirm": "#fde9b8", "auto": "#dff3df", "hidden": "#e4e4e4", "invalid": "#e4e4e4",
+COLOURS = {"never": "#f8d0d0", "confirm": "#fde9b8", "auto": "#dff3df", "auto-own": "#dff3df", "hidden": "#e4e4e4", "invalid": "#e4e4e4",
            "clip": "#d6e6fb", "report": "#ece0f8", "view": "#d6e6fb", "start": "#ffffff", "error": "#f8d0d0"}
 REPORT_LABELS = [
     ("never_block", "On a never-zone block (text only, never pictures)"),

@@ -22,7 +22,7 @@ import json
 import re
 from pathlib import Path
 
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 SCHEMA = "gate.v1"
 HERE = Path(__file__).resolve().parent
 DEFAULT_ZONES = HERE / "zones.json"
@@ -174,7 +174,8 @@ def decide(action: dict, context: dict, zones: dict):
               "is_password": bool, "page_hint": "...", "paused": bool,
               "last_typed": {"element_name": "...", "ts": float} | None, "now": float,
               "target_app": "...", "target_title": "..."}   # for App switch/launch: the window being asked for
-    Returns (zone, reason), zone in "hidden" | "invalid" (bad arguments, refused) | "never" | "confirm" | "auto".
+    Returns (zone, reason), zone in "hidden" | "invalid" (bad arguments, refused) | "never" | "confirm" | "auto"
+    | "auto-own" (input into Nodach's own Watch/Desktop window, trusted by process: forwarded without a popup).
     """
     tool = action.get("tool", "")
     args = action.get("args") or {}
@@ -239,6 +240,9 @@ def decide(action: dict, context: dict, zones: dict):
         return "never", r
     if tool in READ_TOOLS:
         return "auto", "read"
+
+    if tool in INPUT_TOOLS and context.get("own_trusted"):
+        return OWN_ZONE, f"Nodach's own window ({context['own_trusted']}, checked by process): no popup (84b a)"
 
     cw = zones.get("confirm", {})
     keys = norm_keys(args.get("shortcut", "")) if tool == "Shortcut" else []
@@ -505,6 +509,28 @@ def own_window(title: str = "", exe: str = "", cmdline=(), nodach_home: str | Pa
         if q.startswith(root):
             return True
     return False
+
+
+# 84b a (21 Nov): clicks and typing inside Nodach's own Watch and Desktop windows go through without the popup.
+# Trusted by PROCESS, never by title: the window's process must run one of these scripts from %USERPROFILE%\nodach,
+# so another app can't earn the pass by calling its window "Nodach Watch". Gate's own windows stay never.
+TRUSTED_OWN_SCRIPTS = ("watch\\watch_app.py", "shell\\desktop_gui.py")
+OWN_ZONE = "auto-own"
+
+
+def trusted_own(exe: str = "", cmdline=(), nodach_home: str | Path | None = None) -> str:
+    """The trusted Nodach script this process runs ("watch_app.py" / "desktop_gui.py"), or "" if none.
+    Needs a Python interpreter and the script path under %USERPROFILE%\\nodach\\app."""
+    home = str(nodach_home or (Path.home() / "nodach"))
+    root = home.replace("/", "\\").rstrip("\\").lower() + "\\app\\"
+    name = Path(str(exe or "").replace("\\", "/")).name.lower()
+    if name not in ("python.exe", "pythonw.exe", "python", "pythonw") and not name.startswith("python3"):
+        return ""
+    for p in cmdline or ():
+        q = str(p or "").strip('"').replace("/", "\\").lower()
+        if q.startswith(root) and any(q.endswith(t) for t in TRUSTED_OWN_SCRIPTS) and ".." not in q:
+            return q.rsplit("\\", 1)[-1]
+    return ""
 
 
 def clip_trigger(*, kind: str, now: float, settings: dict, last_action_t: float | None = None,

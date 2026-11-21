@@ -76,6 +76,14 @@ def write_json(p: Path, data):
     os.replace(tmp, p)
 
 
+
+def ended_title(sid: str) -> str:
+    """'Live session (ended) 2026-11-21 14:37' from LV-261121-143725-xxxx, matching Studio's own ended title."""
+    import re
+    m = re.match(r"LV-(\d\d)(\d\d)(\d\d)-(\d\d)(\d\d)", sid or "")
+    return f"Live session (ended) 20{m[1]}-{m[2]}-{m[3]} {m[4]}:{m[5]}" if m else "Live session (ended)"
+
+
 class ApiError(Exception):
     def __init__(self, msg, code=400):
         super().__init__(msg)
@@ -338,7 +346,10 @@ class Watch:
         ts = core.iso(t)
         au = live_core.author(me)
         h.post({"ts": ts, "kind": "item.edit", "item": sid, "branch": "main", "author": au,
-                "body": {"live": {"ended": ts}, "body": f"Live session ended {ts[:16].replace('T', ' ')} UTC {why}."}})
+                "body": {"title": ended_title(sid), "live": {"ended": ts},
+                         "body": f"Live session ended {ts[:16].replace('T', ' ')} UTC {why}."}})
+        # status stays "open", as Studio and the Live client do: "live" -> "open" is how every surface ends a session,
+        # and live.ended plus the "(ended)" title mark it (Studio's status list has no "ended")
         h.post({"ts": ts, "kind": "status", "item": sid, "branch": "main", "author": au, "body": {"status": "open"}})
 
     def retire_if_idle(self, session: str, me: dict) -> str:
