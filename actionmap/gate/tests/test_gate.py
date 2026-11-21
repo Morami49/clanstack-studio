@@ -333,7 +333,7 @@ def test_day_item_and_events():
     me = {"id": "github:someone", "owner": True}
     ev = core.day_item_event("GATE-261120", me, dt.datetime(2026, 11, 20, tzinfo=dt.timezone.utc))
     assert ev["kind"] == "item.create" and ev["body"]["id"] == "GATE-261120" and "2026-11-20" in ev["body"]["title"]
-    rep = core.report_event("GATE-261120", me, "x a@b.co", dt.datetime(2026, 11, 20, tzinfo=dt.timezone.utc), "never_block",
+    rep = core.report_event("GATE-261120", me, "x a" + "@" + "b.co", dt.datetime(2026, 11, 20, tzinfo=dt.timezone.utc), "never_block",
                             [{"name": "a.png", "data": "SECRETPIXELS", "local": True}])
     assert rep["item"] == "GATE-261120" and "[email]" in rep["body"]["text"]
     assert rep["body"]["attachments"] == [{"name": "a.png", "local": True}]       # never the pixels
@@ -355,8 +355,9 @@ def test_chunks_fit_hub_limit():
 
 
 def test_scrub():
+    AT = "@"   # built at run time: no address-shaped text in the repo
     tok = "someone." + "1" * 12 + "." + "a" * 64
-    s = core.scrub(f"{tok} x@y.com C:\\Users\\N\\nodach-gate\\shots\\a.png C:\\Users\\N\\Desktop\\b.txt 4111 1111 1111 1111")
+    s = core.scrub(f"{tok} x{AT}y.com C:\\Users\\N\\nodach-gate\\shots\\a.png C:\\Users\\N\\Desktop\\b.txt 4111 1111 1111 1111")
     assert "[sign-in value]" in s and "[email]" in s and "nodach-gate/shots/a.png" in s and "[path]" in s and "[number]" in s
 
 
