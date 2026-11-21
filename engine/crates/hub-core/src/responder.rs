@@ -168,6 +168,22 @@ pub fn gemini_text(v: &Value) -> String {
         .to_string()
 }
 
+/// Quick answers try the light model first: it answered in seconds while the full one timed out (run 5c).
+pub const QUICK_MODELS: &[&str] = &["gemini-flash-lite-latest", "gemini-flash-latest"];
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AiRetry { Again, NextModel, Stop }
+
+/// After a failed model call: busy (429/5xx) → once more on the same model; no answer in time (0) → next model;
+/// anything else (bad key, bad request) → stop.
+pub fn on_ai_error(status: u16) -> AiRetry {
+    match status {
+        429 | 500 | 502 | 503 | 504 => AiRetry::Again,
+        0 => AiRetry::NextModel,
+        _ => AiRetry::Stop,
+    }
+}
+
 /// Longest wait for one model call before it is abandoned (the busy-model retry then tries the next).
 pub const AI_TIMEOUT_MS: u64 = 20_000;
 
@@ -350,5 +366,13 @@ mod tests {
         assert_eq!(nudge(Some(NOW - 5_000), NOW), Nudge::Wait);
         assert_eq!(nudge(Some(NOW - 60_000), NOW), Nudge::RunNow);
         assert_eq!(nudge(Some(NOW + 3_000_000), NOW), Nudge::Rearm);
+    }
+
+    #[test]
+    fn a_timeout_moves_to_the_next_model() {
+        assert_eq!(on_ai_error(0), AiRetry::NextModel);
+        assert_eq!(on_ai_error(503), AiRetry::Again);
+        assert_eq!(on_ai_error(400), AiRetry::Stop);
+        assert_eq!(QUICK_MODELS[0], "gemini-flash-lite-latest");
     }
 }

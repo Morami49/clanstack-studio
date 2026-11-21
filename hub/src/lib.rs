@@ -721,7 +721,7 @@ impl Record {
             };
             let body = serde_json::json!({"systemInstruction": {"parts": [{"text": rs::SYSTEM}]},
                                           "contents": [{"role": "user", "parts": [{"text": prompt}]}]}).to_string();
-            match self.ai_answer(&key, &body).await {
+            match self.ai_answer_with(&key, &body, rs::QUICK_MODELS).await {
                 Ok((text, model)) if !text.trim().is_empty() => {
                     let ev = serde_json::json!({"ts": mcp::iso(Date::now().as_millis() as i64), "kind": "comment", "item": d.session, "branch": "main",
                         "body": rs::answer_body(&text, &model, &d.line), "author": {"id": rs::AUTHOR_ID, "label": rs::LABEL, "role": "agent"}, "via": rs::VIA});
@@ -762,16 +762,22 @@ impl Record {
     }
 
     /// One answer from the flow AI step's model, retried once on a busy answer, then the lighter model (F-75).
-    async fn ai_answer(&self, key: &str, body: &str) -> std::result::Result<(String, String), String> {
+    /// Tries each model in turn: a busy answer (429/5xx) is retried once after a pause; no answer in time
+    /// (status 0, run 5c) moves straight to the next model; any other error stops.
+    async fn ai_answer_with(&self, key: &str, body: &str, models: &[&str]) -> std::result::Result<(String, String), String> {
         let mut last = String::new();
-        for m in ["gemini-flash-latest", "gemini-flash-lite-latest"] {
+        for m in models {
             for attempt in 0..2 {
                 if attempt > 0 { worker::Delay::from(std::time::Duration::from_millis(1500)).await; }
                 match self.ai_call(m, key, body).await {
                     Ok(t) => return Ok((t, m.to_string())),
                     Err((status, msg)) => {
                         last = format!("the AI ({m}) answered {status}: {msg}");
-                        if !matches!(status, 429 | 500 | 502 | 503 | 504) { return Err(last); }
+                        match hub_core::responder::on_ai_error(status) {
+                            hub_core::responder::AiRetry::Stop => return Err(last),
+                            hub_core::responder::AiRetry::NextModel => break,
+                            hub_core::responder::AiRetry::Again => {}
+                        }
                     }
                 }
             }
