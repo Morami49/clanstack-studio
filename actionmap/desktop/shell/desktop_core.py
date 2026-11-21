@@ -178,6 +178,12 @@ def acting_state(root: Path = ROOT, linger_s: float = 1.5, now: float | None = N
     return {"active": False, "tool": None}
 
 
+def watch_window_open(root: Path = ROOT) -> bool:
+    """Is the Watch window running (run\\watch-window.json names a live process)? Watch shows its own 'Claude is
+    acting' banner, so Desktop then stays put instead of jumping over Watch (run 4/5, 21 Nov)."""
+    return pid_alive(read_json(Path(root) / "run" / "watch-window.json", {}).get("pid"))
+
+
 def shell_status(root: Path = ROOT) -> dict:
     st = read_json(Path(root) / "run" / "shell-status.json", {})
     st["shell_alive"] = pid_alive(st.get("pid"))

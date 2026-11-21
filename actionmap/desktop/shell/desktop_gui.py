@@ -152,7 +152,9 @@ class DesktopWindow:
         if a["active"] and not paused:
             self.border.config(bg=ORANGE)
             self.banner.config(text=f"Claude is acting on this PC: {a.get('tool')}", bg=ORANGE, fg="white")
-            if not self.was_acting:          # stay visible over other windows while Claude acts (no focus taken)
+            if not self.was_acting and not core.watch_window_open(self.home):
+                # stay visible over other windows while Claude acts (no focus taken); with Watch open, Watch shows
+                # the acting banner itself and Desktop no longer covers it
                 self.root.attributes("-topmost", True)
         elif paused:
             self.border.config(bg=RED)

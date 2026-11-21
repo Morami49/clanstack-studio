@@ -463,8 +463,8 @@ def test_watch_toggle_is_off_by_default_keeps_state_and_logs(tmp_path):
     assert [e["what"] for e in log] == ["watch", "watch"] and log[1]["detail"].startswith("Watch off")
 
 
-def test_desktop_version_is_0_2_3_and_lists_watch():
-    assert build_zip.version() == "0.2.3"
+def test_desktop_version_is_0_2_4_and_lists_watch():
+    assert build_zip.version() == "0.2.4"
     assert desktop_core.versions(build_zip.assemble.__globals__["ACTIONMAP"].parent / "nonexistent")["watch"] == "?"
 
 
@@ -514,6 +514,16 @@ def test_acting_state_for_the_orange_banner(tmp_path):
     assert not desktop_core.acting_state(tmp_path, now=now + 5)["active"]
     (run / "acting.json").write_text(json.dumps({"active": True, "tool": "Type", "t": now, "pid": 999999}))
     assert not desktop_core.acting_state(tmp_path)["active"]                    # a dead worker never shows as acting
+
+
+def test_desktop_stays_behind_watch_while_watch_is_open(tmp_path):
+    run = tmp_path / "run"
+    run.mkdir()
+    assert not desktop_core.watch_window_open(tmp_path)
+    (run / "watch-window.json").write_text(json.dumps({"pid": os.getpid()}))
+    assert desktop_core.watch_window_open(tmp_path)
+    (run / "watch-window.json").write_text(json.dumps({"pid": 999999}))
+    assert not desktop_core.watch_window_open(tmp_path)
 
 
 
