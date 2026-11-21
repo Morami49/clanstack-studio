@@ -64,22 +64,16 @@ def main(argv=None) -> int:
             w.note("setup", "info", "pywebview isn't installed: opened in the browser (pip install pywebview)")
             while True:
                 time.sleep(3600)
-        # 21 Nov: the window opened low enough that its tool bar was off-screen. Fit it to the work area,
-        # right-hand side, 20 px from the top.
-        wx, wy, ww, wh = SIZE[0], SIZE[1], None, None
+        # 21 Nov: the window opened low enough that its tool bar was off-screen, then (with 125 % display
+        # scaling) half off the right edge. Use pywebview's own screen size, which is in the same units
+        # as create_window, and keep 20 px clear of the top and right edges and 60 px above the bottom.
+        ww, wh, pos = SIZE[0], SIZE[1], {}
         try:
-            import ctypes
-            r = ctypes.wintypes.RECT() if hasattr(ctypes, "wintypes") else None
-            if r is None:
-                import ctypes.wintypes
-                r = ctypes.wintypes.RECT()
-            ctypes.windll.user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(r), 0)   # SPI_GETWORKAREA
-            sw, sh = r.right - r.left, r.bottom - r.top
-            wh = min(SIZE[1], sh - 40)
-            ww = SIZE[0]
-            pos = dict(x=r.left + sw - ww - 20, y=r.top + 20)
+            scr = webview.screens[0]
+            wh = max(560, min(SIZE[1], int(scr.height) - 80))
+            pos = dict(x=int(scr.x) + int(scr.width) - ww - 20, y=int(scr.y) + 20)
         except Exception:
-            ww, wh, pos = SIZE[0], SIZE[1], {}
+            pass
         win = webview.create_window(TITLE, url, width=ww, height=wh, on_top=bool(w.settings.get("on_top")),
                                     resizable=True, min_size=(340, 560), **pos)
         hooks["hide"] = win.hide
