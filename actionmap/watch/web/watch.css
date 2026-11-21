@@ -19,7 +19,7 @@ button.icon { padding:4px 8px; }
 .pill.paused { background:var(--red); color:#fff; }
 #strip { display:flex; gap:6px; align-items:center; padding:6px 8px; border-bottom:1px solid var(--line); }
 .strip-btn { flex:1; text-align:left; background:none; border:none; padding:2px; font-weight:600; }
-.acting { background:var(--orange); color:#fff; font-weight:700; padding:6px 10px; }
+#acting { background:var(--orange); color:#fff; font-weight:700; padding:6px 10px; }
 .offer { background:#fff3e6; color:#18201f; padding:6px 8px; display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
 .err { background:#fde8e8; color:#8a1f1f; padding:6px 10px; font-size:13px; }
 .err.info { background:#e6f4ef; color:#1f4f43; }
