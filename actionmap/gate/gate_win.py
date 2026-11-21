@@ -59,6 +59,55 @@ def _win(hwnd) -> dict:
     return {"hwnd": hwnd, "title": title, "app": _proc_name(hwnd), "rect": rect}
 
 
+_OWN_CACHE: dict = {}
+
+
+def is_own(w: dict) -> bool:
+    """One of Nodach's own windows (gate_core.own_window): by title, or by its process's exe/command line under
+    %USERPROFILE%\\nodach. Cached per process id (a pid's command line doesn't change)."""
+    title = (w or {}).get("title") or ""
+    if core.own_window(title):
+        return True
+    hwnd = (w or {}).get("hwnd")
+    if not AVAILABLE or not hwnd:
+        return False
+    try:
+        _, pid = win32process.GetWindowThreadProcessId(hwnd)
+    except Exception:
+        return False
+    if pid not in _OWN_CACHE:
+        try:
+            pr = psutil.Process(pid)
+            exe, cmd = pr.exe(), pr.cmdline()
+        except Exception:
+            exe, cmd = "", []
+        if len(_OWN_CACHE) > 500:
+            _OWN_CACHE.clear()
+        _OWN_CACHE[pid] = core.own_window("", exe, cmd)
+    return _OWN_CACHE[pid]
+
+
+_TRUST_CACHE: dict = {}
+
+
+def trusted_own_window(w: dict) -> str:
+    """gate_core.trusted_own for the window's process (by pid, never by title). Cached per (pid, create time)."""
+    hwnd = (w or {}).get("hwnd")
+    if not AVAILABLE or not hwnd:
+        return ""
+    try:
+        _, pid = win32process.GetWindowThreadProcessId(hwnd)
+        pr = psutil.Process(pid)
+        key = (pid, pr.create_time())
+        if key not in _TRUST_CACHE:
+            if len(_TRUST_CACHE) > 500:
+                _TRUST_CACHE.clear()
+            _TRUST_CACHE[key] = core.trusted_own(pr.exe(), pr.cmdline())
+        return _TRUST_CACHE[key]
+    except Exception:
+        return ""
+
+
 def foreground() -> dict:
     if not AVAILABLE:
         return _win(0)
@@ -151,6 +200,26 @@ def find_window(name: str) -> dict:
     return _win(found[0]) if found else _win(0)
 
 
+def open_windows() -> list[dict]:
+    """Visible top-level windows with a title: [{app, title}] (for keep-out redaction of Snapshot text)."""
+    if not AVAILABLE:
+        return []
+    out = []
+
+    def cb(h, _):
+        try:
+            if win32gui.IsWindowVisible(h) and win32gui.GetWindowText(h):
+                out.append({"app": _proc_name(h), "title": win32gui.GetWindowText(h), "hwnd": h})
+        except Exception:
+            pass
+        return True
+    try:
+        win32gui.EnumWindows(cb, None)
+    except Exception:
+        pass
+    return out
+
+
 def screen_rect():
     try:
         import win32api
@@ -217,7 +286,8 @@ class WinContext:
                "fg_app": fg["app"], "fg_title": fg["title"], "fg_rect": fg["rect"],
                "element_name": el.get("name", ""), "element_type": el.get("type", ""),
                "element_rect": el.get("rect"), "is_password": el.get("is_password", False),
-               "loc": loc, "last_typed": self.last_typed, "page_hint": "", "now": time.time()}
+               "loc": loc, "last_typed": self.last_typed, "page_hint": "", "now": time.time(),
+               "own_trusted": trusted_own_window(w)}
         if core._in_procs(w["app"], ["SystemSettings", "ApplicationFrameHost"]) and "settings" in w["title"].lower():
             ctx["app"] = "SystemSettings.exe"
             ctx["page_hint"] = settings_page_hint(w["hwnd"])
@@ -241,6 +311,9 @@ class WinContext:
     def note_typed(self, ctx, now):
         self.last_typed = {"element_name": ctx.get("element_name", ""), "ts": now}
 
+    def open_windows(self) -> list[dict]:
+        return open_windows()
+
 
 class NullContext(WinContext):
     """For tests and non-Windows runs: a fixed context, no pixels."""
@@ -258,6 +331,9 @@ class NullContext(WinContext):
 
     def window_hash(self, ctx):
         return self.hashes.popleft() if self.hashes else None
+
+    def open_windows(self):
+        return list(self.fixed.get("windows") or [])
 
     def shot(self, ctx, path, margin=40):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -292,6 +368,7 @@ class ClipBuffer(threading.Thread):
     def _tick(self, now):
         fg = foreground()
         never = self.is_never(fg["app"], fg["title"])
+        own = not never and is_own(fg)
         if never:
             im, reason = blank(never), never
         else:
@@ -300,6 +377,9 @@ class ClipBuffer(threading.Thread):
                 w = int(self.settings.get("clip_max_width", 480))
                 if im.width > w:
                     im = im.resize((w, max(1, int(im.height * w / im.width))))
+            if own:     # Nodach's own window in front (Watch refreshing itself): never a glitch, and the next
+                self._last_hash = None      # other window starts a fresh comparison
+            elif im is not None:
                 h = img_hash(im)
                 if self._last_hash is not None and h is not None and self.on_change:
                     bits = core.hamming(self._last_hash, h)

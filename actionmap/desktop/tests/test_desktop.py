@@ -257,7 +257,8 @@ def test_real_worker_tool_list_is_gate_allowlist_plus_pointer_plus_desktop(home)
         got = names(c.req("tools/list", timeout=60))
         want = [t for t in fake_wmcp.NAMES if t in gate_core.UI_TOOLS]
         assert set(got) == set(want) | set(gate_core.GATE_TOOLS) | {"get_pointed_elements", "get_pointer_screenshot",
-                                                                     "mark_pointed"} | {"desktop_status", "desktop_reload"}
+                                                                     "mark_pointed"} | {"desktop_status", "desktop_reload"} \
+            | {"watch_test"}
         assert "PowerShell" not in got and "FileSystem" not in got
         ev = json.loads(text(c.call("get_pointed_elements")))
         assert ev[0]["id"] == "P1" and ev[0]["status"] == "new"
@@ -440,13 +441,33 @@ def test_bundle_layout(tmp_path):
     n = set(zipfile.ZipFile(z).namelist())
     for f in ("install-desktop.bat", "install_desktop.py", "app/VERSION", "app/shell/shell_mcp.py", "app/shell/worker.py",
               "app/shell/desktop_gui.py", "app/shell/updater.py", "app/gate/gate_mcp.py", "app/gate/zones.json",
-              "app/gate/gate_popup.py", "app/pointer/pointer_mcp.py", "app/pointer/pointer.py", "app/live/live_gui.py"):
+              "app/gate/gate_popup.py", "app/pointer/pointer_mcp.py", "app/pointer/pointer.py", "app/live/live_gui.py",
+              "app/watch/watch_app.py", "app/watch/watch_server.py", "app/watch/watch_core.py", "app/watch/watch_win.py",
+              "app/watch/web/index.html", "app/watch/web/watch.js", "app/watch/web/watch_logic.js", "app/watch/web/watch.css"):
         assert "nodach-desktop/" + f in n, f
     assert not any("test_" in x or "/tests/" in x or "install_gate" in x or "install-claude-config" in x for x in n)
     assert updater.parse_sha(s.read_text()) == updater.sha256_of(z)
 
 
 # ---------------------------------------------------------------- window helpers
+def test_watch_toggle_is_off_by_default_keeps_state_and_logs(tmp_path):
+    gh = tmp_path / "nodach-gate"
+    gh.mkdir()
+    assert desktop_core.watch_on(gh) is False                         # off until he turns it on
+    (gh / "state.json").write_text(json.dumps({"paused": False, "keep_clip_req": 2}))
+    desktop_core.set_watch(True, gh)
+    st = json.loads((gh / "state.json").read_text())
+    assert desktop_core.watch_on(gh) and st["keep_clip_req"] == 2 and st["watch_changed"]
+    desktop_core.set_watch(False, gh)
+    log = [json.loads(x) for x in (gh / "actions.jsonl").read_text().splitlines()]
+    assert [e["what"] for e in log] == ["watch", "watch"] and log[1]["detail"].startswith("Watch off")
+
+
+def test_desktop_version_is_0_2_4_and_lists_watch():
+    assert build_zip.version() == "0.2.4"
+    assert desktop_core.versions(build_zip.assemble.__globals__["ACTIONMAP"].parent / "nonexistent")["watch"] == "?"
+
+
 def test_gate_pause_toggle_keeps_other_state_and_logs(tmp_path):
     gh = tmp_path / "nodach-gate"
     gh.mkdir()
@@ -493,3 +514,69 @@ def test_acting_state_for_the_orange_banner(tmp_path):
     assert not desktop_core.acting_state(tmp_path, now=now + 5)["active"]
     (run / "acting.json").write_text(json.dumps({"active": True, "tool": "Type", "t": now, "pid": 999999}))
     assert not desktop_core.acting_state(tmp_path)["active"]                    # a dead worker never shows as acting
+
+
+def test_desktop_stays_behind_watch_while_watch_is_open(tmp_path):
+    run = tmp_path / "run"
+    run.mkdir()
+    assert not desktop_core.watch_window_open(tmp_path)
+    (run / "watch-window.json").write_text(json.dumps({"pid": os.getpid()}))
+    assert desktop_core.watch_window_open(tmp_path)
+    (run / "watch-window.json").write_text(json.dumps({"pid": 999999}))
+    assert not desktop_core.watch_window_open(tmp_path)
+
+
+
+# ---------------------------------------------------------------- decision 77a b: watch_test through the real worker
+def test_watch_test_goes_through_gate_to_the_watch_server_and_is_logged(home):
+    sys.path.insert(0, str(ACTIONMAP / "watch"))
+    sys.path.insert(0, str(ACTIONMAP / "watch" / "tests"))
+    import watch_server
+    import watch_core
+    import test_watch as tw
+    gh = home.parent / "nodach-gate"
+    gh.mkdir(exist_ok=True)
+    (home.parent / "watch").mkdir()
+    hub = tw.FakeHub()
+    w = watch_server.Watch(home=home.parent / "watch", gate_home=gh, root=home, hub_factory=lambda u, t: hub,
+                           token_store=type("T", (), {"get": lambda s, u: "x.1.y"})(), voice=type("V", (), {"status": lambda s: "ready"})(),
+                           hooks={"visible": lambda: True, "windows": lambda: []}, test_capture=tw.fake_test_capture(home.parent))
+    srv, url, key = watch_server.serve(w)
+    c = Client(home, env_for(home, fake_worker=False))
+    try:
+        c.init()
+        assert "watch_test" in names(c.req("tools/list", timeout=60))
+        r = c.call("watch_test", {"action": "state"})
+        assert r["isError"] and "Watch is off" in text(r)                     # Gate refuses: Watch off
+        desktop_core.set_watch(True, gh)
+        r = c.call("watch_test", {"action": "state"})
+        assert r["isError"] and "isn't open" in text(r)                       # no run\watch.json yet
+        watch_server.write_json(home / "run" / "watch.json", {"pid": os.getpid(), "port": srv.server_address[1], "key": key})
+        r = c.call("watch_test", {"action": "select_area", "args": {"x1": 0, "y1": 0, "x2": 200, "y2": 200}}, timeout=60)
+        assert not r.get("isError"), text(r)
+        out = json.loads(text(r))
+        assert out["event"]["kind"] == "area" and out["note"].startswith("test input from Claude")
+        assert w.test_last["seq"] == 1
+        st = json.loads(text(c.call("watch_test", {"action": "state"})))
+        assert st["last_test"]["seq"] == 1 and st["window_open"]
+        bad = c.call("watch_test", {"action": "select_area", "args": {"x1": 0, "y1": 0, "x2": 2, "y2": 2}})
+        assert bad["isError"] and "too small" in text(bad)
+        log = [json.loads(x) for x in (gh / "actions.jsonl").read_text().splitlines()]
+        tests = [e for e in log if e.get("kind") == "test-input"]
+        assert [(e["action"], e["decision"], e["ok"]) for e in tests] == [
+            ("state", "refused", False), ("state", "allowed", False), ("select_area", "allowed", True),
+            ("state", "allowed", True), ("select_area", "allowed", False)]
+        assert tests[2]["args"] == {"x1": 0, "y1": 0, "x2": 200, "y2": 200} and tests[2]["event"] == out["event"]["id"]
+        assert watch_core.VERSION
+    finally:
+        c.close()
+        srv.shutdown()
+
+
+def test_code_stamp_changes_when_a_file_changes(tmp_path):
+    f = tmp_path / "a.py"
+    f.write_text("x")
+    a = desktop_core.code_stamp([f])
+    os.utime(f, (time.time() + 10, time.time() + 10))
+    assert desktop_core.code_stamp([f]) != a
+    assert desktop_core.code_stamp([tmp_path / "gone.py"])[0][1] is None

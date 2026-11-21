@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nodach Watch</title>
+<link rel="stylesheet" href="watch.css">
+</head>
+<body>
+<div id="frame" class="simple" data-part="watch.frame">
+  <header id="strip" data-part="watch.strip">
+    <button id="watching" class="strip-btn" title="Show the Keep out list">Watching: …</button>
+    <span id="gatePill" class="pill">Gate …</span>
+    <button id="accessBtn" class="icon" aria-label="Accessibility: read out, enlarge, plain list" title="Read out, enlarge, plain list">Aa</button>
+    <button id="settingsBtn" class="icon" aria-label="Settings" title="Settings">⚙</button>
+  </header>
+  <div id="acting" class="acting" hidden></div>
+  <div id="offer" class="offer" hidden><span id="offerText"></span>
+    <button id="offerMark">Mark up</button><button id="offerExplain">Explain this</button><button id="offerReport" hidden>Report it</button><button id="offerNo" class="link">Not now</button></div>
+  <div id="err" class="err" hidden></div>
+
+  <section id="settings" class="panel" hidden data-part="watch.settings">
+    <label><input type="checkbox" id="onTop"> Keep this window on top</label>
+    <label><input type="checkbox" id="stuckOn"> Offer help when Claude looks stuck (same action repeated, a long pause, an error)</label>
+    <div class="row"><span id="hubName" class="meta"></span><span class="spacer"></span><button id="signIn">Sign in</button></div>
+    <p class="meta">Sign in uses Live's saved sign-in. To sign in, copy your <b>nodach_session</b> value (see Live's README), then click Sign in.</p>
+  </section>
+
+  <section id="access" class="panel" hidden data-part="watch.access">
+    <div class="row"><b>Read, enlarge, simplify</b><span class="spacer"></span><button id="accClose" class="icon" aria-label="Close">✕</button></div>
+    <div class="row wrap">
+      <button id="readLast">🔊 Read out the last reply</button>
+      <button id="enlarge" title="Uses the current capture (Point or Select first)">⊕ Enlarge</button>
+      <button id="plainList" title="Uses the current capture (Select a window or area first)">☰ As a plain list</button>
+      <label><input type="checkbox" id="bigText"> Bigger text</label>
+    </div>
+    <div id="accView"></div>
+  </section>
+
+  <section id="endAsk" class="panel" hidden data-part="watch.end">
+    <b>End this session?</b>
+    <p>Save it in Studio as a replayable lesson?</p>
+    <div class="row wrap"><button id="endLesson" class="primary">End and save as lesson</button><button id="endOnly">Just end</button><button id="endCancel" class="link">Cancel</button></div>
+  </section>
+
+  <section id="keepout" class="panel" hidden data-part="watch.keepout">
+    <div class="row"><b>Keep out</b><span class="spacer"></span><button id="koClose" class="icon" aria-label="Close">✕</button></div>
+    <p class="meta">Claude can read and act on every window except these. Each change is a new zones revision.</p>
+    <ul id="koList" class="list"></ul>
+    <div class="row wrap">
+      <button id="koPick">Keep out a window</button>
+      <button id="koFromList">Pick from open windows</button>
+    </div>
+    <ul id="koChoices" class="list" hidden></ul>
+    <div class="row"><input id="koFolder" type="text" placeholder="Folder path, e.g. Desktop\Projects\Private" aria-label="Folder path"><button id="koAddFolder">Keep out folder</button></div>
+  </section>
+
+  <div class="row" id="sessionRow">
+    <select id="session" aria-label="Session"></select>
+    <button id="startSession">Start session</button>
+    <button id="endSession" hidden>End</button>
+  </div>
+
+  <main id="chatWrap"><ol id="chat" class="chat" aria-live="polite"></ol></main>
+
+  <div id="attRow" class="att" hidden data-part="watch.attachment">
+    <span id="attWords" class="chip"></span>
+    <label id="picLabel" class="pic"><input type="checkbox" id="attPic"> 📷 send the picture</label>
+    <span class="spacer"></span>
+    <button id="attExport" class="link" title="Save as a page + zip on this PC (to watch back or send to a vendor)">Export</button>
+    <button id="attReport" class="link" hidden>Send as report</button>
+    <button id="attClaude" class="link" hidden>Hand to Claude</button>
+    <button id="attClear" class="link">remove</button>
+  </div>
+
+  <div id="chips" class="row chips" data-part="watch.chips">
+    <button class="chipbtn" data-chip="looks-off" aria-pressed="false">Looks off</button>
+    <button class="chipbtn adv" data-chip="mark-up" aria-pressed="false">Mark up</button>
+    <button class="chipbtn adv" data-chip="explain" aria-pressed="false">Explain this</button>
+    <button class="chipbtn adv" data-chip="report" aria-pressed="false">Report problem</button>
+  </div>
+  <div id="chipOpts" class="row wrap" hidden>
+    <span id="optLooks" hidden>Compare with
+      <select id="compare" aria-label="Compare with">
+        <option value="none">nothing (judge by eye)</option>
+        <option value="earlier">an earlier capture</option>
+        <option value="reference">a reference image</option>
+        <option value="design">a design</option>
+        <option value="clip">the last 10 s</option>
+      </select>
+      <select id="earlier" aria-label="Earlier capture" hidden></select>
+      <span id="refName" class="meta"></span>
+    </span>
+    <span id="optMark" hidden>
+      <select id="preset" aria-label="Preset">
+        <option value="">free mark-up</option>
+        <option value="wrong-place">Wrong place</option>
+        <option value="steps">Steps (if / else)</option>
+        <option value="design">Design change</option>
+        <option value="automation">Automation plan</option>
+      </select>
+      <select id="markAs" aria-label="Send as">
+        <option value="line">as a line</option>
+        <option value="report">as a report</option>
+        <option value="for-claude">to Claude (carry it out)</option>
+      </select>
+    </span>
+    <span id="optReport" hidden>
+      <label><input type="checkbox" id="irreversible"> Something can't be undone</label>
+      <span id="reproNote" class="meta"></span>
+      <span id="incident" class="incident" hidden>
+        <input type="text" data-inc="what_happened" placeholder="What happened" aria-label="What happened">
+        <input type="text" data-inc="known" placeholder="What's known" aria-label="What's known">
+        <input type="text" data-inc="unknown" placeholder="What can't be known" aria-label="What can't be known">
+        <input type="text" data-inc="state_changed" placeholder="What state changed" aria-label="What state changed">
+        <input type="text" data-inc="affected" placeholder="Who or what else is affected" aria-label="Who or what else is affected">
+        <input type="text" data-inc="recovery" placeholder="Suggested recovery" aria-label="Suggested recovery">
+      </span>
+    </span>
+    <span id="optExplain" hidden>Save the answer:
+      <label><input type="radio" name="save" value="none" checked> don't save</label>
+      <label><input type="radio" name="save" value="personal"> personal</label>
+      <label><input type="radio" name="save" value="developer"> developer</label>
+    </span>
+  </div>
+
+  <div class="row" id="inputRow">
+    <textarea id="text" rows="2" placeholder="Type a line · task: … or build: … drafts a task" aria-label="Line"></textarea>
+    <button id="send" class="primary">Send</button>
+  </div>
+
+  <nav id="bar" class="bar" data-part="watch.bar" aria-label="Tools">
+    <button id="mic" data-tool="mic" title="Click to talk, click to send">🎙 Mic</button>
+    <button id="point" class="adv" data-tool="point" title="Click one element on screen">⌖ Point</button>
+    <button id="select" data-tool="select" title="Drag a rectangle over the screen">▭ Select</button>
+    <button id="markup" class="adv" data-tool="markup" title="Arrows, boxes, pen, notes, numbered steps, if/else">✎ Mark up</button>
+    <button id="clip" class="adv" data-tool="clip" title="Keep the last 10 seconds">⟲ 10 s</button>
+    <button id="keepOutBtn" class="adv" data-tool="keepout" title="Keep a window, app or folder out">⊘ Keep out</button>
+    <button id="moreBtn" title="Show all tools (Mark up, Explain, Report, Point, 10 s, Keep out)">⋯ More</button>
+    <button id="stop" class="stop" data-tool="stop" title="Pause all: Claude can't act until Resume in Nodach Desktop">■ Stop</button>
+  </nav>
+</div>
+<script src="watch_logic.js"></script>
+<script src="watch.js"></script>
+</body>
+</html>

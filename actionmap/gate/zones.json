@@ -1,7 +1,7 @@
 {
  "_comment": "Nodach Gate trust zones. JSON has no comments, so every key starting with _ is a comment and is ignored. Edit your copy at %USERPROFILE%\\nodach-gate\\zones.json (Gate reloads it when it changes and keeps each version it has seen in zones-history\\). Bump 'revision' and add a line to '_changes' when you edit, so the log shows which rules were in force. Words match whole words, case-insensitive. Process names match with or without .exe.",
  "schema": "gate.zones.v1",
- "revision": 3,
+ "revision": 4,
  "_changes": [
   "1 (2026-11-20): first version, approved by Nowed (never-list and zones as built).",
   {
@@ -15,6 +15,12 @@
    "date": "2026-11-21",
    "by": "Claude",
    "what": "Nowed: never touch Desktop\\Nodach\\nodach_sec. Added nodach_sec and client_secret; element names or values naming a secret are now hidden in every window (Gate showed a file name inside nodach_sec in an Explorer window)."
+  },
+  {
+   "revision": 4,
+   "date": "2026-11-21",
+   "by": "Nowed",
+   "what": "Watch v0 (DRV7b): everything is in scope except what Nowed keeps out. Added the 'user keep-out' never group (filled from the Watch window's Keep out picker) with his folder Desktop\\Nodach\\nodach_sec as its first entry."
   }
  ],
  "_never": "NEVER: refused with a reason, no popup, no grant can open it. Checked against the window the action lands in (process name and title) and the target element's name. applies_to 'all' also hides reads (Snapshot/Screenshot are refused while it's in front, and its elements are cut out of any Snapshot); 'input' only stops clicks/keys/typing.",
@@ -168,6 +174,24 @@
    ],
    "title_words": [],
    "element_words": []
+  },
+  {
+   "name": "user keep-out",
+   "applies_to": "all",
+   "_why": "Windows, apps and folders Nowed picked with 'Keep out' in the Watch window. Each entry: window {process, title_words} (all words in the title, and the process if given), app {process}, folder {path} (title contains the path, or File Explorer showing it). Add and remove them from the Watch window: every change bumps revision with a _changes line.",
+   "processes": [],
+   "title_words": [],
+   "element_words": [],
+   "redact_elements": false,
+   "entries": [
+    {
+     "kind": "folder",
+     "path": "Desktop\\Nodach\\nodach_sec",
+     "id": "KO-nodachsec",
+     "added": "2026-11-21",
+     "by": "Nowed"
+    }
+   ]
   }
  ],
  "_gate_titles": "Gate's own windows (the popup and the Gate window). Always never, so Claude can't press Allow on itself.",

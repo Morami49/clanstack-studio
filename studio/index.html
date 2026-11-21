@@ -867,6 +867,7 @@ const LIVE_TASK = /^\s*(task|build)\s*[:,.\-\u2013\u2014]\s*(\S[\s\S]*)$/i;
 function liveTask(text){ const m = String(text || "").match(LIVE_TASK); return m ? {kind:m[1].toLowerCase(), title:m[2].trim().replace(/\s+/g, " ")} : null; }
 function livePointWords(p){
   if (!p) return "";
+  if (p.via === "watch" && p.words) return String(p.words).slice(0, 120);   // Nodach Watch: point, area or mark-up
   if (p.kind === "pointer.desktop") return `⌖ ${p.app || "desktop"} › ${p.element?.name || p.element?.type || "element"}`;
   return `⌖ ${p.part || "studio"} › ${p.element || ""}${p.text ? " “" + String(p.text).slice(0, 40) + "”" : ""}`;
 }

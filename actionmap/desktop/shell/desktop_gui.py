@@ -40,6 +40,9 @@ class DesktopWindow:
         core.write_json(self.home / "run" / "desktop-window.pid", {"pid": os.getpid(), "started": core.now_iso()})
         self.events: list[str] = []
         self.busy = False
+        here = Path(__file__).resolve().parent
+        self.code_files = [here / "desktop_gui.py", here / "desktop_core.py"]
+        self.code_stamp = core.code_stamp(self.code_files)
         root.title("Nodach Desktop")
         root.geometry("640x660")
         pad = {"padx": 8, "pady": 4}
@@ -54,6 +57,9 @@ class DesktopWindow:
                                   activebackground="#a22", activeforeground="white", command=self.stop_claude, height=1)
         self.stop_btn.pack(fill="x", padx=8, pady=(4, 0))
         self.was_acting = False
+        # Watch (DRV4): off by default; while off Claude can't see or act on any window through Gate
+        self.watch_btn = tk.Button(body, font=("Segoe UI", 14, "bold"), command=self.toggle_watch, height=1)
+        self.watch_btn.pack(fill="x", padx=8, pady=(6, 0))
 
         head = ttk.Frame(body, padding=8)
         head.pack(fill="x")
@@ -78,6 +84,9 @@ class DesktopWindow:
         self.live_lbl = tk.Label(mods, width=34, anchor="w")
         self.live_lbl.grid(row=2, column=0, sticky="w")
         ttk.Button(mods, text="Open Live", command=self.open_live, width=14).grid(row=2, column=1, **pad)
+        self.watch_lbl = tk.Label(mods, width=34, anchor="w")
+        self.watch_lbl.grid(row=3, column=0, sticky="w")
+        ttk.Button(mods, text="Open Watch", command=self.open_watch, width=14).grid(row=3, column=1, **pad)
 
         upd = ttk.LabelFrame(body, text="Versions and updates", padding=8)
         upd.pack(fill="x", **pad)
@@ -131,6 +140,13 @@ class DesktopWindow:
             self.refresh()
         except Exception:
             pass
+        # an update replaced this window's own code: restart on it (21 Nov: the window kept running old code),
+        # but never while Claude is acting or a job is running
+        if core.code_stamp(self.code_files) != self.code_stamp and not self.busy and not core.acting_state(self.home)["active"]:
+            try:
+                self.root.destroy()
+            finally:
+                os.execv(sys.executable, [sys.executable, str(Path(__file__).resolve())])
         self.root.after(2000, self.tick)
 
     def fast_tick(self):
@@ -146,7 +162,9 @@ class DesktopWindow:
         if a["active"] and not paused:
             self.border.config(bg=ORANGE)
             self.banner.config(text=f"Claude is acting on this PC: {a.get('tool')}", bg=ORANGE, fg="white")
-            if not self.was_acting:          # stay visible over other windows while Claude acts (no focus taken)
+            if not self.was_acting and not core.watch_window_open(self.home):
+                # stay visible over other windows while Claude acts (no focus taken); with Watch open, Watch shows
+                # the acting banner itself and Desktop no longer covers it
                 self.root.attributes("-topmost", True)
         elif paused:
             self.border.config(bg=RED)
@@ -199,8 +217,14 @@ class DesktopWindow:
         self.ptr_lbl.config(text="Pointer capture: on (Ctrl+Alt+M to mark)" if on else "Pointer capture: off", fg=GREEN if on else GREY)
         lv = core.running("live.pid", self.home)
         self.live_lbl.config(text="Live: window open" if lv else "Live: closed", fg=GREEN if lv else GREY)
+        on = core.watch_on()
+        self.watch_btn.config(text="WATCH IS ON: Claude can see and act (click to turn off)" if on else
+                              "Watch is off: Claude can't see or act (click to turn on)",
+                              bg=GREEN if on else "#555", fg="white", activebackground="#185", activeforeground="white")
+        wv = core.running("watch.pid", self.home)
+        self.watch_lbl.config(text="Watch window: open" if wv else "Watch window: closed", fg=GREEN if wv else GREY)
         self.ver_lbl.config(text=f"shell {v['shell']} · worker {v['worker']} · gate {v['gate']} · pointer {v['pointer']} · "
-                                 f"live {v['live']}\nprevious version kept: {v['previous'] or 'none'}")
+                                 f"live {v['live']} · watch {v.get('watch', '?')}\nprevious version kept: {v['previous'] or 'none'}")
         self.rb_btn.state(["!disabled"] if v["previous"] else ["disabled"])
 
     # ------------------------------------------------------------ buttons
@@ -232,6 +256,28 @@ class DesktopWindow:
             return
         core.launch(self.app / "live" / "live_gui.py", "live.pid", self.home, log_name="live-app.log")
         self.note("Live opened")
+
+    def toggle_watch(self):
+        on = not core.watch_on()
+        core.set_watch(on)
+        self.note("Watch on: Claude may read and act on windows that aren't kept out" if on else
+                  "Watch off: every screen tool is refused")
+        if on:
+            self.open_watch()
+        elif core.stop("watch.pid", self.home):
+            self.note("Watch window closed")
+        self.refresh()
+
+    def open_watch(self):
+        if core.running("watch.pid", self.home):
+            self.note("Watch window is already open")
+            return
+        script = self.app / "watch" / "watch_app.py"
+        if not script.exists():
+            self.note("Watch isn't installed in this version")
+            return
+        core.launch(script, "watch.pid", self.home, log_name="watch-app.log")
+        self.note("Watch window opened")
 
     def update(self):
         def done(r):
