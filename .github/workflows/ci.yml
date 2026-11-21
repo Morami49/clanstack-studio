@@ -35,6 +35,19 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with: {python-version: "3.13"}
       - run: pip install pytest "mcp>=2.3,<3" pillow && python -m pytest -q actionmap/gate/tests
+  driver-core:
+    # Rust Driver core (63c b): regenerate the parity vectors from Python gate_core and fail if they differ from the
+    # committed ones, then check Rust gives identical decisions, redactions and log records for every vector
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with: {python-version: "3.13"}
+      - run: python actionmap/gate/tests/export_vectors.py --check
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with: {toolchain: stable}
+      - run: cargo test -p driver-core
+        working-directory: engine
   scripts:
     runs-on: ubuntu-latest
     steps:
