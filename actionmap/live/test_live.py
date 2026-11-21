@@ -32,6 +32,9 @@ def test_task_lines():
 
 def test_task_rule_matches_studio():
     """The client and the Studio panel must agree on what a task line is."""
+    if not STUDIO_HTML.exists():   # run from the unzipped nodach-live folder: Studio isn't next to it
+        import pytest
+        pytest.skip("studio/index.html not here (only in the repository)")
     html = STUDIO_HTML.read_text(encoding="utf-8")
     m = re.search(r"const LIVE_TASK = /(.+?)/i;", html)
     assert m, "Studio's LIVE_TASK not found"
