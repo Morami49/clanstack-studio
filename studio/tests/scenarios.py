@@ -1095,8 +1095,14 @@ async def s51_show_marks_follow_canvas(b):
     await st.add("events", ev("canvas.layout", None, {"board": "main", "moves": {"D-001": [round(n1["x"]) + 300, round(n1["y"]) + 160]}}, ts=now_ts()))
     await p.wait_for_timeout(600)
     await p.evaluate(f"select('{sid}')"); await p.wait_for_timeout(200)
-    await p.click("#showReplayBtn"); await p.wait_for_timeout(1500)
-    rm = {m["n"]: (m["x"], m["y"]) for m in await p.evaluate("NodachShow.replayMarks()")}
+    await p.click("#showReplayBtn")
+    # poll instead of a fixed 1.5 s: on a loaded CI runner the second mark can land later (flake, 21 Nov)
+    rm = {}
+    for _ in range(40):
+        await p.wait_for_timeout(200)
+        rm = {m["n"]: (m["x"], m["y"]) for m in await p.evaluate("NodachShow.replayMarks()")}
+        if 1 in rm and 2 in rm:
+            break
     a2, c2 = await box("D-001"), await box("D-002")
     ok = (f1 and f1.get("node") == "D-001" and f2 and steps[1].get("anchor", {}).get("node") == "D-002"
           and inside(live_badge, a_live) and inside(rm.get(1), a2) and inside(rm.get(2), c2) and not p.errors)
