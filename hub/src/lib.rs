@@ -662,6 +662,86 @@ impl Record {
         docs.into_iter().filter_map(|d| d.get("event").cloned()).collect()
     }
 
+    fn studio_docs(&self) -> Vec<serde_json::Value> {
+        let hub = self.hub.borrow();
+        hub.as_ref().unwrap().studio_events(0, usize::MAX).0
+    }
+
+    /// 51a Live responder: lines already considered (answered, skipped or failed), so each line gets at most one call.
+    fn responder_tried(&self) -> Result<std::collections::HashSet<String>> {
+        let sql = self.sql();
+        sql.exec("CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL)", None)?;
+        #[derive(Deserialize)]
+        struct Row { v: String }
+        let rows: Vec<Row> = sql.exec("SELECT v FROM kv WHERE k = 'responder_tried'", None)?.to_array()?;
+        Ok(rows.first().and_then(|r| serde_json::from_str::<Vec<String>>(&r.v).ok()).unwrap_or_default().into_iter().collect())
+    }
+
+    fn responder_mark(&self, tried: &mut Vec<String>, line: &str) -> Result<()> {
+        tried.push(line.to_string());
+        let keep = tried.len().saturating_sub(2000);
+        let v = serde_json::to_string(&tried[keep..]).map_err(|e| Error::RustError(e.to_string()))?;
+        self.sql().exec("INSERT INTO kv (k, v) VALUES ('responder_tried', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v", vec![v.into()])?;
+        Ok(())
+    }
+
+    /// Answers the fresh lines of sessions with live.responder on (hub_core::responder decides which), with the same
+    /// model, key (NODE_SECRET_GEMINI) and busy-model retry-then-lighter-model rule as the flow AI step (F-75).
+    /// Each line is marked before the call, so a crash or a retry never calls twice. No key: nothing posted, logged.
+    async fn responder_pass(&self, now: i64) -> std::result::Result<(), String> {
+        use hub_core::responder::{self as rs, Action};
+        let docs = self.studio_docs();
+        let tried_set = self.responder_tried().map_err(|e| e.to_string())?;
+        let due = rs::due(&docs, &tried_set, now);
+        if due.is_empty() { return Ok(()); }
+        let mut tried: Vec<String> = tried_set.into_iter().collect();
+        let key = self.node_secret("GEMINI");
+        for d in due {
+            self.responder_mark(&mut tried, &d.line).map_err(|e| e.to_string())?;
+            let prompt = match d.action {
+                Action::Skip(why) => { self.log(now, "/live-responder", "skip", why, &d.session); continue; }
+                Action::Call { prompt } => prompt,
+            };
+            let key = match &key {
+                Ok(k) => k.clone(),
+                Err(_) => { self.log(now, "/live-responder", "call", "no AI key (NODE_SECRET_GEMINI): nothing posted", &d.session); continue; }
+            };
+            let body = serde_json::json!({"systemInstruction": {"parts": [{"text": rs::SYSTEM}]},
+                                          "contents": [{"role": "user", "parts": [{"text": prompt}]}]}).to_string();
+            match self.ai_answer(&key, &body).await {
+                Ok((text, model)) if !text.trim().is_empty() => {
+                    let ev = serde_json::json!({"ts": mcp::iso(Date::now().as_millis() as i64), "kind": "comment", "item": d.session, "branch": "main",
+                        "body": rs::answer_body(&text, &model, &d.line), "author": {"id": rs::AUTHOR_ID, "label": rs::LABEL, "role": "agent"}, "via": rs::VIA});
+                    let k = self.runner_key().map_err(|e| e.to_string())?;
+                    let made = self.hub.borrow_mut().as_mut().unwrap().write(&k, "live responder", ev, now).map_err(|e| format!("{e:?}"))?;
+                    self.persist(&made).map_err(|e| e.to_string())?;
+                    self.log(now, "/live-responder", "call", "ok", &d.session);
+                }
+                Ok(_) => self.log(now, "/live-responder", "call", "empty answer", &d.session),
+                Err(why) => self.log(now, "/live-responder", "call", &format!("failed: {}", why.chars().take(120).collect::<String>()), &d.session),
+            }
+        }
+        Ok(())
+    }
+
+    /// One answer from the flow AI step's model, retried once on a busy answer, then the lighter model (F-75).
+    async fn ai_answer(&self, key: &str, body: &str) -> std::result::Result<(String, String), String> {
+        let mut last = String::new();
+        for m in ["gemini-flash-latest", "gemini-flash-lite-latest"] {
+            for attempt in 0..2 {
+                if attempt > 0 { worker::Delay::from(std::time::Duration::from_millis(1500)).await; }
+                match self.ai_call(m, key, body).await {
+                    Ok(t) => return Ok((t, m.to_string())),
+                    Err((status, msg)) => {
+                        last = format!("the AI ({m}) answered {status}: {msg}");
+                        if !matches!(status, 429 | 500 | 502 | 503 | 504) { return Err(last); }
+                    }
+                }
+            }
+        }
+        Err(last)
+    }
+
     /// The hub's hourly wake-up (S3): Durable Object alarms need no cron, route or account. Set if missing.
     async fn ensure_alarm(&self) -> Result<()> {
         let st = self.state.storage();
@@ -1087,10 +1167,16 @@ impl Record {
                                 json_status(&serde_json::json!({"error": e, "refused": true}), 403)?
                             } else {
                                 let importer = self.importer_key()?;
+                                let wakes = hub_core::responder::wakes(&ev);
                                 let made = self.hub.borrow_mut().as_mut().unwrap().import(&importer, vec![(doc_id.clone(), ev)], now)
                                     .map_err(|e| Error::RustError(format!("{e:?}")))?;
                                 self.persist(&made)?;
                                 let n = made.iter().filter(|e| e.u.kind == hub_core::IMPORT_KIND).count();
+                                // 51a: a live line wakes the Live responder through the Durable Object's alarm, which runs
+                                // after this answer is sent, so writing the line is never slowed by the model call
+                                if wakes && n > 0 && !hub_core::responder::sessions_on(&self.studio_docs()).is_empty() {
+                                    if let Err(e) = self.state.storage().set_alarm(now + 200).await { console_error!("responder alarm: {e}"); }
+                                }
                                 self.log(now, "/studio/api/events", "write", "ok", &l);
                                 json_status(&serde_json::json!({"id": doc_id, "imported": n}), 200)?
                             }
@@ -1419,7 +1505,8 @@ impl DurableObject for Record {
         let now = Date::now().as_millis() as i64;
         // next wake-up first, so a failed run can never stop the schedule
         self.state.storage().set_alarm(3_600_000 - now.rem_euclid(3_600_000) + 60_000).await?;
-        let due = flows::due(&self.all_events(), now);
+        if let Err(e) = self.responder_pass(now).await { console_error!("responder: {e}"); }
+        let due = flows::due(&self.all_events(), now);   // a responder wake-up in the same UK hour runs that hour's slot once, no more
         for (board, start, slot) in &due {
             let res = self.run_flow(board, start, "schedule", now, Some(slot)).await?;
             let ok = res.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);

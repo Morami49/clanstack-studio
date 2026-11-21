@@ -884,7 +884,8 @@ function liveRows(it){
     const chips = (b.point ? `<span class="chip" title="${esc(JSON.stringify(b.point).slice(0, 300))}">${esc(livePointWords(b.point))}</span>` : "") +
       (d ? `<button class="chip task link" data-go="${esc(d.id)}">→ ${esc(d.id)} (${esc(d.status)})</button>`
          : t ? (canDraft ? `<button class="chip task" data-live-draft="${esc(h.id)}">Draft ${esc(t.kind)}</button>` : `<span class="chip task">${esc(t.kind)}?</span>`) : "") +
-      (b.via ? `<span class="chip">${esc(b.via)}</span>` : "");
+      (b.via ? `<span class="chip">${esc(b.via)}</span>` : "") +
+      (b.responder ? `<span class="chip" title="${esc(b.model || "")}">instant reply</span>` + (b.for_claude ? '<span class="chip task">for Claude</span>' : "") : "");
     return `<li class="${line ? "line" : isReply(h) ? "reply" : ""}" data-live-row="${esc(h.id || "")}"><span class="n">${line ? "says" : "reply"}</span><span><span class="mono mute">${esc((h.ts||"").slice(11,19))} · ${esc(who(h.author))}${h.via === "claude-connector" ? " · via Claude" : ""}</span><br>
       <span class="what">${b.text ? esc(b.text) : line ? '<span class="mute">(pointed)</span>' : ""}</span>${chips ? "<br>" + chips : ""}</span></li>`;
   }).join("");
@@ -2472,6 +2473,7 @@ const PTR = {
             ${logins.map(l => `<label class="row" style="gap:6px"><input type="checkbox" data-login="${esc(l)}"> <span class="mono">${esc(l)}</span></label>`).join("")}
             <input id="liveAudText" type="text" placeholder="logins, comma separated" aria-label="More logins, comma separated"></div></details>`
           : `<span class="mute" style="font-size:12px">Only an owner starts sessions. Ones you were given show above.</span>`}</div>
+        <label class="row" style="gap:6px;font-size:12px" id="liveRespRow" hidden title="The hub answers each line briefly with Google's free Gemini model, as a reply in this stream. Off: nothing is sent to Google."><input type="checkbox" id="liveResponder"> Instant replies (free AI, sends your lines to Google Gemini)</label>
         <ol class="log showlog livestream" id="liveStream" aria-live="polite"></ol>
         <div class="row" id="livePointChip" hidden><span class="chip"></span><button class="link" id="livePointClear">remove</button></div>
         <div class="row"><button id="livePoint" title="Pick one part of Studio; it rides on your next line" aria-pressed="false">⌖</button>
@@ -2491,6 +2493,7 @@ const PTR = {
       panel.querySelector("#liveSpeechOk").onchange = e => { const on = e.target.checked; panel.querySelector("#liveMic").disabled = !on; if (!on) stopMic(); };
       panel.querySelector("#liveMic").onclick = () => L.rec ? stopMic() : startMic();
       panel.querySelector("#liveEnd").onclick = end;
+      panel.querySelector("#liveResponder").onchange = e => setResponder(e.target.checked);
       panel.querySelectorAll("[data-login]").forEach(c => c.onchange = audChanged);
       const t = panel.querySelector("#liveAudText"); if (t) t.onchange = audChanged;
       btn.setAttribute("aria-pressed", "true");
@@ -2519,7 +2522,7 @@ const PTR = {
     const id = PTR.stamp("LV"), started = new Date().toISOString(), aud = audience();
     const ok = await write("item.create", null, {id, type:"idea", title:"Live session " + started.slice(0, 16).replace("T", " "),
       body:"Live session in progress. Lines arrive as live.line events; replies as comments on this item.", refs:[], status:"live", source:"live",
-      live:{schema:"live.v1", started, audience:aud}});
+      live:{schema:"live.v1", started, audience:aud, responder:!!S.owner}});   // 51a: instant replies on for an owner's new session
     if (!ok) return null;
     L.id = id; grant(id, aud); if (M.state !== "closed") M.send(M.state === "idle" ? "start" : "select");
     toast(`Live session ${id} started${aud.length ? " for " + aud.length + " watcher(s)" : ""}.`);
@@ -2539,6 +2542,14 @@ const PTR = {
     if (a && b) toast(`Ended ${it.id}.`);
   }
 
+  /* 51a: the hub's Live responder answers lines of sessions with live.responder on (owners switch it) */
+  async function setResponder(on){
+    const it = cur(); if (!it || it.status !== "live") return;
+    if (!S.owner || !writable()){ toast("Only an owner can switch instant replies."); render(); return; }
+    const ok = await write("item.edit", it.id, {live:{responder:!!on}});
+    if (ok) toast(on ? "Instant replies on: the hub answers each line with Gemini." : "Instant replies off: nothing goes to Google.");
+    render();
+  }
   function sendTyped(){ const ta = panel?.querySelector("#liveText"); if (!ta) return; const v = ta.value; if (send(v, {via:"typed"})) ta.value = ""; }
   /* one line: the live.line event, then (owner only) a draft for task:/build:, then the show's transcript hook */
   function send(text, opts = {}){
@@ -2615,6 +2626,8 @@ const PTR = {
     for (const s of ["#liveText", "#liveSend", "#livePoint"]) panel.querySelector(s).disabled = !live || !writable();
     const mic = panel.querySelector("#liveMic"); mic.setAttribute("aria-pressed", String(!!L.rec)); mic.textContent = L.rec ? "■ Stop listening" : "🎙 Listen";
     const chip = panel.querySelector("#livePointChip"); chip.hidden = !L.point; if (L.point) chip.querySelector(".chip").textContent = livePointWords(L.point);
+    const rr = panel.querySelector("#liveRespRow"), rc = panel.querySelector("#liveResponder");
+    rr.hidden = !live; rc.checked = !!it?.live?.responder; rc.disabled = !S.owner || !writable();
     const box = panel.querySelector("#liveStream"), atEnd = box.scrollTop + box.clientHeight >= box.scrollHeight - 8;
     box.innerHTML = it ? (liveRows(it) || '<li class="empty">No lines yet. Type, or talk through the desktop client.</li>') : '<li class="empty">No session yet.</li>';
     box.querySelectorAll("[data-go]").forEach(b => b.onclick = () => select(b.dataset.go));

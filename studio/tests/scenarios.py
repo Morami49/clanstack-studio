@@ -1355,6 +1355,35 @@ async def s53_live_states(b):
     ok = seq == ["closed", "live", "idle", "live", "idle", "closed"] and tr == want and not p.errors
     return ok, f"states={seq}, trace={tr}, errors={p.errors[:1]}"
 
+
+async def s55_live_responder_toggle(b):
+    """51a: an owner's new Live session has Instant replies on (live.responder true, the label says lines go to Google
+    Gemini); unticking writes live.responder false; the hub responder's answer shows as a reply marked instant reply
+    and for Claude; a member sees the switch but can't change it."""
+    st = Store([]); p = await open_page(b, st, {})
+    await p.click("#liveBtn"); await p.wait_for_timeout(150)
+    await p.click("#liveStart")
+    await until(lambda: any(e["kind"] == "item.create" and e["body"].get("source") == "live" for e in st.events))
+    await p.wait_for_function("!!NodachLive.session()", timeout=8000); await p.wait_for_timeout(150)
+    sid = await p.evaluate("NodachLive.session()")
+    created = next(e for e in st.events if e["kind"] == "item.create" and e["body"].get("source") == "live")
+    on0 = created["body"]["live"].get("responder"); shown = await p.locator("#liveResponder:visible").count() == 1
+    checked0 = await p.is_checked("#liveResponder"); label = await p.inner_text("#liveRespRow")
+    await p.uncheck("#liveResponder")
+    await until(lambda: any(e["kind"] == "item.edit" and e["item"] == sid and (e["body"].get("live") or {}).get("responder") is False for e in st.events))
+    await p.wait_for_timeout(200); checked1 = await p.is_checked("#liveResponder")
+    await st.add("events", ev("comment", sid, {"text": "Claude will pick it up when Nowed next messages the chat [for-claude]", "responder": True,
+                                               "model": "gemini-flash-latest", "for_claude": True, "line": "x"},
+                              who="agent:live-responder", label="Live responder (Gemini)", ts=now_ts()))
+    await p.wait_for_timeout(300)
+    rep = await p.evaluate("[...document.querySelectorAll('#liveStream li.reply')].map(li => li.innerText.replace(/\\s+/g, ' ')).join(' | ')")
+    m = await open_page(b, st, {"me": "github:watcher1", "owner": False})
+    await m.evaluate(f"NodachLive.open('{sid}')"); await m.wait_for_timeout(300)
+    m_disabled = await m.locator("#liveResponder").is_disabled()
+    ok = (on0 is True and shown and checked0 and "Google Gemini" in label and not checked1 and "instant reply" in rep and "for Claude" in rep
+          and "Live responder (Gemini)" in rep and m_disabled and not p.errors and not m.errors)
+    return ok, f"new session responder={on0}, switch shown={shown} ticked={checked0}, after untick={checked1}, reply row={rep[:90]!r}, member can't switch={m_disabled}, errors={(p.errors + m.errors)[:1]}"
+
 SCENARIOS = [s01_tired_misclick, s02_undo, s03_stable_codes, s04_past_view_lock, s05_branch_awareness, s06_view_only_client,
              s07_names, s08_long_history, s09_ai_relay, s10_keyboard_list, s11_offline_capture, s12_member_rights,
              s13_two_people_at_once, s14_phone, s15_undo_old_status, s16_overwhelm, s17_disagreement, s18_clock_skew, s19_private_area,
@@ -1363,7 +1392,7 @@ SCENARIOS = [s01_tired_misclick, s02_undo, s03_stable_codes, s04_past_view_lock,
              s41_multi_point, s42_show_record_save, s43_show_pause, s44_show_replay, s45_my_queue,
              s46_live_session_stream, s47_live_browser_speech_opt_in, s48_live_member_lines,
              s49_show_pause_clock, s50_show_states, s51_show_marks_follow_canvas,
-             s52_live_connector_reply_in_seconds, s53_live_states]
+             s52_live_connector_reply_in_seconds, s53_live_states, s55_live_responder_toggle]
 
 
 async def main():
