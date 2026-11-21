@@ -463,8 +463,8 @@ def test_watch_toggle_is_off_by_default_keeps_state_and_logs(tmp_path):
     assert [e["what"] for e in log] == ["watch", "watch"] and log[1]["detail"].startswith("Watch off")
 
 
-def test_desktop_version_is_0_2_2_and_lists_watch():
-    assert build_zip.version() == "0.2.2"
+def test_desktop_version_is_0_2_3_and_lists_watch():
+    assert build_zip.version() == "0.2.3"
     assert desktop_core.versions(build_zip.assemble.__globals__["ACTIONMAP"].parent / "nonexistent")["watch"] == "?"
 
 
