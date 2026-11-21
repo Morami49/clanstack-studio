@@ -505,8 +505,12 @@ def stream_rows(docs, session: str) -> list[dict]:
             if b.get("step"):
                 rows.append(dict(base, kind="step", who=_who(e.get("author")), text=step_words(b["step"]), words=""))
             else:
-                rows.append(dict(base, kind="reply" if is_reply(e) else "note", who=_who(e.get("author"), e.get("via")),
-                                 text=str(b.get("text") or "")[:4000], words="", report=bool(b.get("report"))))
+                row = dict(base, kind="reply" if is_reply(e) else "note", who=_who(e.get("author"), e.get("via")),
+                           text=str(b.get("text") or "")[:4000], words="", report=bool(b.get("report")))
+                car = carousel_from(b.get("carousel"), d.get("doc_id"))
+                if car:
+                    row["carousel"] = car
+                rows.append(row)
     rows.sort(key=lambda r: r["ts"])
     return rows
 
@@ -769,3 +773,102 @@ def glitch_offer(entries, asked: dict, now: float, every_s: int = GLITCH_ASK_EVE
     asked[key] = now
     return {"reason": "glitch", "app": app, "clip": e.get("path"), "at": e.get("ts"),
             "detail": f"the screen changed in {app or 'a window'} with nothing done: report it?"}
+
+
+# ---------------------------------------------------------------- U9/U10: drafts as a carousel in the chat
+CARD_KINDS = ("text", "image", "html", "video", "link")
+ROUTES = {"drafts": "Create drafts in the app", "gate": "Do it through Gate", "automation": "Build an automation, then run it"}
+MAX_CARDS = 12
+
+
+def carousel_from(c, row_id: str | None = None) -> dict | None:
+    """A comment's body.carousel ({title, cards: [{id, kind, title, text, src, html}]}) made safe to show:
+    image only as data:image/… (other image addresses become links, so nothing is fetched by itself), video and links
+    as https addresses opened in the browser, html as a snippet shown sandboxed (no scripts) and capped at 20 KB."""
+    if not isinstance(c, dict) or not isinstance(c.get("cards"), list):
+        return None
+    cards = []
+    for i, k in enumerate(c["cards"][:MAX_CARDS], 1):
+        if not isinstance(k, dict):
+            continue
+        kind = k.get("kind") if k.get("kind") in CARD_KINDS else "text"
+        card = {"id": re.sub(r"[^A-Za-z0-9_-]", "", str(k.get("id") or f"c{i}"))[:40] or f"c{i}", "kind": kind,
+                "title": str(k.get("title") or "")[:120], "text": str(k.get("text") or "")[:2000]}
+        src = str(k.get("src") or "")
+        if kind == "image":
+            if src.startswith("data:image/") and len(src) <= 2_000_000:
+                card["src"] = src
+            elif src.startswith("https://"):
+                card.update(kind="link", url=src[:500])
+            else:
+                card["kind"] = "text"
+        elif kind in ("video", "link"):
+            if src.startswith("https://"):
+                card["url"] = src[:500]
+            else:
+                card["kind"] = "text"
+        elif kind == "html":
+            card["html"] = str(k.get("html") or "")[:20000]
+        cards.append(card)
+    if not cards:
+        return None
+    return {"id": str(c.get("id") or row_id or "")[:60], "title": str(c.get("title") or "Drafts")[:120], "cards": cards}
+
+
+def card_markup_event(t: dt.datetime, *, carousel: str, card: dict, marks, size=None) -> dict:
+    """Mark up drawn on a carousel card in the Watch window (the same marks as on screen, in the card's own
+    pixels): kind 'markup', target the card. Attaches to the next line like any capture."""
+    w, h = size or (360, 240)
+    e = markup_event(t, marks=marks, window={"title": ""}, process={"name": "nodach-watch"}, zones={},
+                     screen=(0, 0, int(w), int(h)))
+    e["target"] = {"carousel": str(carousel)[:60], "card": str(card.get("id"))[:40], "card_title": str(card.get("title") or "")[:120],
+                   "card_kind": card.get("kind")}
+    e["element"]["name"] = f"card “{card.get('title') or card.get('id')}”: " + e["element"]["name"]
+    return e
+
+
+def route_line(route: str, carousel: str, card: str | None = None, text: str = "") -> tuple[str, dict]:
+    """The follow-on after the drafts: [for-claude] with the chosen route. Claude lists the constraints and risks he
+    may not have considered before acting (execution is not built in v0)."""
+    if route not in ROUTES:
+        raise ValueError(f"route must be one of {sorted(ROUTES)}")
+    t = re.sub(r"\s+", " ", str(text or "")).strip()
+    line = f"[for-claude] [route:{route}] {ROUTES[route]}" + (f": {t}" if t else "")
+    return line[:2000], {"chip": "route", "use": "U10", "route": route, "carousel": str(carousel)[:60],
+                         "card": card, "risks_first": True}
+
+
+# ---------------------------------------------------------------- U11-U13: replaying a learned map (check only)
+def _norm_text(t) -> str:
+    return re.sub(r"\s+", " ", str(t or "")).strip().lower()
+
+
+def expected_matches(step: dict, live: dict | None) -> dict:
+    """Before a step of a learned map runs, the element now at that spot must match what the step recorded:
+    name, type, window (app and title words) and nearby text. {ok, changed: [what differs]}. Map runs aren't built in
+    v0; this is the check they will use (a run stops and shows `changed` instead of acting).
+    step: {"expect": {name, type, app, window_words: [...], nearby: [...]}} (or the expectation itself)."""
+    exp = step.get("expect", step) if isinstance(step, dict) else {}
+    live = live or {}
+    changed = []
+    if not live or not (live.get("name") or live.get("type")):
+        return {"ok": False, "changed": ["nothing found at that spot"]}
+    if exp.get("name") is not None and _norm_text(exp["name"]) != _norm_text(live.get("name")):
+        changed.append(f"name: expected “{exp['name']}”, found “{live.get('name') or ''}”")
+    def _t(x):
+        x = str(x or "").lower()
+        x = x[:-7] if x.endswith("control") else x
+        return x
+    if exp.get("type") and _t(exp["type"]) != _t(live.get("type")):
+        changed.append(f"type: expected {exp['type']}, found {live.get('type') or '?'}")
+    if exp.get("app") and gate_core._proc(exp["app"]) != gate_core._proc(live.get("app") or (live.get("window") or {}).get("app")):
+        changed.append(f"app: expected {exp['app']}, found {live.get('app') or (live.get('window') or {}).get('app') or '?'}")
+    title = _norm_text(live.get("window_title") or (live.get("window") or {}).get("title"))
+    for w in exp.get("window_words") or []:
+        if _norm_text(w) not in title:
+            changed.append(f"window: “{w}” isn't in the title any more")
+    near = _norm_text(" ".join(str(x) for x in live.get("nearby") or []))
+    for w in exp.get("nearby") or []:
+        if _norm_text(w) not in near:
+            changed.append(f"nearby text: “{w}” is gone")
+    return {"ok": not changed, "changed": changed}

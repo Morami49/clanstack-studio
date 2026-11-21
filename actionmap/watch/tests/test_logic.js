@@ -73,6 +73,28 @@ const tests = {
     assert.ok(!h.includes("<img") && h.includes("&lt;img") && h.includes('class="line"') && h.includes("⌖ a › b"));
     assert.ok(L.rowsHtml([]).includes("No lines yet"));
   },
+  "carousel cards are escaped and navigable"() {
+    const car = {id: "d1", cards: [{id: "c1", kind: "text", title: "<x>", text: "a\"b"},
+                                   {id: "c2", kind: "html", title: "f", html: "<script>alert(1)</script>"},
+                                   {id: "c3", kind: "image", title: "i", src: "https://e.com/x.png"}]};
+    const h0 = L.cardHtml(car, 0);
+    assert.ok(h0.includes("&lt;x&gt;") && h0.includes("1 / 3") && h0.includes("data-car-prev=\"d1\" disabled"));
+    const h1 = L.cardHtml(car, 1);
+    assert.ok(h1.includes('sandbox=""') && !h1.includes("<script>") && h1.includes("&lt;script&gt;"));
+    assert.ok(!L.cardHtml(car, 2).includes("<img"));                 // only data: pictures are shown
+    assert.ok(L.cardHtml(car, 9).includes("3 / 3"));
+    assert.ok(L.rowsHtml([{kind: "reply", time: "", who: "Claude", text: "", carousel: car}], {d1: 1}).includes("2 / 3"));
+    for (const r of Object.keys(L.ROUTES)) assert.ok(h0.includes('data-route="' + r + '"'));
+  },
+  "card marks and routes"() {
+    assert.deepStrictEqual(L.cardMark("box", [50, 40], [10, 10]), {type: "box", rect: {left: 10, top: 10, right: 50, bottom: 40}});
+    assert.strictEqual(L.cardMark("arrow", [1, 1], [2, 2]), null);
+    assert.deepStrictEqual(L.cardMark("text", [3, 4], [3, 4], "note"), {type: "text", at: [3, 4], text: "note"});
+    assert.strictEqual(L.cardMark("text", [3, 4], [3, 4], ""), null);
+    assert.throws(() => L.cardMark("lasso", [0, 0], [9, 9]));
+    assert.deepStrictEqual(L.routeBody("gate", "d1", "c1", " go ", "PE-1"), {carousel: "d1", route: "gate", card: "c1", text: "go", attach: "PE-1"});
+    assert.throws(() => L.routeBody("fly", "d1"));
+  },
   "strip and mic labels"() {
     assert.deepStrictEqual(L.stripText({watching: "W", gate: "paused", acting: ""}), {watching: "W", gate: "Gate paused", acting: ""});
     assert.strictEqual(L.micLabel(false), "🎙 Mic");

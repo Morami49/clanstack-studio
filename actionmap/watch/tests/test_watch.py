@@ -273,6 +273,54 @@ def test_glitch_offer_once_per_app_per_hour():
     assert core.glitch_offer([{"kind": "clip", "_t": 1, "trigger": "user", "path": "x"}], {}, 2) is None   # only glitches
 
 
+CAROUSEL = {"title": "Two drafts", "cards": [
+    {"id": "c1", "kind": "text", "title": "Short reply", "text": "Thanks, booked for Monday."},
+    {"id": "c2", "kind": "image", "title": "Banner", "src": "data:image/png;base64,iVBORw0KGgo="},
+    {"id": "c3", "kind": "image", "title": "Remote", "src": "https://example.com/x.png"},
+    {"id": "c4", "kind": "html", "title": "Form", "html": "<form><input></form><script>alert(1)</script>"},
+    {"id": "c5", "kind": "video", "title": "Walkthrough", "src": "https://example.com/v.mp4"},
+    {"id": "c6", "kind": "video", "title": "Local", "src": "file:///C:/x.mp4"},
+    {"id": "bad id!", "kind": "weird", "title": "?"}]}
+
+
+def test_carousel_is_made_safe_to_show():
+    c = core.carousel_from(CAROUSEL, "d9")
+    k = {x["id"]: x for x in c["cards"]}
+    assert c["id"] == "d9" and len(c["cards"]) == 7
+    assert k["c2"]["src"].startswith("data:image/") and k["c3"]["kind"] == "link" and "src" not in k["c3"]
+    assert k["c4"]["html"].startswith("<form>") and k["c5"]["url"].startswith("https://") and k["c6"]["kind"] == "text"
+    assert k["badid"]["kind"] == "text"
+    assert core.carousel_from({"cards": "nope"}) is None and core.carousel_from(None) is None
+
+
+def test_carousel_rows_card_markup_and_routes():
+    rows = core.stream_rows([{"doc_id": "d9", "event": {"ts": "2026-11-22T10:00:00.000Z", "kind": "comment", "item": "LV-1",
+                                                       "author": {"id": "claude", "role": "agent"}, "body": {"text": "Drafts", "carousel": CAROUSEL}}}], "LV-1")
+    assert rows[0]["carousel"]["cards"][0]["title"] == "Short reply"
+    card = rows[0]["carousel"]["cards"][0]
+    e = core.card_markup_event(T, carousel="d9", card=card, marks=[{"type": "box", "rect": {"left": 5, "top": 5, "right": 50, "bottom": 30}},
+                                                                   {"type": "text", "at": [60, 20], "text": "too formal"}], size=(360, 200))
+    assert e["kind"] == "markup" and e["target"] == {"carousel": "d9", "card": "c1", "card_title": "Short reply", "card_kind": "text"}
+    assert e["rect"]["right"] <= 360 and "card “Short reply”" in e["element"]["name"]
+    line, f = core.route_line("automation", "d9", "c1", "weekly")
+    assert line == "[for-claude] [route:automation] Build an automation, then run it: weekly"
+    assert f == {"chip": "route", "use": "U10", "route": "automation", "carousel": "d9", "card": "c1", "risks_first": True}
+    with pytest.raises(ValueError):
+        core.route_line("rocket", "d9")
+
+
+def test_expected_matches_before_a_map_step():
+    step = {"expect": {"name": "Submit", "type": "ButtonControl", "app": "chrome.exe", "window_words": ["Order form"], "nearby": ["Total"]}}
+    live = {"name": "Submit", "type": "Button", "app": "chrome.exe", "window_title": "Order form - Shop - Google Chrome", "nearby": ["Total £20"]}
+    assert core.expected_matches(step, live) == {"ok": True, "changed": []}
+    moved = dict(live, name="Delete")                        # 'Submit' moved and 'Delete' is now at that spot
+    r = core.expected_matches(step, moved)
+    assert not r["ok"] and r["changed"] == ["name: expected “Submit”, found “Delete”"]
+    r = core.expected_matches(step, dict(live, window_title="Checkout - Shop", nearby=[], type="Hyperlink", app="msedge.exe"))
+    assert not r["ok"] and len(r["changed"]) == 4
+    assert core.expected_matches(step, None)["changed"] == ["nothing found at that spot"]
+
+
 def test_status_strip():
     s = core.status_strip(watch=True, paused=False, acting={"active": True, "tool": "Click"}, kept_out=2, signed_in=True, session="LV-1")
     assert s["watching"] == "Watching: all windows except 2 kept out" and s["acting"] == "Claude is acting: Click" and s["gate"] == "ok"
@@ -456,6 +504,22 @@ def test_api_glitch_offer_from_gate_log(api):
         f.write(json.dumps({"kind": "clip", "ts": iso(now - dt.timedelta(seconds=10)), "trigger": "glitch", "path": "clips/x.gif"}) + "\n")
     assert call("/api/state")[1]["offer"]["reason"] == "glitch"
     assert call("/api/state")[1]["offer"] is None
+
+
+def test_api_card_markup_and_route(api):
+    call, hub, *_ = api
+    call("/api/signin", {})
+    sid = call("/api/session/start", {})[1]["session"]
+    did = hub.post({"ts": "2026-11-22T10:00:09.000Z", "kind": "comment", "item": sid, "author": {"id": "claude", "role": "agent"},
+                    "body": {"text": "Drafts", "carousel": CAROUSEL}})
+    code, r = call("/api/card-markup", {"carousel": did, "card": "c1", "marks": [{"type": "arrow", "from": [1, 1], "to": [40, 40]}], "size": [360, 200]})
+    assert code == 200 and "card" in r["event"]["words"]
+    assert call("/api/card-markup", {"carousel": did, "card": "nope", "marks": []})[0] == 404
+    code, r2 = call("/api/route", {"carousel": did, "route": "drafts", "card": "c1", "text": "in Outlook", "attach": r["event"]["id"]})
+    b = hub.docs[-1]["event"]["body"]
+    assert code == 200 and b["text"] == "[for-claude] [route:drafts] Create drafts in the app: in Outlook"
+    assert b["watch"]["route"] == "drafts" and b["point"]["kind"] == "markup"
+    assert call("/api/route", {"carousel": did, "route": "x"})[0] == 400
 
 
 def test_api_keep_out_pick_add_remove(api):

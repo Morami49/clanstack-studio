@@ -47,4 +47,16 @@ select, input[type=text], textarea { font:inherit; color:var(--fg); background:v
 .bar button.on { background:var(--accent); color:#fff; }
 .bar button.stop { background:var(--red); color:#fff; border-color:var(--red); font-weight:700; }
 .incident { display:flex; flex-direction:column; gap:3px; width:100%; }
+.chat li.wide { max-width:100%; align-self:stretch; }
+.card { margin-top:6px; border:1px solid var(--line); border-radius:10px; background:var(--bg); }
+.cardbody { position:relative; padding:4px 8px; min-height:60px; }
+.cardbody.marking { outline:2px dashed var(--orange); }
+.cardimg { max-width:100%; display:block; border-radius:6px; }
+.cardhtml { width:100%; height:160px; border:1px solid var(--line); border-radius:6px; background:#fff; }
+.cardtext { margin:4px 0; white-space:pre-wrap; }
+.cardsvg { position:absolute; left:0; top:0; cursor:crosshair; }
+.cardsvg .mk { fill:none; stroke:var(--orange); stroke-width:3; }
+.cardsvg text.mk { fill:var(--orange); stroke:none; font-weight:700; }
+.cardtools button.on { background:var(--accent); color:#fff; }
+.routes { border-top:1px solid var(--line); }
 [hidden] { display:none !important; }

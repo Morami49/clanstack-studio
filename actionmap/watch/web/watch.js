@@ -4,7 +4,7 @@
   const L = window.WatchLogic;
   const $ = s => document.querySelector(s);
   const KEY = (location.hash.match(/key=([^&]+)/) || [])[1] || "";
-  let ui = L.initial(), state = null, lastOffer = null, micT0 = 0, micTimer = null, ref = null;
+  let ui = L.initial(), state = null, lastOffer = null, carIdx = {}, lastRows = [], marking = null, micT0 = 0, micTimer = null, ref = null;
 
   async function api(path, body) {
     const opt = {headers: {"X-Watch-Key": KEY}};
@@ -48,7 +48,9 @@
     const r = await api("/api/stream?session=" + encodeURIComponent(state.session)).catch(() => null);
     if (!r) return;
     const box = $("#chatWrap"), atEnd = box.scrollTop + box.clientHeight >= box.scrollHeight - 10;
-    const html = L.rowsHtml(r.rows);
+    lastRows = r.rows;
+    if (marking) return;                                  // don't redraw under a card being marked up
+    const html = L.rowsHtml(r.rows, carIdx);
     if ($("#chat").dataset.html !== html) { $("#chat").innerHTML = html; $("#chat").dataset.html = html; if (atEnd) box.scrollTop = box.scrollHeight; }
   }
 
@@ -148,6 +150,72 @@
       else if (r && !r.text) err("No speech heard.");
     }
   };
+
+  /* ------------------------------------------------------------ U9/U10: carousel cards */
+  function redrawChat() { const h = L.rowsHtml(lastRows, carIdx); $("#chat").innerHTML = h; $("#chat").dataset.html = h; }
+  $("#chat").addEventListener("click", async e => {
+    const t = e.target.closest("button"); if (!t || marking) return;
+    if (t.dataset.carPrev) { carIdx[t.dataset.carPrev] = Math.max(0, (carIdx[t.dataset.carPrev] || 0) - 1); redrawChat(); }
+    else if (t.dataset.carNext) { carIdx[t.dataset.carNext] = (carIdx[t.dataset.carNext] || 0) + 1; redrawChat(); }
+    else if (t.dataset.open) { window.open(t.dataset.open, "_blank", "noopener"); }
+    else if (t.dataset.route) {
+      const b = L.routeBody(t.dataset.route, t.dataset.routeCar, t.dataset.routeCard, $("#text").value, ui.attach ? ui.attach.id : null);
+      const r = await run(() => api("/api/route", b));
+      if (r) { $("#text").value = ""; ui = L.afterSend(ui); renderUi(); refresh(); }
+    } else if (t.dataset.cardMarkup) { startCardMarkup(t.closest(".card"), ...t.dataset.cardMarkup.split("|")); }
+  });
+  const NS = "http://www.w3.org/2000/svg";
+  function startCardMarkup(cardEl, carousel, card) {
+    const body = cardEl.querySelector(".cardbody"), box = body.getBoundingClientRect();
+    const svg = document.createElementNS(NS, "svg");
+    svg.setAttribute("class", "cardsvg"); svg.setAttribute("width", box.width); svg.setAttribute("height", box.height);
+    body.classList.add("marking"); body.append(svg);
+    const tools = document.createElement("div"); tools.className = "row wrap cardtools";
+    tools.innerHTML = '<button data-t="box" class="on">▭ Box</button><button data-t="arrow">→ Arrow</button><button data-t="text">T Note</button>' +
+      '<span class="spacer"></span><button data-t="undo">Undo</button><button data-t="done" class="primary">Done</button><button data-t="cancel">Cancel</button>';
+    cardEl.append(tools);
+    marking = {tool: "box", marks: [], p0: null, live: null};
+    const shapes = [];
+    const pt = ev => { const r = svg.getBoundingClientRect(); return [Math.round(ev.clientX - r.left), Math.round(ev.clientY - r.top)]; };
+    function shape(m) {
+      let el;
+      if (m.type === "box") { el = document.createElementNS(NS, "rect"); el.setAttribute("x", m.rect.left); el.setAttribute("y", m.rect.top); el.setAttribute("width", m.rect.right - m.rect.left); el.setAttribute("height", m.rect.bottom - m.rect.top); }
+      else if (m.type === "arrow") { el = document.createElementNS(NS, "line"); el.setAttribute("x1", m.from[0]); el.setAttribute("y1", m.from[1]); el.setAttribute("x2", m.to[0]); el.setAttribute("y2", m.to[1]); }
+      else { el = document.createElementNS(NS, "text"); el.setAttribute("x", m.at[0]); el.setAttribute("y", m.at[1]); el.textContent = m.text; }
+      el.setAttribute("class", "mk"); svg.append(el); return el;
+    }
+    svg.onpointerdown = ev => {
+      const p = pt(ev);
+      if (marking.tool === "text") { const m = L.cardMark("text", p, p, window.prompt("Note") || ""); if (m) { marking.marks.push(m); shapes.push(shape(m)); } return; }
+      marking.p0 = p; svg.setPointerCapture(ev.pointerId);
+    };
+    svg.onpointermove = ev => {
+      if (!marking.p0) return;
+      if (marking.live) marking.live.remove();
+      const m = L.cardMark(marking.tool, marking.p0, pt(ev));
+      marking.live = m ? shape(m) : null;
+    };
+    svg.onpointerup = ev => {
+      if (!marking.p0) return;
+      if (marking.live) { marking.live.remove(); marking.live = null; }
+      const m = L.cardMark(marking.tool, marking.p0, pt(ev)); marking.p0 = null;
+      if (m) { marking.marks.push(m); shapes.push(shape(m)); }
+    };
+    function end() { svg.remove(); tools.remove(); body.classList.remove("marking"); marking = null; redrawChat(); }
+    tools.onclick = async ev => {
+      const b = ev.target.closest("button"); if (!b) return;
+      const t = b.dataset.t;
+      if (["box", "arrow", "text"].includes(t)) { marking.tool = t; tools.querySelectorAll("[data-t]").forEach(x => x.classList.toggle("on", x === b)); }
+      else if (t === "undo") { marking.marks.pop(); const s2 = shapes.pop(); if (s2) s2.remove(); }
+      else if (t === "cancel") end();
+      else if (t === "done") {
+        if (!marking.marks.length) { end(); return; }
+        const r = await run(() => api("/api/card-markup", {carousel, card, marks: marking.marks, size: [Math.round(box.width), Math.round(box.height)]}));
+        end();
+        if (r && r.event) { ui = L.attach(ui, r.event); renderUi(); $("#text").focus(); }
+      }
+    };
+  }
 
   /* ------------------------------------------------------------ keep-out */
   async function koRender() {

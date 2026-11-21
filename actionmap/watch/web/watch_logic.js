@@ -114,13 +114,48 @@
     return {watching: strip.watching, gate: strip.gate === "paused" ? "Gate paused" : "Gate ok", acting: strip.acting || ""};
   }
 
-  function rowsHtml(rows) {
+  const ROUTES = {drafts: "Create drafts in the app", gate: "Do it through Gate", automation: "Build an automation, then run it"};
+
+  /* U9: one card of a carousel (drafts mixing text, pictures, HTML snippets and video links) */
+  function cardHtml(car, i) {
+    const n = car.cards.length;
+    i = Math.max(0, Math.min(i || 0, n - 1));
+    const k = car.cards[i];
+    let body = k.text ? '<p class="cardtext">' + esc(k.text) + "</p>" : "";
+    if (k.kind === "image" && /^data:image\//.test(k.src || "")) body = '<img class="cardimg" alt="' + esc(k.title) + '" src="' + esc(k.src) + '">' + body;
+    if (k.kind === "html") body += '<iframe class="cardhtml" sandbox="" title="' + esc(k.title || "snippet") + '" srcdoc="' + esc(k.html || "") + '"></iframe>';
+    if ((k.kind === "video" || k.kind === "link") && k.url) body += '<button class="link" data-open="' + esc(k.url) + '">' + (k.kind === "video" ? "▶ Open video" : "Open link") + "</button>";
+    return '<div class="card" data-car="' + esc(car.id) + '" data-card="' + esc(k.id) + '">' +
+      '<div class="row"><b>' + esc(k.title || "Card " + (i + 1)) + '</b><span class="spacer"></span><span class="meta">' + (i + 1) + " / " + n + "</span></div>" +
+      '<div class="cardbody">' + body + "</div>" +
+      '<div class="row"><button data-car-prev="' + esc(car.id) + '"' + (i <= 0 ? " disabled" : "") + ">‹</button>" +
+      '<button data-car-next="' + esc(car.id) + '"' + (i >= n - 1 ? " disabled" : "") + ">›</button><span class=\"spacer\"></span>" +
+      '<button data-card-markup="' + esc(car.id) + '|' + esc(k.id) + '">✎ Mark up card</button></div>' +
+      '<div class="row wrap routes">' + Object.keys(ROUTES).map(r => '<button class="link" data-route="' + r + '" data-route-car="' + esc(car.id) + '" data-route-card="' + esc(k.id) + '">' + esc(ROUTES[r]) + "</button>").join("") + "</div></div>";
+  }
+
+  function rowsHtml(rows, idx) {
+    idx = idx || {};
     if (!rows || !rows.length) return '<li class="empty">No lines yet. Type, talk, or point.</li>';
     return rows.map(function (r) {
       const cls = r.kind === "line" ? "line" : r.kind === "step" ? "step" : r.kind === "reply" ? "reply" : "note";
-      return '<li class="' + cls + '"><span class="meta">' + esc(r.time) + " · " + esc(r.who) + (r.via ? " · " + esc(r.via) : "") + "</span>" +
-        '<span class="text">' + esc(r.text) + "</span>" + (r.words ? '<span class="chip small">' + esc(r.words) + "</span>" : "") + "</li>";
+      return '<li class="' + cls + (r.carousel ? " wide" : "") + '"><span class="meta">' + esc(r.time) + " · " + esc(r.who) + (r.via ? " · " + esc(r.via) : "") + "</span>" +
+        '<span class="text">' + esc(r.text) + "</span>" + (r.words ? '<span class="chip small">' + esc(r.words) + "</span>" : "") +
+        (r.carousel ? cardHtml(r.carousel, idx[r.carousel.id] || 0) : "") + "</li>";
     }).join("");
+  }
+
+  /* U9: a mark drawn on a card, in the card's own pixels (the same mark types as on screen) */
+  function cardMark(tool, p0, p1, text) {
+    const d = Math.abs(p1[0] - p0[0]) + Math.abs(p1[1] - p0[1]);
+    if (tool === "box") return d < 6 ? null : {type: "box", rect: {left: Math.min(p0[0], p1[0]), top: Math.min(p0[1], p1[1]), right: Math.max(p0[0], p1[0]), bottom: Math.max(p0[1], p1[1])}};
+    if (tool === "arrow") return d < 6 ? null : {type: "arrow", from: [p0[0], p0[1]], to: [p1[0], p1[1]]};
+    if (tool === "text") return text ? {type: "text", at: [p0[0], p0[1]], text: String(text).slice(0, 300)} : null;
+    throw new Error("unknown tool " + tool);
+  }
+  function routeBody(route, carousel, card, text, attachId) {
+    if (!ROUTES[route]) throw new Error("unknown route " + route);
+    return {carousel, route, card: card || null, text: String(text || "").trim(), attach: attachId || null};
   }
 
   function micLabel(listening, secs) {
@@ -129,7 +164,7 @@
     return "■ Send " + Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
   }
 
-  const api = {CHIPS, COMPARE, SAVE, MARKUP_AS, PRESETS, INCIDENT_FIELDS, setIrreversible, setIncident, reproduceNote, esc, chipTag, lineText, initial, applyChip, setOpt, attach,
+  const api = {ROUTES, cardHtml, cardMark, routeBody, CHIPS, COMPARE, SAVE, MARKUP_AS, PRESETS, INCIDENT_FIELDS, setIrreversible, setIncident, reproduceNote, esc, chipTag, lineText, initial, applyChip, setOpt, attach,
                buildSend, buildMarkupSend, afterSend, stripText, rowsHtml, micLabel};
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.WatchLogic = api;

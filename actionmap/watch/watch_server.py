@@ -14,6 +14,8 @@ API (JSON; every call needs the X-Watch-Key header):
   GET  /api/keepout  POST /api/keepout/pick  /add {entry}  /remove {id}  GET /api/windows
   GET  /api/shots                 earlier Watch captures (for 'Looks off' > compare with an earlier one)
   POST /api/reference             pick a reference or design image for 'Looks off' (kept on this PC)
+  POST /api/card-markup {carousel, card, marks, size}  mark up a draft card (U9)
+  POST /api/route {carousel, route, card, text, attach}  drafts | gate | automation as a [for-claude] line (U10)
   POST /api/clip                  keep the last 10 s (Gate's clip)        POST /api/stop   Pause all
   POST /api/mic {action: start|stop, ...send fields}    click to talk, click to send
   POST /api/ontop {on}            POST /api/settings {stuck}   ('looks like you're stuck' offers, off by default)
@@ -344,6 +346,42 @@ class Watch:
         ref["id"] = "REF-" + ref["sha256"][:10]
         return {"reference": ref}
 
+    def _card(self, carousel: str, card_id: str) -> dict:
+        for d in self.pull(force=True):
+            if d.get("doc_id") == carousel:
+                c = core.carousel_from(((d.get("event") or {}).get("body") or {}).get("carousel"), carousel)
+                for k in (c or {}).get("cards") or []:
+                    if k["id"] == card_id:
+                        return k
+        raise ApiError("That card isn't in the session any more", 404)
+
+    def card_markup(self, carousel: str, card_id: str, marks, size=None) -> dict:
+        """U9: mark up on a carousel card; saved like a capture, attaches to the next line."""
+        card = self._card(carousel, card_id)
+        try:
+            e = core.card_markup_event(core.utcnow(), carousel=carousel, card=card, marks=marks, size=size)
+        except (ValueError, KeyError, TypeError) as err:
+            raise ApiError(f"mark-up not understood ({err})") from None
+        with open(self.home / "events.jsonl", "a", encoding="utf-8") as f:
+            f.write(json.dumps(e, ensure_ascii=False) + "\n")
+        return {"event": {"id": e["id"], "kind": e["kind"], "words": core.point_words(e), "picture": False, "preset": None}}
+
+    def route(self, carousel: str, route: str, card: str | None = None, text: str = "", attach: str | None = None) -> dict:
+        """U10: post the chosen follow-on as a [for-claude] line (execution is a TODO in v0)."""
+        session = self.settings.get("session")
+        if not session:
+            raise ApiError("No session: pick one or click Start session")
+        try:
+            line, fields = core.route_line(route, carousel, card, text)
+        except ValueError as e:
+            raise ApiError(str(e)) from None
+        point = core.shareable(self.find_event(attach)) if attach else None
+        ev = core.line_event(session, self.me(), line, core.utcnow(), point=point, watch=fields)
+        did = self.hub().post(ev)
+        self.pull(force=True)
+        self.note("send", "ok", f"route {route} for {carousel}")
+        return {"sent": did, "session": session}
+
     # ------------------------------------------------------------ keep-out
     def keepout_list(self) -> list:
         return core.keep_out_list(self.zones_path())
@@ -614,6 +652,11 @@ def dispatch(w: Watch, method: str, path: str, query: dict, body: dict):
             return w.keepout_remove(str(body.get("id") or ""))
         if path == "/api/reference":
             return w.reference(body.get("path"))
+        if path == "/api/card-markup":
+            return w.card_markup(str(body.get("carousel") or ""), str(body.get("card") or ""), body.get("marks") or [], body.get("size"))
+        if path == "/api/route":
+            return w.route(str(body.get("carousel") or ""), str(body.get("route") or ""), body.get("card"), body.get("text") or "",
+                           body.get("attach"))
         if path == "/api/settings":
             return w.set_settings(body)
         if path == "/api/export":
@@ -642,7 +685,7 @@ def make_handler(w: Watch, key: str, port_ref: dict):
             self.send_header("Content-Type", ctype)
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
-            self.send_header("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'")
+            self.send_header("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; frame-src 'self'")
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
