@@ -20,6 +20,7 @@ use std::collections::{HashMap, HashSet};
 
 pub mod mcp;
 pub mod oauth;
+pub mod responder;   // 51a Live responder (kept apart from the end of this list, so #53's module line never conflicts)
 pub mod session;
 pub mod flows;
 pub mod private;
