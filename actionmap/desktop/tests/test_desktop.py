@@ -571,3 +571,12 @@ def test_watch_test_goes_through_gate_to_the_watch_server_and_is_logged(home):
     finally:
         c.close()
         srv.shutdown()
+
+
+def test_code_stamp_changes_when_a_file_changes(tmp_path):
+    f = tmp_path / "a.py"
+    f.write_text("x")
+    a = desktop_core.code_stamp([f])
+    os.utime(f, (time.time() + 10, time.time() + 10))
+    assert desktop_core.code_stamp([f]) != a
+    assert desktop_core.code_stamp([tmp_path / "gone.py"])[0][1] is None

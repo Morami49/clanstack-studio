@@ -178,6 +178,17 @@ def acting_state(root: Path = ROOT, linger_s: float = 1.5, now: float | None = N
     return {"active": False, "tool": None}
 
 
+def code_stamp(paths) -> tuple:
+    """(path, mtime) of each file: a change means the Desktop window should restart itself on the new code."""
+    out = []
+    for p in paths:
+        try:
+            out.append((str(p), Path(p).stat().st_mtime))
+        except OSError:
+            out.append((str(p), None))
+    return tuple(out)
+
+
 def watch_window_open(root: Path = ROOT) -> bool:
     """Is the Watch window running (run\\watch-window.json names a live process)? Watch shows its own 'Claude is
     acting' banner, so Desktop then stays put instead of jumping over Watch (run 4/5, 21 Nov)."""

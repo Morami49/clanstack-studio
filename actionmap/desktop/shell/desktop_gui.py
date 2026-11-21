@@ -40,6 +40,9 @@ class DesktopWindow:
         core.write_json(self.home / "run" / "desktop-window.pid", {"pid": os.getpid(), "started": core.now_iso()})
         self.events: list[str] = []
         self.busy = False
+        here = Path(__file__).resolve().parent
+        self.code_files = [here / "desktop_gui.py", here / "desktop_core.py"]
+        self.code_stamp = core.code_stamp(self.code_files)
         root.title("Nodach Desktop")
         root.geometry("640x660")
         pad = {"padx": 8, "pady": 4}
@@ -137,6 +140,13 @@ class DesktopWindow:
             self.refresh()
         except Exception:
             pass
+        # an update replaced this window's own code: restart on it (21 Nov: the window kept running old code),
+        # but never while Claude is acting or a job is running
+        if core.code_stamp(self.code_files) != self.code_stamp and not self.busy and not core.acting_state(self.home)["active"]:
+            try:
+                self.root.destroy()
+            finally:
+                os.execv(sys.executable, [sys.executable, str(Path(__file__).resolve())])
         self.root.after(2000, self.tick)
 
     def fast_tick(self):
