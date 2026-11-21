@@ -59,6 +59,34 @@ def _win(hwnd) -> dict:
     return {"hwnd": hwnd, "title": title, "app": _proc_name(hwnd), "rect": rect}
 
 
+_OWN_CACHE: dict = {}
+
+
+def is_own(w: dict) -> bool:
+    """One of Nodach's own windows (gate_core.own_window): by title, or by its process's exe/command line under
+    %USERPROFILE%\\nodach. Cached per process id (a pid's command line doesn't change)."""
+    title = (w or {}).get("title") or ""
+    if core.own_window(title):
+        return True
+    hwnd = (w or {}).get("hwnd")
+    if not AVAILABLE or not hwnd:
+        return False
+    try:
+        _, pid = win32process.GetWindowThreadProcessId(hwnd)
+    except Exception:
+        return False
+    if pid not in _OWN_CACHE:
+        try:
+            pr = psutil.Process(pid)
+            exe, cmd = pr.exe(), pr.cmdline()
+        except Exception:
+            exe, cmd = "", []
+        if len(_OWN_CACHE) > 500:
+            _OWN_CACHE.clear()
+        _OWN_CACHE[pid] = core.own_window("", exe, cmd)
+    return _OWN_CACHE[pid]
+
+
 def foreground() -> dict:
     if not AVAILABLE:
         return _win(0)
@@ -318,6 +346,7 @@ class ClipBuffer(threading.Thread):
     def _tick(self, now):
         fg = foreground()
         never = self.is_never(fg["app"], fg["title"])
+        own = not never and is_own(fg)
         if never:
             im, reason = blank(never), never
         else:
@@ -326,6 +355,9 @@ class ClipBuffer(threading.Thread):
                 w = int(self.settings.get("clip_max_width", 480))
                 if im.width > w:
                     im = im.resize((w, max(1, int(im.height * w / im.width))))
+            if own:     # Nodach's own window in front (Watch refreshing itself): never a glitch, and the next
+                self._last_hash = None      # other window starts a fresh comparison
+            elif im is not None:
                 h = img_hash(im)
                 if self._last_hash is not None and h is not None and self.on_change:
                     bits = core.hamming(self._last_hash, h)

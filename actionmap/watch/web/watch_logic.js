@@ -173,13 +173,30 @@
   function localRowHtml(text, time) {
     return '<li class="local"><span class="meta">' + esc(time || "") + " · Watch</span><span class=\"text\">" + esc(text) + "</span></li>";
   }
+  /* decision 77a b: Claude's test inputs show as a small grey note in the chat */
+  function testRowHtml(text, time) {
+    return '<li class="local test"><span class="meta">' + esc(time || "") + " · Watch</span><span class=\"text\">" + esc(text) + "</span></li>";
+  }
+  /* which test input to take up: a newer one than seen; on the first look (page just loaded) only a fresh one */
+  function testToApply(seenSeq, test, firstLook) {
+    if (!test || !(test.seq > (seenSeq || 0))) return null;
+    if (firstLook && !(test.age_s < 15)) return null;
+    return test;
+  }
+  /* what the page reports to the server for Claude's 'state' */
+  function uiReport(ui, extra) {
+    const a = ui.attach;
+    return Object.assign({chip: ui.chip || null, compare: ui.chip === "looks-off" ? (ui.opts.compare || "none") : null,
+      attach: a ? {id: a.id, kind: a.kind, words: a.words, picture: !!a.picture, kept_out: a.kept_out || null} : null,
+      picture: !!(ui.picture && a && a.picture && !a.kept_out)}, extra || {});
+  }
   /* U15: what 'Read out the last reply' reads */
   function lastReplyText(rows) {
     for (let i = (rows || []).length - 1; i >= 0; i--) if (rows[i].kind === "reply" && rows[i].text) return rows[i].who + " says: " + rows[i].text;
     return "";
   }
 
-  const api = {privacyNote, localRowHtml, lastReplyText, ROUTES, cardHtml, cardMark, routeBody, CHIPS, COMPARE, SAVE, MARKUP_AS, PRESETS, INCIDENT_FIELDS, setIrreversible, setIncident, reproduceNote, esc, chipTag, lineText, initial, applyChip, setOpt, attach,
+  const api = {testRowHtml, testToApply, uiReport, privacyNote, localRowHtml, lastReplyText, ROUTES, cardHtml, cardMark, routeBody, CHIPS, COMPARE, SAVE, MARKUP_AS, PRESETS, INCIDENT_FIELDS, setIrreversible, setIncident, reproduceNote, esc, chipTag, lineText, initial, applyChip, setOpt, attach,
                buildSend, buildMarkupSend, afterSend, stripText, rowsHtml, micLabel};
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.WatchLogic = api;

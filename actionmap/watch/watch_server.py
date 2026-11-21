@@ -22,6 +22,13 @@ API (JSON; every call needs the X-Watch-Key header):
   POST /api/mic {action: start|stop, ...send fields}    click to talk, click to send
   POST /api/ontop {on}            POST /api/settings {stuck}   ('looks like you're stuck' offers, off by default)
   POST /api/export {id, note}     a capture as a self-contained HTML page + zip in nodach-watch/exports
+  POST /api/ui {…}                the page reports what it shows (chip, attachment, picture, visible controls)
+  POST /api/test/select_area {x1,y1,x2,y2}  POST /api/test/point {x,y}  POST /api/test/state
+                                  Claude's test hook (decision 77a b), called only by the Desktop worker, which reads
+                                  the port and key from %USERPROFILE%\\nodach\\run\\watch.json. Same pipeline as a
+                                  finished overlay drag/click (only the overlay is skipped); shown in the chat as a
+                                  grey 'test input from Claude' note. Refused while Watch is off, the window isn't
+                                  open, or the area touches a kept-out window.
 Nothing here prints or stores the sign-in value except Live's own session file; no email addresses are shown.
 """
 from __future__ import annotations
@@ -79,7 +86,7 @@ class Watch:
     """Everything the API does, testable without HTTP (hub, capture and voice can be swapped for fakes)."""
 
     def __init__(self, home: Path = HOME, gate_home: Path = GATE_HOME, root: Path = DESKTOP_ROOT, hub_factory=None,
-                 capture=None, token_store=None, voice=None, hooks=None):
+                 capture=None, token_store=None, voice=None, hooks=None, test_capture=None):
         self.home, self.gate_home, self.root = Path(home), Path(gate_home), Path(root)
         self.home.mkdir(parents=True, exist_ok=True)
         self.settings = read_json(self.home / "settings.json", {}) or {}
@@ -89,6 +96,11 @@ class Watch:
         self.last_offer = None
         self.hub_factory = hub_factory or _live_hub
         self.capture_fn = capture
+        self.test_capture_fn = test_capture
+        self.capturing = False             # a capture is running (the app doesn't restart itself mid-capture)
+        self.test_last = None              # the latest test input, for the page to attach and note
+        self.test_seq = 0
+        self.ui, self.ui_t = {}, 0.0       # what the page last reported it shows
         self.tokens = token_store or _LiveTokens()
         self.voice = voice
         self.hooks = hooks or {}
@@ -182,7 +194,8 @@ class Watch:
                 "chips": core.CHIPS, "presets": {k: {"label": v["label"], "hint": v["hint"]} for k, v in core.PRESETS.items()},
                 "compare": core.COMPARE, "save": core.SAVE, "voice": self.voice_status(),
                 "audience": core.audience_for(self._me) if signed else None,
-                "stuck": {"on": bool(self.settings["stuck"].get("on"))}, "offer": self.offer()}
+                "stuck": {"on": bool(self.settings["stuck"].get("on"))}, "offer": self.offer(),
+                "test": self.test_public()}
 
     def privacy(self) -> str | None:
         """U16: a sign-in page or payment form in front pauses Watch (Gate refuses; captures black it out)."""
@@ -358,14 +371,18 @@ class Watch:
 
     def _hidden(self, fn):
         hide, show = self.hooks.get("hide"), self.hooks.get("show")
-        if hide:
-            hide()
-            time.sleep(0.25)
+        self.capturing = True
         try:
-            return fn()
+            if hide:
+                hide()
+                time.sleep(0.25)
+            try:
+                return fn()
+            finally:
+                if show:
+                    show()
         finally:
-            if show:
-                show()
+            self.capturing = False
 
     def capture(self, mode: str, preset: str | None = None) -> dict:
         if mode not in ("point", "area", "markup", "pick"):
@@ -382,6 +399,94 @@ class Watch:
             return {"event": {"id": e["id"], "kind": e["kind"], "words": core.point_words(e), "kept_out": e.get("kept_out"),
                               "picture": bool(e.get("screenshot")), "preset": e.get("preset")}}
         return r
+
+    # ------------------------------------------------------------ Claude's test hook (decision 77a b)
+    def window_open(self) -> bool:
+        fn = self.hooks.get("visible")
+        if fn is None:
+            return True          # browser mode: no window to ask
+        try:
+            return bool(fn())
+        except Exception:
+            return False
+
+    def test_public(self):
+        t = self.test_last
+        if not t:
+            return None
+        return dict(t, age_s=round(time.time() - t["t"], 1))
+
+    def test_input(self, action: str, args: dict | None = None) -> dict:
+        """Run a test input exactly as a finished overlay drag/click would (crop, UI Automation elements inside,
+        kept-out redaction, attach to the next line); only the overlay is skipped. 'state' reads the UI state."""
+        if action not in core.TEST_ACTIONS:
+            raise ApiError(f"action must be one of {', '.join(core.TEST_ACTIONS)}")
+        if not self.gate_state().get("watch"):
+            raise ApiError("Watch is off: Nowed turns it on in Nodach Desktop", 409)
+        if not self.window_open():
+            raise ApiError("The Watch window isn't open (it's hidden or closed)", 409)
+        if action == "state":
+            return self.ui_state()
+        try:
+            mode, got = core.test_target(action, args or {})
+        except ValueError as e:
+            raise ApiError(str(e)) from None
+        if self.capturing:
+            raise ApiError("A capture is already running in the Watch window", 409)
+        zones = self.zones()
+        why = core.test_refusal(mode, got, self._test_windows(), zones)
+        if why:
+            self.note("test-input", "refused", why)
+            raise ApiError(f"Refused: {why}", 403)
+        cap = self.test_capture_fn or _win_test_capture
+        r = self._hidden(lambda: cap(mode, zones, got))
+        if r.get("error"):
+            raise ApiError(r["error"])
+        if r.get("cancelled") or "event" not in r:
+            raise ApiError("The capture didn't finish")
+        e = r["event"]
+        ev = {"id": e["id"], "kind": e["kind"], "words": core.point_words(e), "kept_out": e.get("kept_out"),
+              "picture": bool(e.get("screenshot")), "preset": e.get("preset")}
+        note = core.test_note(action, got)
+        self.test_seq += 1
+        self.test_last = {"seq": self.test_seq, "action": action, "note": note, "event": ev, "at": core.iso(core.utcnow()), "t": time.time()}
+        self.note("test-input", "ok", f"{note}: {ev['words']}")
+        return {"event": ev, "seq": self.test_seq, "note": note,
+                "elements": [x.get("name") for x in (e.get("elements") or [])][:40] if mode == "area" else None}
+
+    def _test_windows(self):
+        fn = self.hooks.get("windows")
+        if fn:
+            return fn()
+        try:
+            import watch_win
+            return watch_win.windows()
+        except Exception:
+            return []
+
+    def report_ui(self, body: dict) -> dict:
+        """The page tells the server what it shows, so Claude's 'state' can read it (small and capped)."""
+        ui = {}
+        for k in ("chip", "compare", "attach", "picture", "text", "controls", "more", "panels", "error", "session", "test_seq"):
+            if k in body:
+                ui[k] = body[k]
+        raw = json.dumps(ui, ensure_ascii=False)
+        if len(raw) > 20000:
+            raise ApiError("ui state too large")
+        self.ui, self.ui_t = ui, time.time()
+        return {"ok": True}
+
+    def ui_state(self) -> dict:
+        rows = []
+        try:
+            rows = self.stream(self.settings.get("session"))[-5:]
+        except Exception as e:
+            rows = [{"error": f"stream: {type(e).__name__}"}]
+        chat = [{"time": r.get("time"), "kind": r.get("kind"), "who": r.get("who"), "text": str(r.get("text") or "")[:300],
+                 "words": r.get("words") or ""} for r in rows]
+        return {"ui": self.ui, "ui_age_s": round(time.time() - self.ui_t, 1) if self.ui_t else None,
+                "session": self.settings.get("session"), "chat_last5": chat, "window_open": self.window_open(),
+                "capturing": self.capturing, "last_test": self.test_public(), "version": core.VERSION}
 
     def reference(self, path: str | None = None) -> dict:
         """'Looks off' > compare with a reference or design image: kept on this PC, only its name and hash go out."""
@@ -614,6 +719,11 @@ def _win_capture(mode, zones, preset):
     return watch_win.capture(mode, zones, preset)
 
 
+def _win_test_capture(mode, zones, got):
+    import watch_win
+    return watch_win.capture(mode, zones, None, overlay=lambda *a, **k: dict(got))
+
+
 def _ask_file() -> str:
     code = ("import tkinter as t,tkinter.filedialog as f;r=t.Tk();r.withdraw();r.attributes('-topmost',True);"
             "print(f.askopenfilename(title='Reference or design image',filetypes=[('Images','*.png *.jpg *.jpeg *.gif *.bmp *.webp'),('All','*.*')]))")
@@ -724,6 +834,10 @@ def dispatch(w: Watch, method: str, path: str, query: dict, body: dict):
             return w.stop()
         if path == "/api/ontop":
             return w.on_top(bool(body.get("on")))
+        if path == "/api/ui":
+            return w.report_ui(body)
+        if path.startswith("/api/test/"):
+            return w.test_input(path[len("/api/test/"):], body)
         if path == "/api/mic":
             b = dict(body)
             return w.mic(str(b.pop("action", "stop")), **{k: b[k] for k in ("text", "chip", "opts", "attach", "picture", "send") if k in b})

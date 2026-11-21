@@ -4,7 +4,7 @@
   const L = window.WatchLogic;
   const $ = s => document.querySelector(s);
   const KEY = (location.hash.match(/key=([^&]+)/) || [])[1] || "";
-  let ui = L.initial(), state = null, lastOffer = null, privacyWas = null, localRows = [], carIdx = {}, lastRows = [], marking = null, micT0 = 0, micTimer = null, ref = null;
+  let ui = L.initial(), testSeq = 0, firstLook = true, uiTimer = null, state = null, lastOffer = null, privacyWas = null, localRows = [], carIdx = {}, lastRows = [], marking = null, micT0 = 0, micTimer = null, ref = null;
 
   async function api(path, body) {
     const opt = {headers: {"X-Watch-Key": KEY}};
@@ -45,7 +45,34 @@
       $("#offerReport").hidden = !g; $("#offer").hidden = false; lastOffer = s.offer;
     }
     $("#mic").title = "Click to talk, click to send · voice " + s.voice;
+    const t2 = L.testToApply(testSeq, s.test, firstLook);           // decision 77a b: Claude's test input
+    if (s.test) testSeq = Math.max(testSeq, s.test.seq);
+    firstLook = false;
+    if (t2) {
+      localRows.push(L.testRowHtml(t2.note, (t2.at || "").slice(11, 19)));
+      $("#chat").dataset.html = "";
+      if (t2.event) { ui = L.attach(ui, t2.event); renderUi(); }
+    }
     await stream();
+    reportUi();
+  }
+  /* what this page shows, for Claude's watch_test state (visible controls by id and label) */
+  function reportUi() {
+    clearTimeout(uiTimer);
+    uiTimer = setTimeout(() => {
+      const controls = [];
+      document.querySelectorAll("button, select, textarea, input").forEach(c => {
+        if (!c.id || c.offsetParent === null) return;
+        controls.push({id: c.id, label: (c.getAttribute("aria-label") || c.textContent || c.placeholder || "").trim().slice(0, 60),
+          pressed: c.getAttribute("aria-pressed") === "true" || undefined, checked: c.type === "checkbox" ? c.checked : undefined});
+      });
+      document.querySelectorAll(".chipbtn").forEach(c => { if (c.offsetParent !== null) controls.push({id: "chip:" + c.dataset.chip, label: c.textContent.trim().slice(0, 60), pressed: c.getAttribute("aria-pressed") === "true"}); });
+      const panels = Array.from(document.querySelectorAll("section.panel")).filter(x => !x.hidden).map(x => x.id);
+      const e = $("#err");
+      api("/api/ui", L.uiReport(ui, {text: $("#text").value.slice(0, 500), controls: controls.slice(0, 80), panels,
+        more: !$("#frame").classList.contains("simple"), error: e.hidden ? "" : e.textContent, session: state ? state.session : null,
+        test_seq: testSeq})).catch(() => {});
+    }, 300);
   }
   async function stream() {
     if (!state || !state.session) { $("#chat").innerHTML = L.rowsHtml([]); return; }
@@ -80,6 +107,7 @@
       $("#attExport").hidden = !!a.kept_out;
     }
     $("#text").placeholder = ui.chip ? L.chipTag(ui.chip, ui.opts) + " … what you see" : "Type a line · task: … or build: … drafts a task";
+    reportUi();
   }
   document.querySelectorAll(".chipbtn").forEach(b => b.onclick = () => { ui = L.applyChip(ui, b.dataset.chip); syncOptInputs(); renderUi(); });
   function syncOptInputs() {

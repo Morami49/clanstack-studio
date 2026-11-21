@@ -63,6 +63,7 @@ select, input[type=text], textarea { font:inherit; color:var(--fg); background:v
 body.big { font-size:18px; }
 body.big .bar button { font-size:15px; }
 .chat li.local { align-self:center; background:none; border:1px solid var(--orange); }
+.chat li.local.test { border-color:#bbb; color:#888; font-size:.8em; padding:2px 8px; }
 #accView img { width:100%; image-rendering:auto; border:1px solid var(--line); border-radius:6px; }
 #accView .zoom { overflow:auto; max-height:40vh; }
 #accView .zoom img { width:200%; max-width:none; }

@@ -111,6 +111,21 @@ const tests = {
     assert.strictEqual(L.micLabel(false), "🎙 Mic");
     assert.strictEqual(L.micLabel(true, 75.4), "■ Send 1:15");
   },
+  "test inputs from Claude: taken once, fresh only on first look, grey note, ui report"() {
+    const t = {seq: 2, note: "test input from Claude: <x>", age_s: 3, event: {id: "PE-1", kind: "area", words: "▭ 1 element(s)", picture: true}};
+    assert.strictEqual(L.testToApply(0, t, false), t);
+    assert.strictEqual(L.testToApply(2, t, false), null);                         // already taken
+    assert.strictEqual(L.testToApply(0, Object.assign({}, t, {age_s: 60}), true), null);   // stale after a page reload
+    assert.strictEqual(L.testToApply(0, t, true), t);
+    assert.strictEqual(L.testToApply(0, null, false), null);
+    const h = L.testRowHtml(t.note, "10:00:00");
+    assert.ok(h.includes('class="local test"') && h.includes("&lt;x&gt;") && !h.includes("<x>"));
+    let u = L.attach(L.applyChip(L.initial(), "looks-off"), t.event);
+    u.picture = true;
+    const r = L.uiReport(u, {controls: [{id: "send"}]});
+    assert.deepStrictEqual([r.chip, r.compare, r.attach.id, r.picture, r.controls[0].id], ["looks-off", "none", "PE-1", true, "send"]);
+    assert.strictEqual(L.uiReport(L.initial()).attach, null);
+  },
 };
 
 let failed = 0;

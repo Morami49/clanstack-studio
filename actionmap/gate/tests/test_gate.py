@@ -633,3 +633,48 @@ def test_clip_buffer_saves_gif_with_blank_frames(tmp_path):
     buf.settings["clip_format"] = "frames"
     path, n, *_ = buf.save(tmp_path, "c2")
     assert path.is_dir() and len(list(path.glob("*.png"))) == 3
+
+
+# ---------------------------------------------------------------- 21 Nov: watch_test and Nodach's own windows
+def test_watch_test_is_a_screen_tool_auto_when_watch_is_on():
+    z = core.load_zones(None)
+    assert core.decide({"tool": "watch_test", "args": {}}, {"watch": False}, z) == ("never", core.WATCH_OFF)
+    assert core.decide({"tool": "watch_test", "args": {}}, {"watch": True}, z)[0] == "auto"
+    assert core.decide({"tool": "watch_test", "args": {}}, {"watch": True, "paused": True}, z)[0] == "never"
+    zone, why = core.decide({"tool": "watch_test", "args": {}}, {"watch": True, "fg_title": "Sign in - Google Accounts"}, z)
+    assert zone == "never" and core.PRIVACY_PAUSE in why
+    assert core.decide({"tool": "watch_other", "args": {}}, {"watch": True}, z)[0] == "hidden"
+
+
+def test_own_window_matches_nodach_processes_and_titles_only():
+    home = r"C:\Users\akabd\nodach"
+    assert core.own_window("Nodach Watch")
+    assert core.own_window("", r"C:\Python313\pythonw.exe", [r"C:\Python313\pythonw.exe", r"C:\Users\akabd\nodach\app\watch\watch_app.py"], home)
+    assert core.own_window("", r"C:/Users/AKABD/nodach/python/pythonw.exe", [], home)
+    assert not core.own_window("", r"C:\Python313\pythonw.exe", [r"C:\Users\akabd\nodach-gate\x.py"], home)
+    assert not core.own_window("Notepad", r"C:\Windows\notepad.exe", [r"C:\Users\akabd\Desktop\Nodach\x.txt"], home)
+    assert not core.own_window("My Nodach notes - Word")
+
+
+def test_clip_buffer_ignores_changes_while_a_nodach_window_is_in_front(monkeypatch):
+    pil = pytest.importorskip("PIL.Image")
+    fg = {"w": {"hwnd": 0, "title": "Untitled - Notepad", "app": "notepad.exe", "rect": (0, 0, 64, 36)}}
+    colour = {"c": 0}
+    monkeypatch.setattr(gate_win, "foreground", lambda: fg["w"])
+    monkeypatch.setattr(gate_win, "grab", lambda r: pil.new("RGB", (64, 36), (colour["c"],) * 3))
+    monkeypatch.setattr(gate_win, "img_hash", lambda im: int(im.getpixel((0, 0))[0]))
+    changes = []
+    buf = gate_win.ClipBuffer(lambda a, t: None, {"clip_fps": 2}, lambda bits, now: changes.append(bits))
+    buf._tick(1.0)
+    colour["c"] = 255
+    buf._tick(1.5)
+    assert changes and len(changes) == 1                     # a real change in Notepad still counts
+    fg["w"] = {"hwnd": 0, "title": "Nodach Watch", "app": "pythonw.exe", "rect": (0, 0, 64, 36)}
+    for i, c in enumerate((0, 255, 7, 99)):                   # Watch refreshing itself
+        colour["c"] = c
+        buf._tick(2.0 + i)
+    assert len(changes) == 1
+    fg["w"] = {"hwnd": 0, "title": "Untitled - Notepad", "app": "notepad.exe", "rect": (0, 0, 64, 36)}
+    colour["c"] = 3
+    buf._tick(7.0)                                           # first frame back is a fresh baseline
+    assert len(changes) == 1 and len(buf.frames) == 7

@@ -39,12 +39,16 @@ UI_TOOLS = (
     "ControlStatus",                     # read or release Windows-MCP's own "AI has control" lease
 )
 GATE_TOOLS = ("capture_view", "gate_status")  # Gate's own tools
+# Decision 77a b (21 Nov): Claude's test hook into the Watch window (served by the Desktop worker, not Windows-MCP).
+# A screen tool: needs Watch on, refused while paused or in a privacy moment, otherwise auto.
+TEST_TOOLS = ("watch_test",)
 INPUT_TOOLS = {"Click", "Type", "Scroll", "Move", "Shortcut"}
 READ_TOOLS = {"Snapshot", "Screenshot"}
 PASSIVE_TOOLS = {"Wait", "WaitFor", "ControlStatus"}
 # Watch (DRV4, 21 Nov): off by default, turned on in the Nodach Desktop window. While it's off every screen tool is
 # refused; Wait, ControlStatus, gate_status and the Pointer's read tools still work.
-WATCH_TOOLS = {"Snapshot", "Screenshot", "Click", "Type", "Scroll", "Move", "Shortcut", "App", "WaitFor", "capture_view"}
+WATCH_TOOLS = {"Snapshot", "Screenshot", "Click", "Type", "Scroll", "Move", "Shortcut", "App", "WaitFor", "capture_view",
+               "watch_test"}
 WATCH_OFF = "Watch is off: turn it on in Nodach Desktop"
 # Arguments Gate never forwards: they make Windows-MCP write files.
 STRIPPED_ARGS = {"Snapshot": ("save_path",), "Screenshot": ("save_path",)}
@@ -174,7 +178,7 @@ def decide(action: dict, context: dict, zones: dict):
     """
     tool = action.get("tool", "")
     args = action.get("args") or {}
-    if tool not in UI_TOOLS and tool not in GATE_TOOLS:
+    if tool not in UI_TOOLS and tool not in GATE_TOOLS and tool not in TEST_TOOLS:
         return "hidden", f"{tool} is not a UI tool; Gate never exposes it"
     if tool in WATCH_TOOLS and not _truthy(context.get("watch")):   # a missing value counts as off
         return "never", WATCH_OFF
@@ -185,6 +189,10 @@ def decide(action: dict, context: dict, zones: dict):
             return "never", f"{PRIVACY_PAUSE}: a {pm} is in front (it resumes when it's gone)"
     if tool in GATE_TOOLS:
         return "auto", "Gate's own tool"
+    if tool in TEST_TOOLS:
+        if context.get("paused"):
+            return "never", "Gate is paused (Pause all is on in the Gate window)"
+        return "auto", "Watch test input (decision 77a b)"
     if context.get("paused"):
         return "never", "Gate is paused (Pause all is on in the Gate window)"
     if tool in PASSIVE_TOOLS:
@@ -482,6 +490,21 @@ def shot_rect(element_rect, loc, screen, margin: int = 40, fallback: int = 160):
         return None
     l, t, r, b = max(sl, l), max(st, t), min(sr, r), min(sb, b)
     return (l, t, r, b) if r > l and b > t else None
+
+
+def own_window(title: str = "", exe: str = "", cmdline=(), nodach_home: str | Path | None = None) -> bool:
+    """Is this window one of Nodach's own (Watch, Desktop, Gate popup, Pointer, Live)? Their own refreshes are not
+    glitches (21 Nov: the detector fired for pythonw.exe when Watch refreshed). True when the title starts with
+    'Nodach ', or the process's exe or any command-line path lies under %USERPROFILE%\\nodach (not nodach-gate etc.)."""
+    if str(title or "").startswith("Nodach "):
+        return True
+    home = str(nodach_home or (Path.home() / "nodach"))
+    root = home.replace("/", "\\").rstrip("\\").lower() + "\\"
+    for p in [exe, *(cmdline or ())]:
+        q = str(p or "").strip('"').replace("/", "\\").lower()
+        if q.startswith(root):
+            return True
+    return False
 
 
 def clip_trigger(*, kind: str, now: float, settings: dict, last_action_t: float | None = None,

@@ -918,3 +918,111 @@ def lesson_event(session: str, me: dict, t: dt.datetime, rows, title: str = "") 
             "body": "A session kept as a lesson to replay.\n\n" + "\n".join(steps[:200]), "refs": [session], "status": "open",
             "source": "watch", "meta": {"kind": "lesson", "from_session": session, "steps": len(lines), "schema": "watch.lesson.v1"}}
     return {"ts": iso(t), "kind": "item.create", "item": None, "branch": "main", "body": body, "author": live_core.author(me)}
+
+
+# ---------------------------------------------------------------- Claude's test hook (decision 77a b, 21 Nov)
+TEST_ACTIONS = ("select_area", "point", "state")
+MIN_DRAG_PX = 6          # the overlay ignores a drag shorter than this (|dx| + |dy|)
+
+
+def test_target(action: str, args: dict) -> tuple[str, dict]:
+    """(capture mode, what the overlay would have returned) for a test input, in physical screen pixels as Snapshot
+    reports them. Raises ValueError for anything a real drag/click couldn't have produced."""
+    args = args or {}
+    try:
+        if action == "select_area":
+            x1, y1, x2, y2 = (int(round(float(args[k]))) for k in ("x1", "y1", "x2", "y2"))
+            if abs(x2 - x1) + abs(y2 - y1) < MIN_DRAG_PX:
+                raise ValueError(f"the area is too small (a drag under {MIN_DRAG_PX} px is ignored, like the overlay)")
+            if x1 == x2 or y1 == y2:
+                raise ValueError("the area has no width or no height")
+            return "area", {"rect": [x1, y1, x2, y2]}
+        if action == "point":
+            return "point", {"x": int(round(float(args["x"]))), "y": int(round(float(args["y"])))}
+    except (KeyError, TypeError) as e:
+        raise ValueError(f"{action} needs " + ("x1, y1, x2, y2" if action == "select_area" else "x, y") + f" ({e})") from None
+    raise ValueError(f"action must be one of {', '.join(TEST_ACTIONS)}")
+
+
+def test_refusal(mode: str, got: dict, windows, zones: dict) -> str | None:
+    """Same rule as a real drag: any part of a never-zone or kept-out window is blacked out of every picture, so a
+    test area that overlaps one (or a point inside one) is refused. Returns the reason, or None."""
+    for w in windows or []:
+        if not w.get("rect"):
+            continue
+        why = never_reason(zones, w.get("app"), w.get("title"))
+        if not why:
+            continue
+        r = as_rect(w["rect"])
+        if mode == "area":
+            a = rect(*got["rect"])
+            if overlaps(a, r) or inside(a, r):
+                return f"the area overlaps a kept-out window ({why.split(':')[0]})"
+        elif r["left"] <= got["x"] < r["right"] and r["top"] <= got["y"] < r["bottom"]:
+            return f"that point is on a kept-out window ({why.split(':')[0]})"
+    return None
+
+
+def test_note(action: str, got: dict) -> str:
+    if action == "select_area":
+        l, t, r, b = got["rect"]
+        return f"test input from Claude: Select area ({l}, {t}) to ({r}, {b})"
+    if action == "point":
+        return f"test input from Claude: Point at ({got['x']}, {got['y']})"
+    return "test input from Claude: read the Watch state"
+
+
+# ---------------------------------------------------------------- window placement (21 Nov: 125 % scaling)
+def place(work_area_px, dpi_scale: float, size=(400, 820), margin: int = 20, min_size=(340, 560)) -> dict:
+    """Where the Watch window goes, in physical pixels: right side of the primary monitor's work area, `margin` px
+    clear of its top, right and bottom, never outside it. size and min_size are in CSS/logical px (scaled here).
+    work_area_px: (left, top, right, bottom) in physical pixels. Returns {x, y, width, height} (physical) and the
+    same in logical units ({lx, ly, lwidth, lheight}) for toolkits that scale for themselves."""
+    l, t, r, b = (int(v) for v in work_area_px)
+    s = float(dpi_scale) if dpi_scale and dpi_scale > 0 else 1.0
+    m = int(margin)                     # physical px, as Snapshot measures
+    avail_w, avail_h = max(1, r - l - 2 * m), max(1, b - t - 2 * m)
+    w = min(int(round(size[0] * s)), avail_w)
+    h = min(int(round(size[1] * s)), avail_h)
+    w = max(w, min(int(round(min_size[0] * s)), r - l))
+    h = max(h, min(int(round(min_size[1] * s)), b - t))
+    w, h = min(w, r - l), min(h, b - t)
+    x = min(max(l, r - m - w), r - w)
+    y = max(t, min(t + m, b - h))
+    return {"x": x, "y": y, "width": w, "height": h,
+            "lx": int(x / s), "ly": int(y / s), "lwidth": int(round(w / s)), "lheight": int(round(h / s)), "scale": s}
+
+
+# ---------------------------------------------------------------- reload on change (21 Nov: closing only hid it)
+def files_signature(folder: Path) -> dict:
+    """{"py": ((name, size, mtime_ns), ...), "web": (...)} for the Watch app's own .py files and its web/ files."""
+    folder = Path(folder)
+    out = {"py": [], "web": []}
+    for p in sorted(folder.glob("*.py")):
+        try:
+            st = p.stat()
+            out["py"].append((p.name, st.st_size, st.st_mtime_ns))
+        except OSError:
+            pass
+    web = folder / "web"
+    if web.is_dir():
+        for p in sorted(web.rglob("*")):
+            try:
+                if p.is_file():
+                    st = p.stat()
+                    out["web"].append((p.relative_to(web).as_posix(), st.st_size, st.st_mtime_ns))
+            except OSError:
+                pass
+    return {k: tuple(v) for k, v in out.items()}
+
+
+def reload_decision(prev: dict | None, cur: dict | None, capturing: bool) -> str | None:
+    """'restart' (re-exec the app: a .py changed), 'reload' (reload the page: only web/ changed) or None.
+    Never mid-capture: the caller keeps prev and asks again on the next poll."""
+    if not prev or not cur or capturing:
+        return None
+    if prev.get("py") != cur.get("py") and cur.get("py"):
+        return "restart"
+    if prev.get("web") != cur.get("web"):
+        return "reload"
+    return None

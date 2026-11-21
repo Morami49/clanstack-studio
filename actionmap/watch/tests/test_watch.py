@@ -410,6 +410,24 @@ def fake_capture(tmp):
     return cap
 
 
+def fake_test_capture(tmp):
+    """Stands in for watch_win.capture(mode, zones, None, overlay=<the test's result>) (the real one needs Windows)."""
+    def cap(mode, zones, got):
+        if mode == "area":
+            e = core.area_event(T, area=core.rect(*got["rect"]), elements=[el("Save", 10, 10, 50, 30), el("Far", 900, 900, 950, 950)],
+                                window=WIN, process=PROC, zones=zones)
+        else:
+            e = core.point_event(T, cursor=(got["x"], got["y"]), element=el("Save", 0, 0, 9, 9), window=WIN, process=PROC, zones=zones)
+        shot = tmp / "shots" / f"{e['id']}-t.png"
+        shot.parent.mkdir(parents=True, exist_ok=True)
+        shot.write_bytes(b"\x89PNG\r\n\x1a\n")
+        e["screenshot"] = str(shot)
+        with open(tmp / "watch" / "events.jsonl", "a", encoding="utf-8") as f:
+            f.write(json.dumps(e) + "\n")
+        return {"event": e}
+    return cap
+
+
 @pytest.fixture
 def api(tmp_path):
     (tmp_path / "watch").mkdir()
@@ -419,7 +437,8 @@ def api(tmp_path):
     w = server.Watch(home=tmp_path / "watch", gate_home=tmp_path / "gate", root=tmp_path / "root",
                      hub_factory=lambda url, tok: hub, capture=fake_capture(tmp_path), token_store=tokens,
                      voice=type("V", (), {"status": lambda s: "ready"})(),
-                     hooks={"hide": lambda: calls.append("hide"), "show": lambda: calls.append("show")})
+                     hooks={"hide": lambda: calls.append("hide"), "show": lambda: calls.append("show")},
+                     test_capture=fake_test_capture(tmp_path))
     srv, url, key = server.serve(w)
     base = url.split("/#")[0]
 
@@ -437,6 +456,7 @@ def api(tmp_path):
         except urllib.error.HTTPError as e:
             return e.code, json.loads(e.read() or b"{}")
     call.key = key
+    call.w = w
     yield call, hub, tokens, tmp_path, calls, base
     srv.shutdown()
 
@@ -725,5 +745,154 @@ def test_page_in_a_headless_browser(api):
         page.click("#keepOutBtn")
         page.wait_for_selector("#koList li")
         assert "nodach_sec" in page.inner_text("#koList")
+        # decision 77a b: a test input shows as a grey note and attaches, and the page reports what it shows
+        page.click("#koClose")
+        (tmp / "gate" / "state.json").write_text(json.dumps({"watch": True}))
+        call("/api/session/start", {})
+        assert call("/api/test/select_area", {"x1": 0, "y1": 0, "x2": 200, "y2": 200})[0] == 200
+        page.wait_for_selector("#chat li.local.test")
+        page.wait_for_selector("#attRow:not([hidden])")
+        assert "test input from Claude" in page.inner_text("#chat li.local.test") and "1 element" in page.inner_text("#attWords")
+        for _ in range(60):
+            st = call("/api/test/state", {})[1]
+            if st["ui"].get("attach") and st["ui"]["attach"]["kind"] == "area":
+                break
+            page.wait_for_timeout(100)
+        ids = {c["id"] for c in st["ui"]["controls"]}
+        assert {"send", "select", "text", "chip:looks-off"} <= ids and st["ui"]["attach"]["kind"] == "area"
         b.close()
         assert errors == [], errors
+
+
+# ------------------------------------------------------------------ decision 77a b: Claude's test hook
+def test_test_target_and_refusal_follow_the_overlay_rules():
+    assert core.test_target("select_area", {"x1": 300, "y1": 200.4, "x2": 100, "y2": 50}) == ("area", {"rect": [300, 200, 100, 50]})
+    assert core.test_target("point", {"x": 5, "y": 6}) == ("point", {"x": 5, "y": 6})
+    for bad in [("select_area", {"x1": 1, "y1": 1, "x2": 3, "y2": 3}), ("select_area", {"x1": 1, "y1": 1, "x2": 90, "y2": 1}),
+                ("select_area", {"x1": 1}), ("point", {}), ("drag", {})]:
+        with pytest.raises(ValueError):
+            core.test_target(*bad)
+    wins = [{"app": "Bitwarden.exe", "title": "Vault - Bitwarden", "rect": (500, 500, 900, 900)},
+            {"app": "chrome.exe", "title": WIN["title"], "rect": (0, 0, 1920, 1040)}]
+    assert core.test_refusal("area", {"rect": [0, 0, 400, 400]}, wins, Z) is None
+    assert "kept-out" in core.test_refusal("area", {"rect": [450, 450, 520, 520]}, wins, Z)
+    assert "kept-out" in core.test_refusal("area", {"rect": [600, 600, 700, 700]}, wins, Z)      # fully inside
+    assert core.test_refusal("point", {"x": 499, "y": 600}, wins, Z) is None
+    assert core.test_refusal("point", {"x": 500, "y": 600}, wins, Z)
+    assert core.test_note("select_area", {"rect": [1, 2, 30, 40]}).startswith("test input from Claude")
+
+
+def test_api_test_hook_select_area_attaches_notes_and_reports_state(api):
+    call, hub, tokens, tmp, calls, base = api
+    w = call.w
+    call("/api/signin", {})
+    call("/api/session/start", {})
+    r = call("/api/test/select_area", {"x1": 0, "y1": 0, "x2": 200, "y2": 200})
+    assert r[0] == 409 and "Watch is off" in r[1]["error"]
+    (tmp / "gate" / "state.json").write_text(json.dumps({"watch": True}))
+    w.hooks["visible"] = lambda: False
+    r = call("/api/test/select_area", {"x1": 0, "y1": 0, "x2": 200, "y2": 200})
+    assert r[0] == 409 and "isn't open" in r[1]["error"]
+    w.hooks["visible"] = lambda: True
+    w.hooks["windows"] = lambda: [{"app": "Bitwarden.exe", "title": "Vault - Bitwarden", "rect": (500, 500, 900, 900)}]
+    r = call("/api/test/select_area", {"x1": 450, "y1": 450, "x2": 600, "y2": 600})
+    assert r[0] == 403 and "kept-out" in r[1]["error"]
+    assert call("/api/test/select_area", {"x1": 1, "y1": 1, "x2": 2, "y2": 2})[0] == 400
+    assert call("/api/test/nope", {})[0] == 400
+    calls.clear()
+    code, out = call("/api/test/select_area", {"x1": 0, "y1": 0, "x2": 200, "y2": 200})
+    assert code == 200 and out["event"]["kind"] == "area" and out["elements"] == ["Save"] and out["seq"] == 1
+    assert calls == ["hide", "show"]                       # the same hide/capture/show as a real Select
+    st = call("/api/state")[1]["test"]
+    assert st["seq"] == 1 and st["event"]["id"] == out["event"]["id"] and st["note"].startswith("test input from Claude")
+    # the page reports what it shows; Claude's 'state' reads it back with the last chat rows
+    call("/api/ui", {"chip": "looks-off", "attach": {"id": out["event"]["id"], "words": out["event"]["words"]}, "picture": True,
+                     "controls": [{"id": "send", "label": "Send"}], "junk": "dropped"})
+    call("/api/send", {"text": "header too tall", "chip": "looks-off", "opts": {"compare": "none"}, "attach": out["event"]["id"]})
+    code, s = call("/api/test/state", {})
+    assert code == 200 and s["ui"]["chip"] == "looks-off" and "junk" not in s["ui"] and s["ui"]["controls"][0]["id"] == "send"
+    assert s["chat_last5"][-1]["text"] == "[looks-off] header too tall" and s["window_open"] and s["last_test"]["seq"] == 1
+    assert hub.docs[-1]["event"]["body"]["point"]["kind"] == "area"
+    code, out = call("/api/test/point", {"x": 5, "y": 5})
+    assert code == 200 and out["event"]["kind"] == "pointer.desktop" and out["seq"] == 2
+
+
+def test_real_capture_pipeline_runs_without_the_overlay(tmp_path, monkeypatch):
+    """_win_test_capture goes through watch_win.capture with the overlay swapped for the test's result."""
+    PIL = pytest.importorskip("PIL.Image")
+    import watch_win
+    monkeypatch.setattr(watch_win, "AVAILABLE", True)
+    monkeypatch.setattr(watch_win, "HOME", tmp_path)
+    monkeypatch.setattr(watch_win, "POINTER_EVENTS", tmp_path / "pointer.jsonl")
+    img = PIL.new("RGB", (1000, 800), (200, 200, 200))
+    monkeypatch.setattr(watch_win, "grab_redacted", lambda zones: (img, (0, 0), {"left": 0, "top": 0, "right": 1000, "bottom": 800}))
+    monkeypatch.setattr(watch_win, "elements_in", lambda a: [el("Save", 10, 10, 50, 30)])
+    monkeypatch.setattr(watch_win, "window_at", lambda x, y: {"app": "chrome.exe", "title": WIN["title"]})
+    monkeypatch.setattr(watch_win, "run_overlay", lambda *a, **k: (_ for _ in ()).throw(AssertionError("overlay ran")))
+    r = server._win_test_capture("area", Z, {"rect": [0, 0, 300, 200]})
+    e = r["event"]
+    assert e["kind"] == "area" and [x["name"] for x in e["elements"]] == ["Save"] and Path(e["screenshot"]).exists()
+    assert PIL.open(e["screenshot"]).size == (300, 200)
+    assert json.loads((tmp_path / "events.jsonl").read_text())["id"] == e["id"]
+
+
+# ------------------------------------------------------------------ 21 Nov: placement at display scaling
+@pytest.mark.parametrize("work,scale", [((0, 0, 1920, 1032), 1.25), ((0, 0, 1536, 824), 1.0), ((0, 0, 3840, 2088), 1.5),
+                                        ((0, 0, 1366, 728), 1.25), ((-1920, 0, 0, 1040), 1.0), ((0, 48, 1280, 720), 2.0)])
+def test_place_lands_inside_the_work_area_on_the_right(work, scale):
+    r = core.place(work, scale, (400, 820))
+    l, t, rr, b = work
+    assert l <= r["x"] and r["x"] + r["width"] <= rr and t <= r["y"] and r["y"] + r["height"] <= b
+    if rr - l >= r["width"] + 40 and b - t >= 600 * scale:
+        assert r["x"] + r["width"] == rr - 20 and r["y"] == t + 20
+
+
+def test_place_at_125_percent_on_1080p():
+    r = core.place((0, 0, 1920, 1032), 1.25, (400, 820))
+    assert (r["x"], r["y"], r["width"], r["height"]) == (1400, 20, 500, 992)
+    assert (r["lx"], r["ly"], r["lwidth"], r["lheight"]) == (1120, 16, 400, 794)
+    tiny = core.place((0, 0, 300, 400), 1.0, (400, 820))
+    assert (tiny["x"], tiny["y"], tiny["width"], tiny["height"]) == (0, 0, 300, 400)    # clamped, never outside
+
+
+# ------------------------------------------------------------------ 21 Nov: code changes load by themselves
+def test_reload_decision_restarts_for_python_reloads_for_web_and_waits_for_captures(tmp_path):
+    (tmp_path / "web").mkdir()
+    (tmp_path / "watch_app.py").write_text("a")
+    (tmp_path / "web" / "watch.js").write_text("a")
+    (tmp_path / "notes.txt").write_text("a")
+    s0 = core.files_signature(tmp_path)
+    assert [n for n, *_ in s0["py"]] == ["watch_app.py"] and [n for n, *_ in s0["web"]] == ["watch.js"]
+    assert core.reload_decision(s0, core.files_signature(tmp_path), False) is None
+    (tmp_path / "notes.txt").write_text("changed")
+    assert core.reload_decision(s0, core.files_signature(tmp_path), False) is None    # not Watch's code
+    (tmp_path / "web" / "watch.js").write_text("bb")
+    s1 = core.files_signature(tmp_path)
+    assert core.reload_decision(s0, s1, False) == "reload"
+    assert core.reload_decision(s0, s1, True) is None                                  # mid-capture: later
+    (tmp_path / "watch_app.py").write_text("bb")
+    s2 = core.files_signature(tmp_path)
+    assert core.reload_decision(s1, s2, False) == "restart"
+    (tmp_path / "web" / "watch.css").write_text("x")
+    assert core.reload_decision(s1, core.files_signature(tmp_path), False) == "restart"  # both: restart covers the page
+    assert core.reload_decision(None, s2, False) is None
+
+
+def test_watch_for_changes_waits_out_a_capture_then_restarts(tmp_path, monkeypatch):
+    import threading
+    import watch_app
+    (tmp_path / "watch_app.py").write_text("a")
+    monkeypatch.setattr(watch_app, "HERE", tmp_path)
+    w = type("W", (), {"capturing": True, "notes": [], "note": lambda self, *a: self.notes.append(a)})()
+    did, stop = [], threading.Event()
+    t = threading.Thread(target=watch_app.watch_for_changes, args=(w, lambda: did.append("restart"), lambda: did.append("reload"), stop, 0.05))
+    t.start()
+    import time as _t
+    _t.sleep(0.15)
+    (tmp_path / "watch_app.py").write_text("changed")
+    _t.sleep(0.3)
+    assert did == []                         # mid-capture: nothing yet
+    w.capturing = False
+    t.join(3)
+    stop.set()
+    assert did == ["restart"] and w.notes[0][0] == "restart"
